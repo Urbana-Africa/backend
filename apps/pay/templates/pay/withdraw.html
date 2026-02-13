@@ -1,0 +1,353 @@
+{% extends 'pay/base.html' %}
+{% load humanize %}
+{% block content %}
+<section class="">
+    <div class="container">
+        <div class="">
+            <p class="uk-text-bold mb-3 uk-text-lead">Withdraw</p>
+        </div>
+        <div class="rounded-4 bg-info-light p-4 uk-width-1-3@m uk-width-1-1 uk-width-1-3@s">
+            <p class="uk-margin-remove">{{request.user.get_full_name}}</p>
+            <p class="uk-text-bold uk-margin-remove">Balance: </p>
+            <p class=" uk-position-relative">
+                <span class="uk-text-lead" id="hidden-balance"><b>****</b> </span>
+                <span class="uk-text-lead uk-hidden" id="shown-balance"><b>₦{{wallet.balance|floatformat:2|intcomma}}
+                    </b> </span>
+                <i class="fa fa-eye fa-1x uk-margin-small-left uk-position-center-right" id="hide-balance"></i>
+            </p>
+
+        </div>
+        <div class=" ">
+            <div class="uk-width-1-1 uk-width-1-3@s">
+                <form method="post" id="withdrawal-form" autocomplete="off" action="{% url 'withdraw' %}"
+                    class="register mt-5">
+
+                    {% csrf_token %}
+
+                    <div class="row">
+                        <div class="col-xl-12 uk-inline" id="banks-container">
+
+
+                            <label for="bank">Select bank &nbsp;<span class="required">*</span></label>
+                            <div class="uk-position-relative">
+                                <input class="form-control uk-search-input uk-disabled " type="text" name="bank_name"
+                                    id="bank_name" placeholder="Select bank">
+                                <i class="uk-position-center-right uk-margin-right fa fa-chevron-down text-gray"></i>
+                                <input class="form-control uk-search-input" hidden name="bank_code" id="bank_code">
+                            </div>
+
+                            <div uk-dropdown="mode:click;position:left-bottom" id="banks-dropdown"
+                                class="uk-overflow-auto px-0 py-0 rounded-1" style="max-height: 250px;">
+                                <ul class="uk-nav uk-dropdown-nav">
+                                    <div class="uk-position-relative p-2">
+                                        <input class="form-control uk-search-input" autofocus placeholder="Enter bank name"
+                                            type="search" name="bank" id="bank">
+                                        <span uk-search-icon class="uk-position-center-right uk-margin-right"></span>
+
+                                    </div>
+
+                                    {% for bank in banks %}
+                                    <li class="banks btn uk-button-secondary border-bottom uk-width-1-1 uk-text-left btn-sm"
+                                        name="{{bank.name}}" id="{{bank.code}}">
+                                        <!-- <img src="{{bank.logo}}" alt="" width="40px" class="uk-margin-right">  -->
+                                        {{bank.name}}
+                                    </li>
+
+                                    {% endfor %}
+                                </ul>
+                            </div>
+
+                            <div class="col-xl-12 ">
+                                <p class="uk-text-italic p-1 rounded-1 mt-2 mb-0" id="recipient-name"></p>
+                            </div>
+                        </div>
+                        <div class="col-xl-12 ">
+                            <p class="woocommerce-form-row woocommerce-form-row--wide form-row form-row-wide">
+                                <label for="account_number">Account number &nbsp;<span class="required">*</span></label>
+                                <input class="form-control " type="text" name="account_number" id="account_number"
+                                    placeholder="Recipient account number">
+                            </p>
+                        </div>
+                        <div class="col-xl-12 ">
+                            <p class="woocommerce-form-row woocommerce-form-row--wide form-row form-row-wide">
+                                <label for="account_name">Account name &nbsp;<span class="required">*</span></label>
+                                <input type="text" name="account_name" id="account_name"
+                                    class="form-control uk-disabled">
+                            </p>
+                        </div>
+
+                        <div class="col-xl-12 ">
+                            <p class="woocommerce-form-row woocommerce-form-row--wide form-row form-row-wide">
+                                <label for="amount">Amount &nbsp;<span class="required">*</span></label>
+                                <input class="form-control  uk-disabled" type="text" name="amount" id="amount"
+                                    placeholder="Enter amount">
+                            </p>
+                        </div>
+                        <div class="col-xl-12 ">
+                            <p class="woocommerce-form-row woocommerce-form-row--wide form-row form-row-wide">
+                                <label for="description">Description &nbsp;<span class="required">*</span></label>
+                                <textarea class="form-control" name="description" id="description" required
+                                    style="resize: none;" placeholder="Enter description"></textarea>
+                            </p>
+                        </div>
+                        <div class="woocommerce-FormRow form-row mt-4 uk-text-center">
+                            <button type="button" id="withdrawal-btn" class="btn-radius btn-light btn uk-disabled"
+                                form-id="withdrawal-form" name="register" value="Register">Proceed</button>
+                        </div>
+                    </div>
+
+                </form>
+            </div>
+        </div>
+
+
+    </div>
+
+</section>
+<!--shop register end-->
+<div id="danger-withdrawal-message-modal" class="uk-flex-top" uk-modal tabindex="-1" style="">
+    <div
+        class="uk-modal-dialog bg-transparent uk-padding-large uk-modal-body uk-margin-auto-vertical rounded-3 uk-overflow-hidden">
+        <div class="uk-padding-large bg-white rounded-3 uk-text-center">
+            <i class="fa fa-3x fa-times-circle text-danger"></i>
+            <p id="withdrawal-danger-modal-message" class="text-dark uk-text-lead"></p>
+            <div class="text-center mt-5">
+                <a class="btn btn-primary btn-radius" href="{% url 'pay_dashboard' %}">Go to dashboard</a>
+            </div>
+        </div>
+
+
+
+    </div>
+</div>
+
+
+<div id="success-withdrawal-message-modal" class="uk-flex-top" uk-modal tabindex="-1" style="">
+    <div
+        class="uk-modal-dialog bg-transparent uk-padding-large uk-modal-body uk-margin-auto-vertical rounded-3 uk-overflow-hidden">
+        <div class="uk-padding-large bg-white rounded-3 uk-text-center">
+            <i class="fa fa-3x fa-check-circle text-success"></i>
+            <p id="withdrawal-success-modal-message" class="text-dark uk-text-lead"></p>
+            <div class="text-center mt-5">
+                <a class="btn btn-primary btn-radius" href="{% url 'pay_dashboard' %}">Go to dashboard</a>
+            </div>
+        </div>
+
+
+
+    </div>
+</div>
+
+
+
+<script>
+    var account_name_ok = false
+    var account_number_ok = false
+    var bank_name_ok = false
+    var description_ok = false
+    var amount_ok = false
+
+    $('#withdrawal-form').on('change', function () {
+
+        if (account_name_ok && account_name_ok && bank_name_ok && description_ok && amount_ok) {
+            $('#withdrawal-btn').removeClass('uk-disabled').removeClass('btn-light').addClass('btn-primary')
+
+        }
+        else {
+            $('#withdrawal-btn').addClass('uk-disabled').addClass('btn-light').removeClass('btn-primary')
+
+        }
+
+    })
+
+    $('#withdrawal-form').on('submit', function (event, args) {
+        event.preventDefault()
+        var bank_name = $('#bank_name').val()
+        var bank_code = $('#bank_code').val()
+        var account_number = $('#account_number').val()
+        var account_name = $('#account_name').val()
+        var amount = $('#amount').val()
+        var description = $('#description').val()
+        var post_url = "{% url 'withdraw' %}"//get form action url
+        var request_method = 'post'; //get form GET/POST method
+        if (account_name_ok && account_name_ok && bank_name_ok && description_ok) {
+            $.ajax({
+                beforeSend: function () {
+                    showProgress()
+
+                },
+                complete: function () {
+                    showProgress(value = 100)
+                },
+                url: post_url,
+                type: request_method,
+                // dataType: "json",
+                data: {
+                    "bank_code": bank_code, "csrfmiddlewaretoken": "{{csrf_token}}", 'account_name': account_name,
+                    'password': args['password'],
+                    "account_number": account_number, 'amount': amount, 'description': description, 'bank_name': bank_name
+                },
+                // contentType: 'application/json',
+                success: function (response) {
+                    if (response['invalid_password']) {
+                        $('#danger-modal-message').text('You entered an incorrect password')
+
+                        UIkit.modal($('#danger-withdrawal-message-modal')).show();
+                    }
+                    else if (response['status'] == 'processing') {
+                        $('#withdrawal-success-modal-message').text('Your withdrawal of ₦' + response['amount'] + ' is being processed.')
+                        UIkit.modal($('#success-withdrawal-message-modal')).show();
+
+
+
+                    }
+
+                    else if (response['insufficient_balance']) {
+                        $('#withdrawal-danger-modal-message').text('Insufficient balance')
+
+                        UIkit.modal($('#danger-withdrawal-message-modal')).show();
+                    }
+                    else {
+                        $('#withdrawal-danger-modal-message').text('Your withdrawal of ₦' + response['amount'] + ' failed.')
+
+                        UIkit.modal($('#danger-withdrawal-message-modal')).show();
+
+                    }
+
+                },
+                error: function (xhr, status, error) {
+                    alert(error)
+                }
+            });
+
+        }
+    })
+
+    $('#withdrawal-btn').on('click', function (e) {
+        UIkit.modal($('#password-comfirm-modal')).show();
+        $('#password-form-submit-btn').attr('target-form', $(this).attr('form-id'))
+    })
+
+
+
+
+    $('#description').on('input', function () {
+        var input = $(this)
+
+        if (input.val().length >= 10) {
+            description_ok = true
+        }
+
+        else {
+            description_ok = false
+        }
+
+    })
+
+    $('#bank').on('input', function () {
+        var input = $(this)
+        var banks = $('.banks').toArray()
+        banks.forEach(bank => {
+            if (bank.getAttribute('name').toLowerCase().startsWith(input.val().toLowerCase())) {
+                $(bank).removeClass('uk-hidden')
+            }
+
+            else {
+                $(bank).addClass('uk-hidden')
+
+            }
+
+        });
+    })
+
+    $('.banks').on('click', function () {
+        UIkit.dropdown($('#banks-dropdown')).hide();
+        var input = $(this)
+        $('#bank_name').val(input.attr('name'))
+        $('#bank_code').val(input.attr('id'))
+        bank_name_ok = true
+    })
+
+
+
+    $("#account_number").on('input', function () {
+        $('#account_name').addClass('bg-primary-green-light')
+        $('#account_name').removeClass('bg-warning')
+        $('#account_name').val('')
+        account_name_ok = false
+        var account_number = String($(this).val())
+        if (account_number.length == 10 && String(Number(account_number)) != 'NaN') {
+
+            var bank_code = $("#bank_code").val()
+            var post_url = "{% url 'check_account_number' %}"//get form action url
+            var request_method = 'post'; //get form GET/POST method
+
+            $.ajax({
+                beforeSend: function () {
+                    showProgress()
+                    $('#account_name').val('Fetching recipient name')
+                    account_name_ok = false
+                    $('#amount').addClass('uk-disabled')
+
+                },
+                complete: function () {
+                    showProgress(value = 100)
+                },
+                url: post_url,
+                type: request_method,
+                // dataType: "json",
+                data: {
+                    "bank_code": bank_code, "csrfmiddlewaretoken": "{{csrf_token}}",
+                    "account_number": account_number,
+                },
+                // contentType: 'application/json',
+                success: function (response) {
+                    if (response['status'] == true) {
+                        $('#account_name').addClass('bg-primary-green-light')
+                        $('#account_name').removeClass('bg-warning')
+                        $('#account_name').val(response['data']['account_name'])
+                        account_name_ok = true
+                        account_number_ok = true
+                        $('#amount').removeClass('uk-disabled')
+
+
+                    }
+                    else {
+                        $('#account_name').removeClass('bg-primary-green-light')
+                        $('#account_name').addClass('bg-warning')
+                        $('#account_name').val("Account not found")
+                        account_name_ok = false
+                        account_number_ok = false
+                    }
+
+                },
+                error: function (xhr, status, error) {
+                    alert(error)
+                }
+            });
+
+        }
+        else {
+
+        }
+    });
+
+
+    $("#amount").on('input', function () {
+        var field = $(this)
+        var amount = Number(field.val())
+
+        if (String(amount) == 'NaN') {
+            field.addClass('border-danger')
+            amount_ok = false
+
+        }
+        else {
+            amount_ok = true
+
+            field.removeClass('border-danger')
+        }
+
+    });
+</script>
+{% endblock content %}

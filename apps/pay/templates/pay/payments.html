@@ -1,0 +1,36 @@
+{% extends 'pay/base.html' %}
+{% load humanize %}
+{% block content %}
+
+
+<section class=" ">
+    <div class="container">
+        <div class="">
+            <p class="uk-text-bold mb-3 uk-text-lead">My payments</p>
+        </div>
+
+
+        <div class="row justify-content-center border-bottom mt-5">
+     
+                <p class="uk-margin-remove uk-text-lead ">Payments</p>
+        </div>
+        {% if payments %}
+        {% for payment in payments %}
+        <div class="p-1">
+            <div class="p-2 {% cycle 'bg-light' 'bg-white'   %} rounded-4">
+                <div class="row">
+                    {% include 'pay/payment.html' %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+
+        {% else %}
+        <p>You have no payment yet</p>
+
+        {% endif %}
+
+    </div>
+</section>
+
+{% endblock content %}

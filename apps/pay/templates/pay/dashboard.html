@@ -1,0 +1,95 @@
+{% extends 'pay/base.html' %}
+{% load humanize %}
+{% block content %}
+
+
+<section class="woocommerce single page-wrapper pt-3 ">
+    <div class="container">
+
+                <div class="rounded-4 bg-info-light p-4 uk-width-1-3@m uk-width-1-1 uk-width-1-3@s">
+                    <p class="uk-margin-remove">{{request.user.get_full_name}}</p>
+                    <p class="uk-text-bold uk-margin-remove">Balance: </p>
+                    <p class=" uk-position-relative">
+                        <span class="uk-text-lead" id="hidden-balance"><b>****</b> </span>
+                        <span class="uk-text-lead uk-hidden" id="shown-balance"><b>₦{{wallet.balance|floatformat:2|intcomma}} </b> </span>
+                        <i class="fa fa-eye fa-1x uk-margin-small-left uk-position-center-right" id="hide-balance"></i>
+                    </p>
+
+                </div>
+
+
+                <div class="row justify-content-center mt-5 p-2 rounded-3 bg-light">
+                    <div class="col">
+                        <p class="uk-margin-remove ">Recent transactions</p>
+
+                    </div>
+                    <div class="col uk-text-right">
+                        <a href="{% url 'my_transactions' %}" class="btn btn-light text-primary btn-radius btn-sm-2">See all</a>
+
+                    </div>
+                </div>
+                {% for transaction in transactions %}
+                {% if transaction.type == 'payment' %}
+                
+                
+                <div class="row uk-margin-remove justify-content-center">
+                    <div class="col-8 p-2">
+                        <div class="row">
+                            <div class="col-12">
+                                <span class="uk-text-bold">₦{{transaction.amount|floatformat:2|intcomma}} 
+                                    {% if transaction.status == 'pending' %}
+                                    <i class="fa fa-circle text-warning fa-tiny"></i>
+                                    {% elif transaction.status == 'success' %}
+                                    <i class="fa fa-circle text-success fa-tiny"></i>
+                                    {% endif %}</span>
+                
+                                    <i class="fa fa-arrows-h fa-1x text-primary"></i>
+                            </div>
+                            <div class="col-12">
+                                <span class="">{{transaction.date_time_added}}</span>
+                
+                            </div>
+                        </div>
+                
+                
+                    </div>
+                    <div class="col-4 uk-text-right p-2 uk-inline uk-position-relative">
+                        {% if transaction.status == 'pending' %}
+                        <!-- <span class="uk-badge bg-warning">{{transaction.status}}</span> -->
+                        <button class="btn btn-white p-1 rounded-circle " style="height: 30px;width: 30px;">
+                            <i class="fa fa-ellipsis-v text-gray "></i></button>
+                        <div uk-dropdown="mode:click;" class="uk-overflow-auto px-0 py-0 rounded-1"
+                            style="max-height: 250px;">
+                            <ul class="uk-nav uk-dropdown-nav">
+                
+                                <li
+                                    class="btn btn-white border-bottom uk-width-1-1 uk-text-left btn-sm">
+                                    <a href="{% url 'complete_payment' pay_id=transaction.payment_id %}" class="text-dark">Pay now</a>
+                                </li>
+                
+                                <li
+                                    class="btn btn-white border-bottom uk-width-1-1 uk-text-left btn-sm">
+                                    <a href="{% url 'cancel_payment' pay_id=transaction.payment_id %}"
+                                        class="text-danger">Cancel</a>
+                                </li>
+                
+                
+                            </ul>
+                        </div>
+                
+                        
+                        {% endif %}
+                
+                    </div>
+                </div>
+                {% elif transaction.type == 'transfer' %}
+                {% include 'pay/transfer.html' %}
+                {% elif transaction.type == 'commission' %}
+                {% include 'pay/commission.html' %}
+                {% endif %}
+
+                {% endfor %}
+    </div>
+</section>
+
+{% endblock content %}

@@ -1,0 +1,93 @@
+{% extends 'pay/base.html' %}
+{% block content %}
+{% load humanize %}
+<section class="woocommerce single page-wrapper pt-3 ">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-6 col-xl-6">
+                <div class="uk-text-center">
+                    <p class="font-weight-bold mb-3 uk-text-lead">Cancel payment</p>
+
+                </div>
+                {% if payment %}
+                <div class=" p-4 shadow-none">
+
+                    <p class="uk-text-bold uk-text-lead">Hi {{request.user.first_name}},</p>
+                    <p class="">You are about to Cancel payment of
+                        <b>₦{{payment.amount|floatformat:2|intcomma}} </b> for <b>
+                            {{payment.purpose}}</b>
+                    </p>
+
+                </div>
+
+                <div class=" p-4 bg-primary-yellow-light mt-4 rounded-5">
+                    <p class="">Please note that every service or products attached to this payment will
+                        also be canceled. This
+                        action is not reversable</p>
+
+                    <div class="col-12" style="text-align: center;">
+                        <button class="btn-danger btn btn-radius mt-2 btn-sm" type="submit" id="cancel-btn">Cancel
+                            payment</button>
+                        <a href="{% url 'complete_payment' pay_id=payment.payment_id %}"
+                            class="btn-primary btn btn-radius mt-2 btn-sm" type="submit" id="pay-btn">Complete payment
+                            instead</a>
+                    </div>
+
+                </div>
+                {% else %}
+
+
+
+
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- =========================== 5. Custom Project Section =========================================== -->
+
+{% if payment %}
+
+<script>
+
+    function cancelPayment(payment_id) {
+
+        $.ajax({
+            beforeSend: function () {
+            },
+            complete: function () {
+
+            },
+            url: "{% url 'cancel_payment' pay_id=payment.payment_id %}",
+            type: 'post',
+            data: {
+                'payment_id': payment_id, 'csrfmiddlewaretoken': '{{csrf_token}}',
+            },
+            success: function (response) {
+                if(response['canceled']){
+                    alert('Payment successfully canceled')
+                window.location = "{% url 'my_payments' %}"
+                }
+                else{
+                    alert('An error occured')
+                }
+
+            },
+            error: function (xhr, status, error) {
+
+            }
+        });
+
+    }
+
+
+    $("#cancel-btn").on('click', function (event) {
+
+        cancelPayment( "{{payment.payment_id}}")
+
+    });
+
+</script>
+{% endif %}
+{% endblock content %}

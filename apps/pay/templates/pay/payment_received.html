@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Payment Received - Urbana</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        /* Small responsive tweak supported by many clients */
+        @media only screen and (max-width:420px) {
+            .container { width:100% !important; padding:0 12px !important; }
+            .content { padding:16px !important; font-size:15px !important; }
+            .header-td { padding:16px !important; }
+        }
+        .preheader { display:none !important; visibility:hidden; mso-hide:all; font-size:1px; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden; }
+    </style>
+</head>
+<body style="margin:0; padding:0; background:#f4f6f8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+
+    <!-- Preheader text : shows in inbox preview -->
+    <span class="preheader">Payment of {{ amount|floatformat:2 }} received by Urbana.</span>
+
+    <!-- Wrapper -->
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" bgcolor="#f4f6f8">
+        <tr>
+            <td align="center" style="padding:20px 0;">
+                <!-- Container -->
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600" class="container" style="width:100%; max-width:600px; background:#ffffff; border-collapse:collapse;">
+                    <!-- Header -->
+                    <tr>
+                        <td class="header-td" align="left" bgcolor="#0b6cff" style="padding:20px; color:#ffffff;">
+                            <div style="font-size:20px; font-weight:600; letter-spacing:0.2px;">Urbana</div>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td class="content" style="padding:24px; color:#333333; font-size:16px; line-height:1.5;">
+                            <p style="margin:0 0 12px 0;">Hi {{ user.get_full_name|default:user.first_name|default:user.username|default:"there" }},</p>
+
+                            <h2 style="margin:0 0 8px 0; font-size:20px; color:#0b6cff;">Payment received</h2>
+
+                            <p style="margin:0 0 12px 0;">We have successfully received your payment. Below are the details of the transaction:</p>
+
+                            <!-- Summary box -->
+                            <table role="presentation" border="0" cellpadding="10" cellspacing="0" width="100%" style="background:#f7f9fb; border-collapse:separate; border-radius:6px;">
+                                <tr>
+                                    <td style="padding:12px; color:#333333; font-size:15px;">
+                                        <p style="margin:0 0 8px 0;"><strong>Amount:</strong> ₹{{ amount|floatformat:2 }}</p>
+                                        {% if payment_id %}
+                                            <p style="margin:0 0 8px 0;"><strong>Transaction ID:</strong> {{ payment_id }}</p>
+                                        {% endif %}
+                                        {% if payment_date %}
+                                            <p style="margin:0; color:#556166;"><strong>Date:</strong> {{ payment_date }}</p>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="margin:16px 0 16px 0;">If you have any questions or need a receipt, please contact our support team.</p>
+
+                            <!-- Button -->
+                            <p style="margin:0 0 20px 0;">
+                                <a href="mailto:support@schoolmummy.com"
+                                     style="display:inline-block; padding:12px 18px; background:#0b6cff; color:#ffffff; text-decoration:none; border-radius:4px; font-weight:600;"
+                                     target="_blank">Contact Support</a>
+                            </p>
+
+                            <p style="margin:0; color:#697077; font-size:13px;">Thank you for using Urbana.</p>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td align="center" style="padding:16px; color:#97a0a7; font-size:13px;">
+                            <div>Urbana</div>
+                            <div style="margin-top:6px;">support@schoolmummy.com</div>
+                            <div style="margin-top:6px;">&copy; {{ now|date:"Y" }} Urbana. All rights reserved.</div>
+                        </td>
+                    </tr>
+                </table>
+                <!-- /Container -->
+            </td>
+        </tr>
+    </table>
+    <!-- /Wrapper -->
+
+</body>
+</html>

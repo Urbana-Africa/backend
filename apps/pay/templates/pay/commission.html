@@ -1,0 +1,47 @@
+{% load humanize %}
+<div class="row uk-margin-remove justify-content-center">
+    <div class="col-12 p-2">
+        <div class="row">
+            <div class="col-12">
+                <span class="uk-text-bold">₦{{transaction.amount|floatformat:2|intcomma}}</span>
+               </span>
+                <i class="fa fa-plus fa-1x text-green"></i>
+            </div>
+            <div class="col-12">
+                <span class="">{{transaction.date_time_added}}</span>
+
+            </div>
+        </div>
+
+
+    </div>
+    <!-- <div class="col-4 uk-text-right p-2 uk-inline uk-position-relative">
+        {% if transaction.status == 'pending' %}
+        <span class="uk-badge bg-warning">{{transaction.status}}</span>
+        <button class="btn btn-white p-1 rounded-circle" style="height: 30px;width: 30px;">
+            <i class="fa fa-ellipsis-v uk-text-light"></i></button>
+        <div uk-dropdown="mode:click;" class="uk-overflow-auto px-0 py-0 rounded-3"
+            style="max-height: 250px;">
+            <ul class="uk-nav uk-dropdown-nav">
+
+                <li
+                    class="banks btn uk-button-secondary border-bottom uk-width-1-1 uk-text-left btn-sm">
+                    <a href="">Pay now</a>
+                </li>
+
+                <li
+                    class="banks btn uk-button-secondary border-bottom uk-width-1-1 uk-text-left btn-sm">
+                    <a href=""
+                        class="text-danger">Cancel</a>
+                </li>
+
+
+            </ul>
+        </div>
+
+        {% elif transaction.status == 'success' %}
+        <span class="uk-badge bg-success">{{transaction.status}}</span>
+        {% endif %}
+
+    </div> -->
+</div>

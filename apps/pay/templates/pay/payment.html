@@ -1,0 +1,41 @@
+{% load humanize %}
+
+<div class="col-12">
+    <span class="uk-text-bold">₦{{payment.amount|floatformat:2|intcomma}}
+        {% if payment.status == 'pending' %}
+        <i class="fa fa-circle text-warning fa-tiny"></i>
+        {% elif payment.status == 'success' %}
+        <i class="fa fa-circle text-success fa-tiny"></i>
+        {% endif %}</span>
+
+    <i class="fa fa-arrows-h fa-1x text-primary"></i>
+</div>
+<div class="col-12">
+    <span class="">{{payment.date_time_added}}</span>
+
+</div>
+
+<div class="col-4 uk-text-right uk-inline uk-position-relative">
+    {% if payment.status == 'pending' %}
+    <!-- <span class="uk-badge bg-warning">{{payment.status}}</span> -->
+    <button class="btn btn-white p-1 rounded-circle " style="height: 30px;width: 30px;">
+        <i class="fa fa-ellipsis-v text-gray "></i></button>
+    <div uk-dropdown="mode:click;" class="uk-overflow-auto px-0 py-0 rounded-1" style="max-height: 250px;">
+        <ul class="uk-nav uk-dropdown-nav">
+
+            <li class="btn btn-white border-bottom uk-width-1-1 uk-text-left btn-sm">
+                <a href="{% url 'complete_payment' pay_id=payment.payment_id %}" class="text-dark">Pay now</a>
+            </li>
+
+            <li class="btn btn-white border-bottom uk-width-1-1 uk-text-left btn-sm">
+                <a href="{% url 'cancel_payment' pay_id=payment.payment_id %}" class="text-danger">Cancel</a>
+            </li>
+
+
+        </ul>
+    </div>
+
+
+    {% endif %}
+
+</div>

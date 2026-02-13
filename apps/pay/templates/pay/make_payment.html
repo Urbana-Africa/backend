@@ -1,0 +1,169 @@
+{% extends 'pay/base.html' %}
+{% block content %}
+{% load humanize %}
+
+
+<section class="woocommerce single page-wrapper pt-3 ">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-8 col-xl-7">
+                <div class="uk-text-center">
+                    <p class="font-weight-bold mb-3 uk-text-lead">Make payment</p>
+
+                </div>
+                {% if payment %}
+                <div class="rounded-5 border p-5">
+
+                    <p class="uk-text-large uk-text-bold">Hi {{request.user.first_name}},</p>
+                    <p class="">You are about to make payment of
+                        <b>₦{{payment.amount|floatformat:2|intcomma}} </b> for <b>
+                            {{payment.purpose}}</b>
+                    </p>
+
+                    <div class="col-12" style="text-align: center;">
+                        <button class="btn-primary btn btn-radius" type="submit" id="pay-btn">Proceed</button>
+                    </div>
+                </div>
+                {% else %}
+
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- =========================== 5. Custom Project Section =========================================== -->
+
+<script src="https://js.paystack.co/v1/inline.js"></script>
+
+<script>
+
+    // var paymentForm = document.getElementById('paymentForm');
+
+    // paymentForm.addEventListener('submit', payWithPaystack, false);
+
+    function payWithPaystack(amount, payment_id, currency, email) {
+        // if (currency == 'USD') {
+        //     amount = 722 * amount
+        //     currency = 'NGN'
+        // }
+
+        // else if (currency == 'GBP') {
+        //     amount = 843 * amount
+        //     currency = 'NGN'
+        // }
+        var handler = PaystackPop.setup({
+
+            key: "{{public_key}}", // Replace with your public key
+
+            email: email,
+
+            amount: Number(amount) * 100, // the amount value is multiplied by 100 to convert to the lowest currency unit
+
+            currency: currency, // Use GHS for Ghana Cedis or USD for US Dollars
+
+            ref: payment_id, // Replace with a reference you generated
+
+            callback: function (response) {
+
+                //this happens after the payment is completed successfully
+                confirmPayment(response.status, payment_id, response.reference)
+                // Make an AJAX call to your server with the reference to verify the transaction
+
+            },
+
+            onClose: function () {
+
+                $('#danger-modal-message').text('Payment canceled')
+                UIkit.modal($('#danger-message-modal')).show();
+            },
+
+        });
+
+        handler.openIframe();
+
+    }
+
+
+
+
+    function confirmPayment(status, payment_id, payment_ref) {
+
+        $.ajax({
+            beforeSend: function () {
+                showProgress()
+            },
+            complete: function () {
+                showProgress(value = 100)
+            },
+            url: "{% url 'confirm_payment' %}",
+            type: 'post',
+            data: {
+                'payment_id': payment_id, 'status': status, 'payment_ref': payment_ref, 'csrfmiddlewaretoken': '{{csrf_token}}',
+                'go_to':'{{go_to}}',
+            },
+            success: function (response) {
+               
+                window.location = response['go_to'] || "{% url 'dashboard' %}"
+
+            },
+            error: function (xhr, status, error) {
+
+            }
+        });
+
+    }
+
+
+    function makePayment(amount, reference, currency, email) {
+
+        FlutterwaveCheckout({
+            public_key: "FLWPUBK-4af34cf404b3f579cfbee53584ea27f0-X",
+            tx_ref: reference,
+            amount: amount,
+            currency: currency,
+            // country: "{{partner.country}}",
+            payment_options: "card,ussd",
+            customer: {
+                email: email,
+                phone_number: "{{request.user.phone_number}}",
+                name: "{{request.user.first_name}} {{request.user.last_name}}",
+            },
+            callback: function (payment) {
+                // Send AJAX verification request to backend
+                alert(payment.id)
+                confirmPayment(payment.status, payment.id, payment.tx_ref);
+            },
+            onclose: function (incomplete) {
+                alert('closed')
+                if (incomplete || window.verified === false) {
+                    ;
+                } else {
+                    document.querySelector("form").style.display = 'none';
+                    if (window.verified == true) {
+
+                    } else {
+
+                    }
+                }
+            },
+
+            customizations: {
+                title: "Algoridm Pay",
+                description: "Algoridm Payment Portal",
+                logo: "/media/algoridm/algoridm-favicon.png",
+            },
+        });
+
+
+    }
+
+
+    $("#pay-btn").on('click', function (event) {
+
+        payWithPaystack("{{payment.amount}}", "{{payment.payment_id}}", 'NGN', "{{request.user.email}}")
+
+    });
+
+</script>
+{% endblock content %}

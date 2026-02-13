@@ -1,0 +1,194 @@
+{% load static %}
+{% autoescape off %}
+{% load humanize %}
+<!DOCTYPE html>
+<html lang="zxx">
+
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="description" content="Algoridm Platforms - Success by quality">
+    <meta name="keywords"
+        content="education,Algoridm,instructor,lms,online,instructor,Algoridm Platforms,bootstrap,kindergarten,tutor,e learning">
+    <meta name="author" content="Algoridm Platforms">
+
+    <link rel="shortcut icon" type="image/ico" href="/media/resources/algoridm/pay-icon-white.png" />
+
+    <title>{{title}}</title>
+
+    <!-- Mobile Specific Meta-->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% include 'base/stylesheets.html' %}
+
+
+</head>
+
+<body id="top-header">
+
+    {% include 'pay/heading.html' %}
+    {% if messages %}
+    {% for message in messages %}
+    <div class="alert uk-position-fixed uk-text-center uk-width-1-1
+    alert-{% if message.tags == 'error' %}danger{% elif message.tags == 'success' %}success{% endif %} messages"
+        role="alert" style="z-index: 1000">
+        {{ message }}
+    </div>
+    {% endfor %}
+
+    {% endif %}
+
+
+    {% block content %}
+
+
+    {% endblock content %}
+
+
+    {% include 'pay/footer.html' %}
+
+
+
+    {% endautoescape %}
+
+
+
+
+
+    <!-- 
+    Essential Scripts
+    =====================================-->
+
+
+    {% include 'base/scripts.html' %}
+
+
+
+
+
+
+    <script text="javascript">
+
+        $('#password-form-submit-btn').on('click', function (e) {
+            var target_form = '#' + $(this).attr('target-form')
+            password = $('#password').val()
+            $(target_form).trigger('submit', [{ 'password': password }]);
+
+        })
+
+
+
+        function showProgress(value = 0.1) {
+
+            UIkit.util.ready(function () {
+                var bar = document.getElementById('js-progressbar');
+                bar.classList.remove("uk-hidden")
+
+                var animate = setInterval(function () {
+                    if ((bar.value > 95) || (bar.value == 100) && value < 100) {
+                        bar.value = Math.floor(Math.random() * 100)
+                    }
+                    bar.value += value;
+
+                    if ((bar.value >= bar.max || value == 100)) {
+                        bar.classList.add("uk-hidden")
+
+                        clearInterval(animate);
+                    }
+
+                }, 5);
+            }
+            )
+        }
+
+        setTimeout(fade_out, 5000);
+        function fade_out() {
+            $(".messages").fadeOut().empty();
+        }
+        $("form")[0].reset(); // this is to reset the form 
+
+
+
+        $('.level').on('change', function () {
+            if (this.selectedIndex == 1) {
+                $('.Diploma').removeClass('uk-hidden')
+                $('.Advanced.diploma').addClass('uk-hidden')
+            }
+
+            else if (this.selectedIndex == 2) {
+                $('.Advanced.diploma').removeClass('uk-hidden')
+                $('.Diploma').addClass('uk-hidden')
+            }
+        })
+
+
+        $('.show-password-eye').on('click', function () {
+            var btn = $(this)
+
+            $('#password').attr('type', 'text')
+            $('.hide-password-eye').removeClass('uk-hidden')
+            $('.show-password-eye').addClass('uk-hidden')
+        })
+
+
+        $('.hide-password-eye').on('click', function () {
+            var btn = $(this)
+            $('#password').attr('type', 'password')
+            $('.show-password-eye').removeClass('uk-hidden')
+            $('.hide-password-eye').addClass('uk-hidden')
+
+        })
+
+
+
+        $('.password-eye').on('click', function () {
+
+            $('#password').attr('type', 'text')
+            $('.password-eye').removeClass('fa-eye')
+            $('.password-eye').addClass('fa-eye-slash')
+
+
+        })
+
+
+        // $('.fa-eye').on('click', function () {
+
+        //     $('#access_pin').attr('type', 'text')
+
+        // })
+
+        // $('.1day').on('click',function(){
+        //     $('.1').removeClass('uk-hidden')
+        //     $('.2').addClass('uk-hidden')
+        //     $('.3').addClass('uk-hidden')
+
+        // })
+
+        // $('.2days').on('click',function(){
+        //     $('.2').removeClass('uk-hidden')
+        //     $('.1').addClass('uk-hidden')
+        //     $('.3').addClass('uk-hidden')
+
+        // })
+
+        // $('.3days').on('click',function(){
+        //     $('.3').removeClass('uk-hidden')
+        //     $('.1').addClass('uk-hidden')
+        //     $('.2').addClass('uk-hidden')
+
+        // })
+
+
+        $('#existing').on('click', function () {
+            $('#existing-form').removeClass('uk-hidden')
+
+            $('#new-form').addClass('uk-hidden')
+        })
+
+        $('#new').on('click', function () {
+            $('#new-form').removeClass('uk-hidden')
+            $('#existing-form').addClass('uk-hidden')
+        })
+    </script>
+</body>
+
+</html>

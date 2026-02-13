@@ -1,0 +1,22 @@
+<header class="header-style-1 uk-position-relative p-0"> 
+    <div class="header-navbar navbar-sticky p-0 shadow-none border-bottom bg-white">
+        <div class="container-fluid p-1 px-3 m-0">
+            <div class="d-flex align-items-center justify-content-between">
+                <div class="site-logo">
+                    <a href="{% url 'pay_dashboard' %}">
+                        <img src="/media/resources/algoridm/pay-logo.png" alt="" class="img-fluid" width="70px" />
+                    </a>
+                </div>
+
+
+                <div class="d-xl-block">
+                    {% include 'base/account_menu.html' %}
+
+                </div>
+            </div>
+        </div>
+        <progress id="js-progressbar" class="uk-progress uk-hidden rounded-0 uk-margin-remove bg-primary-green-light" style="height: 5px;" value="10" max="100"></progress>
+
+    </div>
+
+</header>

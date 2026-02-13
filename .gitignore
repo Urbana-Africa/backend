@@ -1,0 +1,16 @@
+venv/
+db.sqlite3
+uploads/
+products/
+media/
+.idea/
+__pycache__/
+db.sqlite3
+.env
+logs/
+.env
+env/
+/env
+sms-backend/.env
+logs/
+/stats

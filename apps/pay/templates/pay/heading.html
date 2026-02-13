@@ -1,0 +1,26 @@
+<header class="header-style-1 uk-position-relative p-0 "> 
+    <div class="header-navbar navbar-sticky classroom p-0 shadow-none">
+        <div class="container-fluid p-1 px-3 m-0">
+            <div class="uk-child-width-expand uk-grid-small m-0" uk-grid>
+                <div class="p-0 uk-hidden@m">
+                    
+                        <a href="{% url 'pay_dashboard' %}">
+                        <img src="/media/resources/algoridm/pay-icon.png" alt="" class="img-fluid" style="width: 40px !important;" />
+                    </a> 
+                 
+                        <button class="btn rounded-3 p-0 uk-margin-small-right px-3 mt-1" type="button"
+                            uk-toggle="target: #mobile-classroom-side-nav"><i class="fa fa-bars font-20"> </i></button>
+                    </div>
+
+           
+
+
+                <div class="uk-text-right">
+                    {% include 'base/account_menu.html' %}
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+</header>

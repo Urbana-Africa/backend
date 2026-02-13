@@ -1,0 +1,71 @@
+<div id="classroom-side-nav" class="uk-height-viewport p-0 border-0 
+uk-position-relative uk-width-1-5 uk-visible@m">
+    <div class="uk-flex uk-flex-column p-2  uk-width-1-1">
+        <div class="uk-text-left">
+            <a href="{% url 'student_dashboard' %}">
+                <img src="/media/resources/algoridm/pay-logo.png" alt="" class="img-fluid " style="width: 60px;" />
+            </a>
+        </div>
+
+        <div class="mt-5 rounded-5  p-2">
+            <div class="rounded-5 uk-overflow-hidden">
+                <ul class="uk-nav-default" uk-nav>
+                    <li class=""><a class="btn btn-white p-3 px-1 text-dark uk-child-width-expand uk-grid-small m-0"
+                        uk-grid href="{% url 'pay_dashboard' %}">
+                        <i class="fa fa-home uk-margin-small-right uk-width-1-6 m-0"></i><span
+                            class="uk-text-left  uk-text-normal ">Dashboard</span> </a></li>
+
+                    <li class=""><a class="btn btn-white p-3 px-1 text-dark uk-child-width-expand uk-grid-small m-0"
+                            uk-grid href="{% url 'my_payments' %}">
+                            <i class="fa fa-money-bill fa-regular uk-margin-small-right uk-width-1-6 m-0"></i><span
+                                class="uk-text-left  uk-text-normal ">My payments</span> </a></li>
+                    <li class=""><a class="btn btn-white p-3  px-1 text-dark uk-child-width-expand uk-grid-small m-0"
+                            uk-grid href="{% url 'withdraw' %}">
+                            <i class="fa fa-arrow-right uk-margin-small-right uk-width-1-6 m-0"></i><span
+                                class="uk-text-left  uk-text-normal ">Withdraw</span> </a></li>
+                    <li class=""><a class="btn btn-white p-3  px-1 text-dark uk-child-width-expand uk-grid-small m-0"
+                            uk-grid href="{% url 'my_transactions' %}">
+                            <i class="fa fa-list-check uk-margin-small-right uk-width-1-6 m-0"></i><span
+                                class="uk-text-left  uk-text-normal ">My transactions</span> </a></li>
+                   
+                </ul>
+            </div>
+
+        </div>
+
+    </div>
+</div>
+
+
+
+
+<!--Mobile Nav-->
+
+
+<div id="mobile-classroom-side-nav" class="uk-height-viewport p-0 uk-hidden@m"
+    uk-offcanvas="overlay: true; mode: slide;bg-close:true">
+    <div class="uk-offcanvas-bar uk-flex uk-flex-column bg-light p-2 border-end border">
+        <div class="uk-child-width-expand uk-grid-small m-0" uk-grid>
+            <div class="p-0">
+                <a href="{% url 'student_dashboard' %}">
+                    <img src="/media/resources/algoridm/pay-logo.png" alt="" class="img-fluid "
+                        style="width: 70px;" />
+                </a>
+            </div>
+            <div class="uk-text-right">
+                <button class="btn m-0 rounded-3 p-0 uk-margin-small-right px-3" type="button"
+                    uk-toggle="target: #mobile-classroom-side-nav"><i class="fa fa-times fa-2x text-gray">
+                    </i></button>
+            </div>
+        </div>
+    <div class="mt-5 rounded-5  p-2">
+        <div class="rounded-5 uk-overflow-hidden">
+            <ul class="uk-nav-default" uk-nav>
+            </ul>
+        </div>
+
+    </div>
+    </div>
+
+
+</div>

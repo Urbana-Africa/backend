@@ -1,0 +1,23 @@
+Alias /static /var/www/clients/client0/web5/web/static
+<Directory /var/www/clients/client0/web5/web/static>
+    Require all granted
+</Directory>
+DocumentRoot /var/www/clients/client0/web5/web
+PassengerAppRoot /var/www/clients/client0/web5/web
+# Tell Passenger that your app is a Python app
+PassengerAppType wsgi
+PassengerPython /var/www/clients/client0/web5/web/venv/bin/python3.12
+# Relax Apache security settings
+<Directory /var/www/clients/client0/web5/web>
+  Allow from all
+  Options -MultiViews
+  # Uncomment this if you're on Apache >= 2.4:
+  Require all granted
+</Directory>
+
+<Directory /var/www/clients/client0/web5/web>
+    Options Indexes FollowSymLinks Includes ExecCGI
+    <Files wsgi.py>
+        Require all granted
+    </Files>
+</Directory>

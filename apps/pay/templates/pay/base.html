@@ -1,0 +1,182 @@
+{% load static %}
+{% autoescape off %}
+<!DOCTYPE html>
+<html lang="zxx">
+
+<!-- Mirrored from themeturn.com/tf-db/Algoridm-demo/Algoridm/index.html by HTTrack Website Copier/3.x [XR&CO'2014], Thu, 22 Jun 2023 19:06:56 GMT -->
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="description" content="Algoridm Platforms - Success by quality">
+    <meta name="keywords"
+        content="education,Algoridm,instructor,lms,online,instructor,Algoridm Platforms,bootstrap,kindergarten,tutor,e learning">
+    <meta name="author" content="Algoridm Platforms">
+
+    <link rel="shortcut icon" type="image/ico" href="/media/resources/algoridm/pay-favicon.png" />
+
+    <title>{{title}}</title>
+
+    <!-- Mobile Specific Meta-->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% include 'base/stylesheets.html' %}
+
+
+
+</head>
+
+<body id="top-header" class="bg-gray uk-height-viewport position-fixed">
+    {% include 'base/progress_bar.html' %}
+
+    <div class="uk-child-width-expand uk-grid-small m-0 uk-height-viewport" uk-grid>
+        {% include 'pay/sidenav.html' %}
+        <div class="uk-position-relative p-0">
+            {% include 'pay/heading.html' %}
+            <div class=" p-3">
+                <div class="uk-position-relative uk-width-1-1 uk-child-width-expand"
+                    uk-height-viewport="offset-top: true">
+
+                    <div class="bg-white rounded-5 mb-4 uk-box-shadow-medium uk-overflow-auto p-3
+                bottom-0 top-0  uk-position-absolute">
+                        {% block content %}
+
+
+                        {% endblock content %}
+
+                    </div>
+
+
+                </div>
+            </div>
+
+
+
+
+        </div>
+    </div>
+    {% if messages %}
+    {% for message in messages %}
+    <div class="alert uk-position-fixed uk-text-center uk-width-1-1 border-0
+    alert-{% if message.tags == 'error' %}danger{% elif message.tags == 'success' %}success{% endif %} messages"
+        role="alert" style="z-index: 1000">
+        {{ message }}
+    </div>
+    {% endfor %}
+
+    {% endif %}
+
+
+    {% endautoescape %}
+
+
+
+
+    {% include 'base/scripts.html' %}
+    <script>
+
+        $('#hide-balance').on('click',function(){
+            if($(this).hasClass('fa-eye')){
+                $(this).removeClass('fa-eye').addClass('fa-eye-slash')
+            $('#shown-balance').removeClass('uk-hidden')
+            $('#hidden-balance').addClass('uk-hidden')   
+            }
+            else{
+                $(this).addClass('fa-eye').removeClass('fa-eye-slash')
+            $('#shown-balance').addClass('uk-hidden')
+            $('#hidden-balance').removeClass('uk-hidden')
+            }
+    
+        })
+    </script>
+    <script text="javascript">
+        setTimeout(fade_out, 5000);
+        function fade_out() {
+            $(".messages").fadeOut().empty();
+        }
+        $("form")[0].reset(); // this is to reset the form 
+
+
+
+        $('.level').on('change', function () {
+            if (this.selectedIndex == 1) {
+                $('.Diploma').removeClass('uk-hidden')
+                $('.Advanced.diploma').addClass('uk-hidden')
+            }
+
+            else if (this.selectedIndex == 2) {
+                $('.Advanced.diploma').removeClass('uk-hidden')
+                $('.Diploma').addClass('uk-hidden')
+            }
+        })
+
+
+        $('.show-password-eye').on('click', function () {
+            var btn = $(this)
+
+            $('#password').attr('type', 'text')
+            $('.hide-password-eye').removeClass('uk-hidden')
+            $('.show-password-eye').addClass('uk-hidden')
+        })
+
+
+        $('.hide-password-eye').on('click', function () {
+            var btn = $(this)
+            $('#password').attr('type', 'password')
+            $('.show-password-eye').removeClass('uk-hidden')
+            $('.hide-password-eye').addClass('uk-hidden')
+
+        })
+
+
+
+        $('.password-eye').on('click', function () {
+
+            $('#password').attr('type', 'text')
+            $('.password-eye').removeClass('fa-eye')
+            $('.password-eye').addClass('fa-eye-slash')
+
+
+        })
+
+
+        // $('.fa-eye').on('click', function () {
+
+        //     $('#access_pin').attr('type', 'text')
+
+        // })
+
+        // $('.1day').on('click',function(){
+        //     $('.1').removeClass('uk-hidden')
+        //     $('.2').addClass('uk-hidden')
+        //     $('.3').addClass('uk-hidden')
+
+        // })
+
+        // $('.2days').on('click',function(){
+        //     $('.2').removeClass('uk-hidden')
+        //     $('.1').addClass('uk-hidden')
+        //     $('.3').addClass('uk-hidden')
+
+        // })
+
+        // $('.3days').on('click',function(){
+        //     $('.3').removeClass('uk-hidden')
+        //     $('.1').addClass('uk-hidden')
+        //     $('.2').addClass('uk-hidden')
+
+        // })
+
+
+        $('#existing').on('click', function () {
+            $('#existing-form').removeClass('uk-hidden')
+
+            $('#new-form').addClass('uk-hidden')
+        })
+
+        $('#new').on('click', function () {
+            $('#new-form').removeClass('uk-hidden')
+            $('#existing-form').addClass('uk-hidden')
+        })
+    </script>
+</body>
+
+</html>

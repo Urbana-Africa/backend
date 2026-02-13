@@ -1,0 +1,96 @@
+{% extends 'pay/base.html' %}
+{% load humanize %}
+{% block content %}
+
+
+<section class="">
+    <div class="container">
+
+            <div class="">
+                <p class="uk-text-bold mb-3 uk-text-lead">All transactions</p>
+            </div>
+
+
+                {% if transactions %}
+
+
+                <div class="row justify-content-center border-bottom">
+                    <div class="col">
+                        <p class="uk-margin-remove uk-text-lead mt-5">Transactions</p>
+
+                    </div>
+
+                </div>
+                {% for transaction in transactions %}
+                {% if transaction.type == 'payment' %}
+
+
+                <div class="p-1">
+                    <div class="p-2 bg-light rounded-4">
+                        <div class="row">
+                            <div class="col-12">
+                                <span class="uk-text-bold">₦{{transaction.amount|floatformat:2|intcomma}}
+                                    {% if transaction.status == 'pending' %}
+                                    <i class="fa fa-circle text-warning fa-tiny"></i>
+                                    {% elif transaction.status == 'success' %}
+                                    <i class="fa fa-circle text-success fa-tiny"></i>
+                                    {% endif %}</span>
+
+                                <i class="fa fa-arrows-h fa-1x text-primary"></i>
+                            </div>
+                            <div class="col-12">
+                                <span class="">{{transaction.date_time_added}}</span>
+
+                            </div>
+                        </div>
+
+
+                    </div>
+                    {% if transaction.status == 'pending' %} <div class="col-4 uk-text-right p-2 uk-inline uk-position-relative">
+                       
+                        <!-- <span class="uk-badge bg-warning">{{transaction.status}}</span> -->
+                        <button class="btn btn-white p-1 rounded-circle " style="height: 30px;width: 30px;">
+                            <i class="fa fa-ellipsis-v text-gray "></i></button>
+                        <div uk-dropdown="mode:click;" class="uk-overflow-auto px-0 py-0 rounded-1"
+                            style="max-height: 250px;">
+                            <ul class="uk-nav uk-dropdown-nav">
+
+                                <li class="btn btn-white border-bottom uk-width-1-1 uk-text-left btn-sm">
+                                    <a href="{% url 'complete_payment' pay_id=transaction.payment_id %}"
+                                        class="text-dark">Pay
+                                        now</a>
+                                </li>
+
+                                <li class="btn btn-white border-bottom uk-width-1-1 uk-text-left btn-sm">
+                                    <a href="{% url 'cancel_payment' pay_id=transaction.payment_id %}"
+                                        class="text-danger">Cancel</a>
+                                </li>
+
+
+                            </ul>
+                        </div>
+
+
+                        
+
+                    </div>{% endif %}
+                </div>
+                {% elif transaction.type == 'transfer' %}
+                {% include 'pay/transfer.html' %}
+                {% elif transaction.type == 'commission' %}
+                {% include 'pay/commission.html' %}
+                {% endif %}
+
+                {% endfor %}
+
+
+
+                {% else %}
+                <p class="text-center">No transaction to show</p>
+                {%endif%}
+            </div>
+
+</section>
+
+
+{% endblock content %}

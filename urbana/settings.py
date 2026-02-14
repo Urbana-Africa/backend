@@ -251,13 +251,21 @@ MEDIA_ROOT = BASE_DIR / "media"
 # Email
 # =====================================================
 
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = config("SMTP_HOST")
 EMAIL_PORT = config("SMTP_PORT", cast=int)
 EMAIL_HOST_USER = config("SMTP_USER")
 EMAIL_HOST_PASSWORD = config("SMTP_PASSWORD")
 EMAIL_USE_TLS = True
-
+APPEND_SLASH=False
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+RESEND_SMTP_PORT = 587
+RESEND_SMTP_USERNAME = 'resend'
+RESEND_SMTP_HOST = 'smtp.resend.com'
+RESEND_API_KEY=config('RESEND_API_KEY')
+SMTP_USER = config('SMTP_USER')
+SMTP_HOST = config('SMTP_HOST')
+SMTP_PASSWORD=config('SMTP_PASSWORD')
+SMTP_PORT=config('SMTP_PORT')
 # =====================================================
 # Third-Party Keys
 # =====================================================

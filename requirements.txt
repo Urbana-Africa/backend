@@ -37,6 +37,7 @@ pycryptodome
 pydantic
 pydantic_core
 PyJWT
+pytz
 python-dateutil
 python-decouple
 redis

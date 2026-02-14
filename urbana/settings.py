@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import timedelta
 from decouple import config
 
+
 # =====================================================
 # Core
 # =====================================================
@@ -20,9 +21,9 @@ SECRET_KEY = config("SECRET_KEY")
 DEBUG = config("DEBUG", default=False, cast=bool)
 ENV = config("ENV", default="dev")  # dev | prod
 
-ALLOWED_ENVIRONMENTS = ["dev", "prod"]
-if ENV not in ALLOWED_ENVIRONMENTS:
+if ENV not in ["dev", "prod"]:
     raise ValueError("Invalid ENV value")
+
 
 # =====================================================
 # Hosts
@@ -31,11 +32,8 @@ if ENV not in ALLOWED_ENVIRONMENTS:
 if ENV == "prod":
     ALLOWED_HOSTS = ["api.urbanaafrica.com"]
 else:
-    ALLOWED_HOSTS = [
-        "127.0.0.1",
-        "localhost",
-        "api.urbana.local",
-    ]
+    ALLOWED_HOSTS = ["127.0.0.1", "localhost", "api.urbana.local"]
+
 
 # =====================================================
 # Applications
@@ -56,7 +54,6 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework.authtoken",
     "rest_framework_simplejwt",
-    "knox",
     "channels",
     "django_extensions",
     "django_cleanup.apps.CleanupConfig",
@@ -74,6 +71,7 @@ INSTALLED_APPS = [
     "apps.core",
 ]
 
+
 # =====================================================
 # Middleware
 # =====================================================
@@ -89,6 +87,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+
 # =====================================================
 # URL / ASGI / Auth
 # =====================================================
@@ -98,6 +97,7 @@ WSGI_APPLICATION = "urbana.wsgi.application"
 ASGI_APPLICATION = "urbana.asgi.application"
 AUTH_USER_MODEL = "authentication.User"
 LOGIN_URL = "/auth/login"
+
 
 # =====================================================
 # Templates
@@ -118,6 +118,7 @@ TEMPLATES = [
         },
     },
 ]
+
 
 # =====================================================
 # Database
@@ -145,6 +146,7 @@ else:
         }
     }
 
+
 # =====================================================
 # Redis / Channels
 # =====================================================
@@ -157,6 +159,7 @@ CHANNEL_LAYERS = {
         "CONFIG": {"hosts": [REDIS_URL]},
     }
 }
+
 
 # =====================================================
 # REST Framework
@@ -172,6 +175,7 @@ REST_FRAMEWORK = {
     ),
 }
 
+
 # =====================================================
 # JWT Configuration (Cookie-based)
 # =====================================================
@@ -186,35 +190,42 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(
         days=config("JWT_REFRESH_DAYS", default=1, cast=int)
     ),
-    "ROTATE_REFRESH_TOKENS": False,
-    "BLACKLIST_AFTER_ROTATION": False,
-
-    # Cookie Settings
     "AUTH_COOKIE": "access_token",
     "AUTH_COOKIE_REFRESH": "refresh_token",
     "AUTH_COOKIE_SECURE": SECURE_COOKIES,
     "AUTH_COOKIE_HTTP_ONLY": True,
-    "AUTH_COOKIE_SAMESITE": "None" if SECURE_COOKIES else "Lax",
+    "AUTH_COOKIE_SAMESITE": "Lax",  # subdomains are same-site
     "AUTH_COOKIE_PATH": "/",
 }
+
+
+# =====================================================
+# Session / CSRF (Shared Across Subdomains)
+# =====================================================
 
 SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
 SESSION_COOKIE_SECURE = SECURE_COOKIES
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = "None" if SECURE_COOKIES else "Lax"
+SESSION_COOKIE_SAMESITE = "Lax"
 
 CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN
 CSRF_COOKIE_SECURE = SECURE_COOKIES
 CSRF_COOKIE_HTTPONLY = False
-CSRF_COOKIE_SAMESITE = "None" if SECURE_COOKIES else "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
 
-# Required if behind Nginx (HTTPS termination)
 if ENV == "prod":
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
 
 # =====================================================
-# CORS / CSRF (React Frontends)
+# CORS / CSRF
 # =====================================================
+
+CORS_ALLOW_CREDENTIALS = True
 
 if ENV == "prod":
     CORS_ALLOWED_ORIGIN_REGEXES = [
@@ -235,7 +246,6 @@ else:
         "http://localhost:5174",
     ]
 
-CORS_ALLOW_CREDENTIALS = True
 
 # =====================================================
 # Static / Media
@@ -247,31 +257,26 @@ STATIC_ROOT = BASE_DIR / "static"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+
 # =====================================================
 # Email
 # =====================================================
 
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = config("SMTP_HOST")
 EMAIL_PORT = config("SMTP_PORT", cast=int)
 EMAIL_HOST_USER = config("SMTP_USER")
 EMAIL_HOST_PASSWORD = config("SMTP_PASSWORD")
 EMAIL_USE_TLS = True
-APPEND_SLASH=False
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-RESEND_SMTP_PORT = 587
-RESEND_SMTP_USERNAME = 'resend'
-RESEND_SMTP_HOST = 'smtp.resend.com'
-RESEND_API_KEY=config('RESEND_API_KEY')
-SMTP_USER = config('SMTP_USER')
-SMTP_HOST = config('SMTP_HOST')
-SMTP_PASSWORD=config('SMTP_PASSWORD')
-SMTP_PORT=config('SMTP_PORT')
+
+
 # =====================================================
 # Third-Party Keys
 # =====================================================
 
 GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY")
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY")
+
 
 # =====================================================
 # Internationalization

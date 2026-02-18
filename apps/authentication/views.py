@@ -165,14 +165,11 @@ class Logout(APIView):
     def post(self, request):
 
         try:
-
-            res = Response()
-            res.data = {'status':'success'}
             logout(request)
             # res.delete_cookie('access_token', path='/', samesite='None')
             # res.delete_cookie('refresh_token', path='/', samesite='None')
-
-            return res
+            # return {'success':True}
+            return Response({'success':True,'status':'success'})
 
         except Exception as e:
             print(e)

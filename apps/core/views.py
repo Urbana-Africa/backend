@@ -1,3 +1,4 @@
+import threading
 from django.core.paginator import Paginator
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Avg, Prefetch
@@ -5,16 +6,16 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
-
 from apps.designers.models import DesignerStory
 from apps.designers.serializers import StorySerializer
-
+from apps.utils.email_sender import resend_sendmail
+from django.db.models.functions import Lower
 from .models import Country, Currency, Category, Product, Review, Sizes, UserSettings
 from .serializers import (
-    CountrySerializer, CurrencySerializer, MediaAssetSerializer,
+    ContactMessageSerializer, CountrySerializer, CurrencySerializer, MediaAssetSerializer,
     CategorySerializer, ProductSerializer, ReviewSerializer, SizesSerializer, UserSettingsSerializer
 )
-
+from django.db.models import Q
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -409,22 +410,55 @@ class ProductListView(APIView):
         )
 
         # -----------------------
-        # TAB FILTERING
+        # SORTING (Frontend Driven)
         # -----------------------
-        tab = request.GET.get("tab", "new")
+        # -----------------------
+        # SEARCH FILTER
+        # -----------------------
+        search = request.GET.get("search", "").strip()
 
-        if tab == "new":
-            queryset = queryset.order_by("-created_at")
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(brand__name__icontains=search) |
+                Q(category__name__icontains=search) |
+                Q(subcategory__name__icontains=search) |
+                Q(user__designer_profile__brand_name__icontains=search)
+            )
 
-        elif tab == "trending":
-            queryset = queryset.order_by("-popularity_score", "-created_at")
+        sort = request.GET.get("sort")
 
-        elif tab == "sustainable":
-            queryset = queryset.filter(is_sustainable=True).order_by("-created_at")
+        if sort:
+            if sort == "price_asc":
+                queryset = queryset.order_by("price")
+
+            elif sort == "price_desc":
+                queryset = queryset.order_by("-price")
+
+            elif sort == "name_asc":
+                queryset = queryset.order_by("name")
+
+            elif sort == "newest":
+                queryset = queryset.order_by("-created_at")
+
+            else:
+                queryset = queryset.order_by("-created_at")
 
         else:
-            queryset = queryset.order_by("-created_at")
+            # fallback to tab behavior if no explicit sort
+            tab = request.GET.get("tab", "new")
 
+            if tab == "new":
+                queryset = queryset.order_by("-created_at")
+
+            elif tab == "trending":
+                queryset = queryset.order_by("-popularity_score", "-created_at")
+
+            elif tab == "sustainable":
+                queryset = queryset.filter(is_sustainable=True).order_by("-created_at")
+
+            else:
+                queryset = queryset.order_by("-created_at")
         # -----------------------
         # DESIGNER COUNTRY FILTER
         # -----------------------
@@ -485,7 +519,58 @@ class ProductListView(APIView):
         page_obj = paginator.get_page(page)
 
         serializer = ProductSerializer(page_obj, many=True)
-        print(serializer)
+        # -----------------------
+        # API RESPONSE
+        # -----------------------
+        return Response(
+            {
+                "status": "success",
+                "data": serializer.data,
+                "pagination": {
+                    "current_page": page,
+                    "total_pages": paginator.num_pages,
+                    "total_items": paginator.count,
+                    "has_next": page_obj.has_next(),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+# ---------------------------
+# Trending Products
+# ---------------------------
+class TrendingProducts(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        # -----------------------
+        # BASE QUERYSET
+        # -----------------------
+        queryset = (
+            Product.objects.filter(is_published=True, is_active=True)
+            .exclude(media=False)
+            .select_related(
+                "user",
+                "currency",
+                "category",
+                "subcategory",
+                "brand",
+            )
+            .prefetch_related(
+                "media",
+                "user__designer_profile",
+            )
+        )
+
+        queryset = queryset.order_by("-popularity_score", "-created_at")
+
+        page = int(request.GET.get("page", 1))
+        limit = int(request.GET.get("limit", 10))
+
+        paginator = Paginator(queryset.distinct(), limit)
+        page_obj = paginator.get_page(page)
+
+        serializer = ProductSerializer(page_obj, many=True)
         # -----------------------
         # API RESPONSE
         # -----------------------
@@ -514,6 +599,9 @@ class ProductDetailView(APIView):
                 Prefetch('reviews', queryset=Review.objects.filter(is_approved=True)),
                 Prefetch('media')
             ).get(id=id,)
+            product.popularity_score+=1
+            product.save()
+            print(product.popularity_score)
             avg_rating = product.reviews.aggregate(Avg('rating'))['rating__avg'] or 0
             return Response({
                 "status": "success",
@@ -572,3 +660,83 @@ class UserSettingsView(APIView):
         )
 
 
+
+
+class ContactMessageView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ContactMessageSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                {"status": "error", "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        contact = serializer.save(
+            # user=request.user if request.user.is_authenticated else None
+        )
+
+        # -----------------------
+        # SEND EMAIL TO SUPPORT
+        # -----------------------
+        subject = f"New Contact Message from {contact.name}"
+
+        message = f"""
+        <p>You have received a new contact message on Urbana.</p>
+        <br>
+        <p><strong>Name:</strong> {contact.name}</p>
+        <p><strong>Email:</strong> {contact.email}</p>
+        <br>
+        <p><strong>Message:</strong></p>
+        <p>{contact.message}</p>
+        """
+
+        threading.Thread(
+            target=resend_sendmail,
+            args=(
+                subject,
+                ["supporturbanaafrica@gmail.com"],
+                message,
+            ),
+        ).start()
+
+        return Response(
+            {
+                "status": "success",
+                "message": "Your message has been sent successfully.",
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+
+class SearchSuggestions(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        query = request.GET.get("q", "").strip()
+
+        if not query:
+            return Response([])
+
+        names = (
+            Product.objects
+            .filter(name__icontains=query)
+            .annotate(lower_name=Lower("name"))
+            .order_by("lower_name")
+            .values_list("name", flat=True)
+            .distinct()[:6]
+        )
+
+        return Response({'data':list(names)})
+
+
+
+
+# class ProductViewSet(ModelViewSet):
+#     queryset = Product.objects.all()
+#     serializer_class = ProductSerializer
+#     filter_backends = [SearchFilter]
+#     search_fields = ["name"]

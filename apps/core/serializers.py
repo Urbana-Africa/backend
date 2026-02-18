@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from apps.authentication.serializers import UserSerializer
 from apps.designers.models import Designer
-from .models import Country, Currency, MediaAsset, Category, Product, Review, ShippingMethod, Sizes, UserSettings
+from .models import ContactMessage, Country, Currency, MediaAsset, Category, Product, Review, ShippingMethod, Sizes, UserSettings
 
 
 class CountrySerializer(serializers.ModelSerializer):
@@ -127,3 +127,9 @@ class UserSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserSettings
         exclude = ("id", "user")
+
+
+class ContactMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactMessage
+        fields = ["id", "name", "email", "message"]

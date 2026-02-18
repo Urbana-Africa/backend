@@ -248,12 +248,17 @@ if IS_PRODUCTION:
     ]
 else:
     CORS_ALLOWED_ORIGINS = [
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
+         "https://urbana.local:5172",
+        "https://api.urbana.local:8000",
+        "https://auth.urbana.local:5173",
+        "https://customer.urbana.local:5174",
+        "https://designer.urbana.local:5175",
+        "https://localhost:5173",
+        "https://localhost:5174",
+        "https://127.0.0.1:5173",
+        "https://127.0.0.1:5174",
     ]
-    CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS[:]
+    CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
 
 # =====================================================
@@ -277,7 +282,16 @@ EMAIL_PORT = config("SMTP_PORT", cast=int)
 EMAIL_HOST_USER = config("SMTP_USER")
 EMAIL_HOST_PASSWORD = config("SMTP_PASSWORD")
 EMAIL_USE_TLS = True
-
+APPEND_SLASH=False
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+RESEND_SMTP_PORT = 587
+RESEND_SMTP_USERNAME = 'resend'
+RESEND_SMTP_HOST = 'smtp.resend.com'
+RESEND_API_KEY=config('RESEND_API_KEY')
+SMTP_USER = config('SMTP_USER')
+SMTP_HOST = config('SMTP_HOST')
+SMTP_PASSWORD=config('SMTP_PASSWORD')
+SMTP_PORT=config('SMTP_PORT')
 
 # =====================================================
 # Third-party Keys

@@ -3,6 +3,7 @@ from django.conf import settings
 from django.urls import path
 from .views import (
     CollectionDetailView,
+    ContactMessageView,
     CountryListView,
     CurrencyListView,
     DesignerDetailView,
@@ -10,11 +11,13 @@ from .views import (
     FeaturedProductsView,
     MediaAssetUploadView,
     ProductDetailView,
+    SearchSuggestions,
     SizesListView,
     StoryListView,
     StoryDetailView,
     FeaturedStoriesView,
     TrendingCollectionsView,
+    TrendingProducts,
     UserSettingsView,
 )
 from django.urls import path
@@ -29,15 +32,17 @@ urlpatterns = [
     # 🌍 General
     path("countries", CountryListView.as_view(), name="core-countries"),
     path("currencies", CurrencyListView.as_view(), name="core-currencies"),
+    path("search-suggestions", SearchSuggestions.as_view(), name="core-currencies"),
 
     # 🖼 Media
     path("media/upload", MediaAssetUploadView.as_view(), name="core-media-upload"),
 
     # 🏷 Categories
     path("categories", CategoryListView.as_view(), name="core-categories"),
-
+    path("contact", ContactMessageView.as_view(), name="contact-message"),
     # 🛍 Products
     path("products", ProductListView.as_view(), name="core-products"),
+    path("trending-products", TrendingProducts.as_view(), name="trending-products"),
     path("products/<str:id>", ProductDetailView.as_view(),
          name="core-product-detail"),
    path("settings", UserSettingsView.as_view()),

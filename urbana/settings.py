@@ -2,9 +2,8 @@ from pathlib import Path
 from datetime import timedelta
 from decouple import config
 
-
 # =====================================================
-# Paths & Environment
+# Base Paths & Environment
 # =====================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -17,28 +16,19 @@ if ENV not in ["dev", "prod", "staging"]:
     raise ValueError(f"Invalid ENV value: {ENV}")
 
 IS_PRODUCTION = ENV == "prod"
-
+IS_DEVELOPMENT = ENV == "dev"
 
 # =====================================================
-# Hosts & Allowed Origins
+# Hosts & Allowed
 # =====================================================
 
 ALLOWED_HOSTS = ["api.urbanaafrica.com"]
 
 if not IS_PRODUCTION:
-    ALLOWED_HOSTS.extend(["127.0.0.1", "localhost", "api.urbana.local"])
-
-
-# =====================================================
-# Cookie & Security Domain (for shared cookies across subdomains)
-# =====================================================
-
-COOKIE_DOMAIN = ".urbanaafrica.com" if IS_PRODUCTION else None
-SECURE_COOKIES = IS_PRODUCTION
-
+    ALLOWED_HOSTS += ["127.0.0.1", "localhost", "api.urbana.local"]
 
 # =====================================================
-# Installed Applications
+# Installed Apps
 # =====================================================
 
 INSTALLED_APPS = [
@@ -74,7 +64,6 @@ INSTALLED_APPS = [
     "apps.core",
 ]
 
-
 # =====================================================
 # Middleware
 # =====================================================
@@ -90,9 +79,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-
 # =====================================================
-# URLconf, ASGI, Auth
+# Core Django Settings
 # =====================================================
 
 ROOT_URLCONF = "urbana.urls"
@@ -100,7 +88,7 @@ WSGI_APPLICATION = "urbana.wsgi.application"
 ASGI_APPLICATION = "urbana.asgi.application"
 AUTH_USER_MODEL = "authentication.User"
 LOGIN_URL = "/auth/login"
-
+APPEND_SLASH = False
 
 # =====================================================
 # Templates
@@ -122,12 +110,11 @@ TEMPLATES = [
     },
 ]
 
-
 # =====================================================
 # Database
 # =====================================================
 
-if ENV == "dev":
+if IS_DEVELOPMENT:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
@@ -149,7 +136,6 @@ else:
         }
     }
 
-
 # =====================================================
 # Redis / Channels
 # =====================================================
@@ -165,9 +151,45 @@ CHANNEL_LAYERS = {
     }
 }
 
+# =====================================================
+# Cookie Domain & Security Flags
+# =====================================================
+
+if IS_PRODUCTION:
+    COOKIE_DOMAIN = ".urbanaafrica.com"
+    COOKIE_SECURE = True
+    SESSION_COOKIE_SAMESITE = "Lax"          # Change to "None" only if cross-subdomain POST is truly required
+    CSRF_COOKIE_SAMESITE = "Lax"
+    JWT_COOKIE_SAMESITE = "Lax"
+else:
+    COOKIE_DOMAIN = ".urbana.local"
+    COOKIE_SECURE = False                    # Set True if using HTTPS in dev (recommended with mkcert)
+    SESSION_COOKIE_SAMESITE = "Lax"
+    CSRF_COOKIE_SAMESITE = "Lax"
+    JWT_COOKIE_SAMESITE = "Lax"
+
+# If you MUST support credentialed cross-origin POST from different subdomains:
+# SESSION_COOKIE_SAMESITE = "None"
+# CSRF_COOKIE_SAMESITE    = "None"
+# JWT_COOKIE_SAMESITE     = "None"
+# COOKIE_SECURE           = True   # ← browsers reject SameSite=None without Secure
 
 # =====================================================
-# REST Framework & Authentication
+# Session & CSRF
+# =====================================================
+
+SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
+SESSION_COOKIE_SECURE = COOKIE_SECURE
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = SESSION_COOKIE_SAMESITE
+
+CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN
+CSRF_COOKIE_SECURE = COOKIE_SECURE
+CSRF_COOKIE_HTTPONLY = False               # Frontend usually needs to read it
+CSRF_COOKIE_SAMESITE = CSRF_COOKIE_SAMESITE
+
+# =====================================================
+# REST Framework & JWT
 # =====================================================
 
 REST_FRAMEWORK = {
@@ -180,56 +202,22 @@ REST_FRAMEWORK = {
     ),
 }
 
-
-# =====================================================
-# Simple JWT – Cookie-based tokens (shared across subdomains)
-# =====================================================
-
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=config("JWT_ACCESS_MINUTES", default=60, cast=int)),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=config("JWT_REFRESH_DAYS", default=1, cast=int)),
 
-    # Cookie settings – these names are used in views
+    # Cookie-based JWT (cross-subdomain)
     "AUTH_COOKIE": "access_token",
     "AUTH_COOKIE_REFRESH": "refresh_token",
-
-    "AUTH_COOKIE_DOMAIN": COOKIE_DOMAIN,               # ← Key fix: share across subdomains
-    "AUTH_COOKIE_SECURE": SECURE_COOKIES,
+    "AUTH_COOKIE_DOMAIN": COOKIE_DOMAIN,
+    "AUTH_COOKIE_SECURE": COOKIE_SECURE,
     "AUTH_COOKIE_HTTP_ONLY": True,
-    "AUTH_COOKIE_SAMESITE": "Lax",                     # Allows cross-subdomain GET + top-level POST
+    "AUTH_COOKIE_SAMESITE": JWT_COOKIE_SAMESITE,
     "AUTH_COOKIE_PATH": "/",
 }
 
-
 # =====================================================
-# Session & CSRF – Shared across all *.urbanaafrica.com
-# =====================================================
-
-SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
-SESSION_COOKIE_SECURE = SECURE_COOKIES
-SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = "Lax"
-
-CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN
-CSRF_COOKIE_SECURE = SECURE_COOKIES
-CSRF_COOKIE_HTTPONLY = False
-CSRF_COOKIE_SAMESITE = "Lax"
-
-
-# =====================================================
-# Production Security Headers
-# =====================================================
-
-if IS_PRODUCTION:
-    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-    SECURE_SSL_REDIRECT = True
-    SECURE_HSTS_SECONDS = 31536000  # 1 year
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
-
-
-# =====================================================
-# CORS – Allow all legitimate urbanaafrica.com subdomains + root
+# CORS
 # =====================================================
 
 CORS_ALLOW_CREDENTIALS = True
@@ -244,25 +232,38 @@ if IS_PRODUCTION:
         "https://auth.urbanaafrica.com",
         "https://customer.urbanaafrica.com",
         "https://designer.urbanaafrica.com",
-        # Add more known frontends here if they appear later
+        # add others as needed
     ]
 else:
     CORS_ALLOWED_ORIGINS = [
-         "https://urbana.local:5172",
-        "https://api.urbana.local:8000",
-        "https://auth.urbana.local:5173",
-        "https://customer.urbana.local:5174",
-        "https://designer.urbana.local:5175",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         "https://localhost:5173",
         "https://localhost:5174",
-        "https://127.0.0.1:5173",
-        "https://127.0.0.1:5174",
+        "https://localhost:5175",
+        "http://127.0.0.1:5173",
+        "https://urbana.local:5172",
+        "https://api.urbana.local:8000",
+        "https://auth.urbana.local:5173",
+        "https://customer.urbana.local:5175",
+        "https://designer.urbana.local:5174",
     ]
-    CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
-
+    CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS.copy()
 
 # =====================================================
-# Static & Media
+# Production Security
+# =====================================================
+
+if IS_PRODUCTION:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+# =====================================================
+# Static / Media
 # =====================================================
 
 STATIC_URL = "/static/"
@@ -271,38 +272,26 @@ STATIC_ROOT = BASE_DIR / "static"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-
 # =====================================================
-# Email
+# Email (cleaned up duplicates)
 # =====================================================
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = config("SMTP_HOST")
-EMAIL_PORT = config("SMTP_PORT", cast=int)
+EMAIL_PORT = config("SMTP_PORT", cast=int, default=587)
 EMAIL_HOST_USER = config("SMTP_USER")
 EMAIL_HOST_PASSWORD = config("SMTP_PASSWORD")
 EMAIL_USE_TLS = True
-APPEND_SLASH=False
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-RESEND_SMTP_PORT = 587
-RESEND_SMTP_USERNAME = 'resend'
-RESEND_SMTP_HOST = 'smtp.resend.com'
-RESEND_API_KEY=config('RESEND_API_KEY')
-SMTP_USER = config('SMTP_USER')
-SMTP_HOST = config('SMTP_HOST')
-SMTP_PASSWORD=config('SMTP_PASSWORD')
-SMTP_PORT=config('SMTP_PORT')
+
+# Resend (if you're using it instead)
+# EMAIL_HOST = "smtp.resend.com"
+# EMAIL_PORT = 587
+# EMAIL_HOST_USER = "resend"
+# EMAIL_HOST_PASSWORD = config("RESEND_API_KEY")
+# EMAIL_USE_TLS = True
 
 # =====================================================
-# Third-party Keys
-# =====================================================
-
-GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY", default="")
-STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
-
-
-# =====================================================
-# Internationalization
+# Misc / Third-party
 # =====================================================
 
 LANGUAGE_CODE = "en-us"
@@ -311,4 +300,6 @@ USE_I18N = True
 USE_TZ = True
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-APPEND_SLASH = False
+
+GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY", default="")
+STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")

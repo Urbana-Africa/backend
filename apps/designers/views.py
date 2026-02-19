@@ -231,8 +231,7 @@ class PromotionListView(APIView):
 # -------------------------------
 class DesignerProfileView(APIView):
     """Retrieve or update designer profile."""
-    permission_classes = [IsAuthenticated]
-
+    permission_classes =([IsAuthenticated])
     def get(self, request):
         try:
             designer = Designer.objects.get(user = request.user)

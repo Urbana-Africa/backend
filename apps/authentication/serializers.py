@@ -4,7 +4,7 @@ from apps.authentication.models import DeletedUser, Security, User, Verification
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('email', 'password','id','first_name','gender', 'last_name','username','is_active','phone_number','date_of_birth','is_superuser')
+        fields = ('email', 'password','id','first_name','gender', 'last_name','username','is_active','phone_number','date_of_birth','is_superuser','is_staff')
         extra_kwargs = {'password': {'write_only': True},}
 
     def create(self, validated_data):

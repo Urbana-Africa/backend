@@ -109,7 +109,8 @@ class CustomTokenObtainPairView(TokenObtainPairView, APIView):
                 )
 
                 return res
-
+            else:
+                return Response({'status':'error','message':'Invalid credentials'},status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response(
                 {"status": "error", "error": str(e)},

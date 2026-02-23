@@ -133,7 +133,7 @@ class Product(BaseModel):
     brand = models.ForeignKey(Brand, on_delete=models.SET_NULL, null=True, blank=True)
     material = models.CharField(max_length=100, blank=True, null=True)
     origin = models.CharField(max_length=100, blank=True, null=True)
-    sizes = models.ManyToManyField(Sizes, default=None, blank=True, null=True)
+    sizes = models.ManyToManyField(Sizes, default=None, blank=True,)
     stock = models.PositiveIntegerField(default=0)
     sku = models.CharField(max_length=50, unique=True, blank=True, null=True)
     is_published = models.BooleanField(default=False)

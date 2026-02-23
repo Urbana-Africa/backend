@@ -1,8 +1,10 @@
+import uuid
 from django.db import models
 from django.core.exceptions import ObjectDoesNotExist
 from django.conf import settings
 from django.utils.text import slugify
 from django.core.validators import MinValueValidator
+from apps.authentication.models import User
 from apps.core.models import Color, Product, Sizes
 from apps.pay.models import Invoice
 from apps.utils.uuid_generator import generate_random_numbers
@@ -90,6 +92,8 @@ class Order(models.Model):
     def __str__(self):
         return f"Order {self.order_id} ({self.customer})"
 
+def generate_item_id():
+    return f'UOIT_{uuid.uuid4().hex[:15].upper()}'
 
 class OrderItem(models.Model):
     """Individual items in an order."""
@@ -119,7 +123,9 @@ class OrderItem(models.Model):
         ('cancelled', 'Cancelled'),
         ('returned', 'Returned'),
     ]
+    designer = models.ForeignKey(User, on_delete=models.CASCADE, null=True,default=None, related_name='order_items')
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
+    item_id = models.CharField(max_length=100, null=True, default=generate_item_id)
     color = models.ForeignKey(Color, on_delete=models.SET_NULL, null=True, default = None, related_name='color')
     size = models.ForeignKey(Sizes, on_delete=models.SET_NULL, null=True,default=None, related_name='sizes')
     product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True)
@@ -137,7 +143,13 @@ class OrderItem(models.Model):
     def subtotal(self):
         return self.quantity * self.amount
 
-
+    def save(self, *args, **kwargs):
+        if not self.item_id:
+            self.item_id = f"UOIT-{uuid.uuid4().hex[:15].upper()}"
+        if not self.designer:
+            self.designer = self.product.user
+        super().save(*args, **kwargs)
+        
 class ReturnRequest(models.Model):
     """Return request for an order item."""
     order_item = models.ForeignKey(OrderItem, on_delete=models.CASCADE, related_name='return_requests')

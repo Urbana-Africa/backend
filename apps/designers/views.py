@@ -9,9 +9,11 @@ from apps.core.serializers import ColorSerializer, ProductSerializer
 from apps.customers.models import OrderItem, ReturnRequest
 from apps.customers.serializers import ReturnRequestSerializer
 from django.db.models import Sum
-from .models import Designer, DesignerProduct, DesignerOrder, DesignerAnalytics, DesignerStory, StoryView
+from django.db import transaction
+from apps.designers.shippo_service import create_or_fetch_tracking
+from .models import Designer, DesignerProduct, DesignerOrder, DesignerAnalytics, DesignerStory, Shipment, StoryView
 from .serializers import (
-    DesignerSerializer, CollectionSerializer, DesignerProductSerializer, DesignerStorySerializer, MediaAssetSerializer, ProductSizeUpdateSerializer,
+    DesignerSerializer, CollectionSerializer, DesignerProductSerializer, DesignerStorySerializer, MediaAssetSerializer, OrderItemSerializer, ProductSizeUpdateSerializer,
     ShippingOptionSerializer, DesignerOrderSerializer, DesignerAnalyticsSerializer, StoryViewSerializer
 )
 from .models import InventoryAlert, ShipmentTracking, DesignerProduct, DesignerOrder
@@ -166,22 +168,131 @@ class BulkProductUploadView(APIView):
 # -------------------------------
 # Order Status Update
 # -------------------------------
-class DesignerOrderUpdateStatusView(APIView):
+
+
+class UpdateOrderStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request):
-        status_update = request.data.get('status')
-        order_id = request.data.get('order_id')
-        if status_update not in ['pending', 'processing', 'shipped', 'delivered', 'cancelled','returned']:
-            return Response({"status":"error", "message": "Invalid status.", "data": None}, status=status.HTTP_400_BAD_REQUEST)
+        status_update = request.data.get("status")
+        item_id = request.data.get("item_id")
+        tracking_number = request.data.get("tracking_number")
+        carrier = request.data.get("carrier")
+        print(request.data)
+
+        allowed_statuses = [
+            "pending",
+            "processing",
+            "shipped",
+            "delivered",
+            "cancelled",
+            "returned",
+        ]
+
+        # Validate status
+        if status_update not in allowed_statuses:
+            return Response(
+                {
+                    "status": "error",
+                    "message": "Invalid status.",
+                    "data": None,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            order = DesignerOrder.objects.get(id=order_id, user=request.user)
-            order.order_item.designer_status = status_update
-            order.order_item.save()
-            serializer = DesignerOrderSerializer(order)
-            return Response({"status":"success", "message": "Order status updated.", "data": serializer.data}, status=status.HTTP_200_OK)
+            order_item = OrderItem.objects.get(item_id=item_id, designer=request.user)
+
         except DesignerOrder.DoesNotExist:
-            return Response({"status":"error", "message": "Order not found.", "data": None}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {
+                    "status": "error",
+                    "error": "Order not found.",
+                    "data": None,
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # ------------------------------
+        # If status is shipped → require tracking
+        # ------------------------------
+        if status_update == "shipped":
+            if not tracking_number or not carrier:
+                return Response(
+                    {
+                        "status": "error",
+                        "message": "Carrier and tracking number are required when marking as shipped.",
+                        "data": None,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # ------------------------------
+            # If carrier is "other" → DO NOT call Shippo
+            # ------------------------------
+            if carrier == "other":
+                Shipment.objects.update_or_create(
+                    order_item=order_item,
+                    defaults={
+                        "carrier": carrier,
+                        "tracking_number": tracking_number,
+                        "tracking_status": "UNKNOWN",
+                        "tracking_data": {},
+                    },
+                )
+
+            else:
+                # ------------------------------
+                # Shippo-supported carrier
+                # ------------------------------
+                try:
+                    tracking_data = create_or_fetch_tracking(
+                        carrier=carrier,
+                        tracking_number=tracking_number,
+                    )
+
+                    Shipment.objects.update_or_create(
+                        order_item=order_item,
+                        defaults={
+                            "carrier": carrier,
+                            "tracking_number": tracking_number,
+                            "tracking_status": tracking_data["status"],
+                            # "tracking_data": tracking_data["raw"],
+                        },
+                    )
+
+                    # Auto-sync delivered
+                    if tracking_data["status"] == "DELIVERED":
+                        status_update = "delivered"
+
+                except Exception as e:
+                    print(f"Tracking validation failed: {str(e)}")
+                    return Response(
+                        {
+                            "status": "error",
+                            "error": f"Tracking validation failed: {str(e)}",
+                            "data": None,
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+        # ------------------------------
+        # Update Order Status
+        # ------------------------------
+        order_item.designer_status = status_update
+        order_item.save()
+
+        serializer = OrderItemSerializer(order_item)
+
+        return Response(
+            {
+                "status": "success",
+                "message": "Order status updated successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 # -------------------------------
 # Shipment Tracking
@@ -438,7 +549,8 @@ class DesignerOrderListView(APIView):
             .filter(user=request.user)
             .order_by("-created_at")
         )
-
+        for item in queryset.all():
+            item.order_item.save()
         paginator = Paginator(queryset, limit)
         page_obj = paginator.get_page(page)
 
@@ -718,3 +830,33 @@ class DesignerDashboardView(APIView):
         }
 
         return Response(payload)
+    
+
+class OrderDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        item_id = request.GET.get('item_id')
+        try:
+            order_item = OrderItem.objects.get(item_id=item_id, designer=request.user)
+            serializer = OrderItemSerializer(order_item)
+
+        except ObjectDoesNotExist:
+
+            return Response(
+                {
+                    "status": "success",
+                    "data": False,
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            {
+                "status": "success",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+

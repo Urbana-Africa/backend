@@ -48,3 +48,4 @@ social-auth-core
 sqlparse
 stripe
 whitenoise
+shippo

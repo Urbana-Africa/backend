@@ -208,3 +208,14 @@ class StoryView(BaseModel):
 
     def __str__(self):
         return f"{self.viewer.user.username} viewed {self.story}"
+
+
+
+
+class Shipment(models.Model):
+    order_item = models.OneToOneField(OrderItem, on_delete=models.CASCADE, related_name='shipment')
+    carrier = models.CharField(max_length=50)
+    tracking_number = models.CharField(max_length=100)
+    tracking_status = models.CharField(max_length=100, blank=True, null=True)
+    tracking_data = models.JSONField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)

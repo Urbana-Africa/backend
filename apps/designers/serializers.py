@@ -2,10 +2,10 @@ from rest_framework import serializers
 
 from apps.authentication.serializers import UserSerializer
 from apps.core.models import Sizes
-from apps.customers.models import OrderItem
-from apps.customers.serializers import CustomerSerializer
+from apps.customers.models import Order, OrderItem
+from apps.customers.serializers import AddressSerializer, CustomerSerializer
 from .models import (
-    Designer, Collection, DesignerProduct, DesignerStory, ProductImage,
+    Designer, Collection, DesignerProduct, DesignerStory, ProductImage, Shipment,
     ShippingOption, DesignerOrder, DesignerAnalytics, StoryView
 )
 from apps.core.serializers import ProductSerializer
@@ -91,20 +91,45 @@ class DesignerSerializer(serializers.ModelSerializer):
         model = Designer
         fields = "__all__"
 
+class ShipmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Shipment
+        fields = "__all__"
+
 class ShippingOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ShippingOption
         fields = ['id', 'name', 'cost', 'estimated_days', 'is_active']
 
 
-class OrderItemSerializer(serializers.ModelSerializer):
+
+class OrderSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
     # price = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Order
+        fields ='__all__'
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['shipping_address'] = AddressSerializer(instance.shipping_address).data
+        return data
+
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True)
+    order = OrderSerializer(read_only=True)
+    shipment = ShipmentSerializer(read_only=True)
 
     class Meta:
         model = OrderItem
         fields ='__all__'
 
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return data
 
 
 class DesignerOrderSerializer(serializers.ModelSerializer):
@@ -113,9 +138,9 @@ class DesignerOrderSerializer(serializers.ModelSerializer):
         fields = ['id','order_item', 'shipping_option', 'status', 'created_at']
 
     def to_representation(self, instance):
-        representation = super().to_representation(instance)
-        representation['order_item'] = OrderItemSerializer(instance.order_item).data
-        return representation
+        data = super().to_representation(instance)
+        data['order_item'] = OrderItemSerializer(instance.order_item).data
+        return data
 
 class DesignerAnalyticsSerializer(serializers.ModelSerializer):
     class Meta:
@@ -146,3 +171,4 @@ class DesignerDashboardSerializer(serializers.Serializer):
 
     sales_over_time = serializers.ListField()
     top_products = serializers.ListField()
+

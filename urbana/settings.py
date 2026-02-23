@@ -229,6 +229,7 @@ if IS_PRODUCTION:
     CSRF_TRUSTED_ORIGINS = [
         "https://urbanaafrica.com",
         "https://api.urbanaafrica.com",
+        "https://admin.urbanaafrica.com",
         "https://auth.urbanaafrica.com",
         "https://customer.urbanaafrica.com",
         "https://designer.urbanaafrica.com",
@@ -245,6 +246,7 @@ else:
         "http://127.0.0.1:5173",
         "https://urbana.local:5172",
         "https://api.urbana.local:8000",
+        "https://admin.urbana.local:5176",
         "https://auth.urbana.local:5173",
         "https://customer.urbana.local:5175",
         "https://designer.urbana.local:5174",
@@ -284,12 +286,15 @@ EMAIL_HOST_PASSWORD = config("SMTP_PASSWORD")
 EMAIL_USE_TLS = True
 
 # Resend (if you're using it instead)
-# EMAIL_HOST = "smtp.resend.com"
-# EMAIL_PORT = 587
-# EMAIL_HOST_USER = "resend"
-# EMAIL_HOST_PASSWORD = config("RESEND_API_KEY")
-# EMAIL_USE_TLS = True
-
+EMAIL_HOST = "smtp.resend.com"
+EMAIL_PORT = 587
+EMAIL_HOST_USER = "resend"
+EMAIL_HOST_PASSWORD = config("RESEND_API_KEY")
+EMAIL_USE_TLS = True
+RESEND_SMTP_PORT=587
+RESEND_SMTP_HOST="smtp.resend.com"
+RESEND_SMTP_USERNAME="resend"
+RESEND_API_KEY= config("RESEND_API_KEY")
 # =====================================================
 # Misc / Third-party
 # =====================================================
@@ -303,3 +308,4 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY", default="")
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
+SHIPPO_API_KEY = config("SHIPPO_API_KEY", default="")

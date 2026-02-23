@@ -57,7 +57,7 @@ class User(AbstractUser, PermissionsMixin):
     username = models.CharField(max_length=200,default='',blank=True)
     gender = models.CharField(max_length=200,default='',blank=True)
     date_of_birth = models.DateField(default=None,null=True)
-    profile = models.JSONField(default=dict)
+    profile = models.JSONField(default=dict, blank=True, null= True)
     date_time_added = models.DateTimeField(auto_now=True,null=True,)
     is_active = models.BooleanField(_("active"),
         default=False,
@@ -102,8 +102,8 @@ class User(AbstractUser, PermissionsMixin):
     )
 
     # Updated: Now uses ForeignKey to Country model for rich data & flag display
-    made_in_country_code =models.CharField(max_length=250)
-    made_in_country_name =models.CharField(max_length=250)
+    made_in_country_code =models.CharField(max_length=250, blank = True)
+    made_in_country_name =models.CharField(max_length=250, blank = True)
 
     is_verified = models.BooleanField(
         default=False,

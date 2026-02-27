@@ -11,25 +11,54 @@ User = get_user_model()
 # Designer Profile
 # -------------------------------
 class Designer(BaseModel):
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='designer_profile')
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+        BLOCKED = "blocked", "Blocked"
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='designer_profile'
+    )
+
     bio = models.TextField(blank=True)
     story = models.TextField(blank=True)
-    brand_name = models.CharField(max_length=200,default='',blank=True)
-    specialty = models.CharField(max_length=200,default='',blank=True)
+    brand_name = models.CharField(max_length=200, default='', blank=True)
+    specialty = models.CharField(max_length=200, default='', blank=True)
     country = models.TextField(blank=True)
-    years_of_experience = models.IntegerField(blank=True, default = 0)
+    years_of_experience = models.IntegerField(blank=True, default=0)
+
     profile_picture = models.ImageField(upload_to='designer_profiles/', blank=True, null=True)
     banner_image = models.ImageField(upload_to='designer_profiles/', blank=True, null=True)
+
     website = models.URLField(blank=True)
     instagram = models.URLField(blank=True)
+
     is_verified = models.BooleanField(default=False)
+
+    # ✅ Single lifecycle field
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING
+    )
+
+    # ✅ Reasons for current status
+    status_reasons = models.JSONField(default=list, blank=True)
+
+    status_updated_at = models.DateTimeField(auto_now=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     slug = models.SlugField(unique=True, blank=True, null=True)
 
     def save(self, *args, **kwargs):
-        if not self.slug:
-            self.slug = slugify(f"{self.brand_name}")
+        if not self.slug and self.brand_name:
+            self.slug = slugify(self.brand_name)
         super().save(*args, **kwargs)
+
 
     def __str__(self):
         return self.user.username

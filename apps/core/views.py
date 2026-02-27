@@ -394,7 +394,7 @@ class ProductListView(APIView):
         # BASE QUERYSET
         # -----------------------
         queryset = (
-            Product.objects.filter(is_published=True, is_active=True)
+            Product.objects.filter(is_published=True,is_admin_published = True, is_active=True)
             .exclude(media=False)
             .select_related(
                 "user",
@@ -547,7 +547,7 @@ class TrendingProducts(APIView):
         # BASE QUERYSET
         # -----------------------
         queryset = (
-            Product.objects.filter(is_published=True, is_active=True)
+            Product.objects.filter(is_published=True,is_admin_published = True, is_active=True)
             .exclude(media=False)
             .select_related(
                 "user",

@@ -55,8 +55,9 @@ INSTALLED_APPS = [
     "social_django",
     "drf_social_oauth2",
     "django_apscheduler",
-
+    'django_filters',
     # Project apps
+    "apps.administrator",
     "apps.authentication",
     "apps.customers",
     "apps.designers",
@@ -200,7 +201,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticatedOrReadOnly",
     ),
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 10,
 }
+
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=config("JWT_ACCESS_MINUTES", default=60, cast=int)),

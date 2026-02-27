@@ -1,4 +1,3 @@
-from django.db import models
 from apps.authentication.models import User
 from datetime import datetime
 from django.core.exceptions import ObjectDoesNotExist
@@ -6,32 +5,9 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.utils.crypto import get_random_string
 from apps.utils.uuid_generator import generate_custom_id
 from django.utils import timezone
+from django.db import models, transaction
+from django.core.exceptions import ValidationError
 
-
-
-class Wallets(models.Model):   
-    id = models.CharField(
-        primary_key=True,
-        max_length=50,
-        default=generate_custom_id,
-        editable=False,
-    )
-
-    user = models.OneToOneField(User,on_delete=models.CASCADE,null=True,blank=True)
-    balance = models.IntegerField(default=0,blank=True)
-    date_time_added = models.DateTimeField(auto_now=True)
-    
-    def __str__(self):
-        return self.user.get_full_name()
-
-    class Meta:
-        
-        db_table = 'wallets'
-
-
-    # def save(self,*args,**kwargs):
-  
-    #     super(Wallet,self).save()
 
 
 class Currency(models.Model):
@@ -383,3 +359,196 @@ class PartnerCommisions(models.Model):
                     exist = False
                     break
         super(PartnerCommisions,self).save()
+
+
+
+# =============================
+# CHOICES
+# =============================
+
+TRANSACTION_TYPES = (
+    ("escrow_hold", "Escrow Hold"),
+    ("escrow_release", "Escrow Release"),
+    ("withdrawal", "Withdrawal"),
+    ("commission", "Platform Commission"),
+    ("refund", "Refund"),
+)
+
+TRANSACTION_STATUS = (
+    ("pending", "Pending"),
+    ("completed", "Completed"),
+    ("failed", "Failed"),
+)
+
+ESCROW_STATUS = (
+    ("held", "Held"),
+    ("released", "Released"),
+    ("refunded", "Refunded"),
+)
+
+WITHDRAWAL_STATUS = (
+    ("pending", "Pending"),
+    ("processing", "Processing"),
+    ("completed", "Completed"),
+    ("failed", "Failed"),
+    ("rejected", "Rejected"),
+)
+
+
+# =============================
+# WALLET
+# =============================
+
+class Wallet(models.Model):
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="wallet")
+    currency = models.CharField(max_length=10, default="NGN")
+    is_locked = models.BooleanField(default= False)
+    available_balance = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    pending_balance = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "wallets"
+
+    def __str__(self):
+        return f"{self.user.get_full_name()} Wallet"
+
+
+# =============================
+# WALLET TRANSACTION (LEDGER)
+# =============================
+
+class WalletTransaction(models.Model):
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="transactions")
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    transaction_type = models.CharField(max_length=50, choices=TRANSACTION_TYPES)
+    status = models.CharField(max_length=50, choices=TRANSACTION_STATUS, default="pending")
+
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    reference = models.CharField(max_length=120, unique=True)
+
+    description = models.TextField(blank=True)
+
+    related_payment = models.ForeignKey("Payment", null=True, blank=True, on_delete=models.SET_NULL)
+    related_order_id = models.CharField(max_length=100, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "wallet_transactions"
+        ordering = ["-created_at"]
+
+    def mark_completed(self):
+        self.status = "completed"
+        self.completed_at = timezone.now()
+        self.save(update_fields=["status", "completed_at"])
+
+
+# =============================
+# ESCROW (Customer Funds Held)
+# =============================
+
+class Escrow(models.Model):
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+
+    order_id = models.CharField(max_length=100)
+    payment = models.ForeignKey("Payment", on_delete=models.CASCADE)
+
+    customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="customer_escrows")
+    designer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="designer_escrows")
+
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    platform_commission = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    status = models.CharField(max_length=50, choices=ESCROW_STATUS, default="held")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "escrows"
+
+    @transaction.atomic
+    def release_funds(self):
+        if self.status != "held":
+            raise ValidationError("Escrow already processed")
+
+        designer_wallet, _ = Wallet.objects.get_or_create(user=self.designer)
+
+        designer_share = self.amount - self.platform_commission
+
+        # Move pending → available
+        designer_wallet.available_balance += designer_share
+        designer_wallet.save()
+
+        WalletTransaction.objects.create(
+            wallet=designer_wallet,
+            user=self.designer,
+            transaction_type="escrow_release",
+            status="completed",
+            amount=designer_share,
+            reference=f"ESCROW-{self.id}",
+            related_payment=self.payment,
+            related_order_id=self.order_id,
+        )
+
+        self.status = "released"
+        self.released_at = timezone.now()
+        self.save(update_fields=["status", "released_at"])
+
+
+# =============================
+# WITHDRAWALS (Flutterwave)
+# =============================
+
+class Withdrawal(models.Model):
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+
+    status = models.CharField(max_length=50, choices=WITHDRAWAL_STATUS, default="pending")
+    reference = models.CharField(max_length=120, unique=True)
+
+    flutterwave_transfer_id = models.CharField(max_length=200, blank=True)
+
+    bank_name = models.CharField(max_length=100)
+    bank_code = models.CharField(max_length=50)
+    account_number = models.CharField(max_length=20)
+    account_name = models.CharField(max_length=200)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "withdrawals"
+
+    @transaction.atomic
+    def process_withdrawal(self):
+        if self.wallet.available_balance < self.amount:
+            raise ValidationError("Insufficient balance")
+
+        self.wallet.available_balance -= self.amount
+        self.wallet.is_locked = True
+        self.wallet.save()
+
+        WalletTransaction.objects.create(
+            wallet=self.wallet,
+            user=self.user,
+            transaction_type="withdrawal",
+            status="completed",
+            amount=self.amount,
+            reference=f"WDR-{self.id}",
+            description="Withdrawal to bank"
+        )
+
+        self.status = "processing"
+        self.save(update_fields=["status"])

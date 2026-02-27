@@ -70,6 +70,7 @@ class ColorSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     media = MediaAssetSerializer(many=True, read_only=True)
+    colors = ColorSerializer(many=True, read_only=True)
 
     class Meta:
         model = Product

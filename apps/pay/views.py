@@ -14,7 +14,7 @@ from django.utils import timezone
 from pytz import utc
 from rest_framework.permissions import IsAuthenticated
 
-from apps.pay.models import Wallets
+from apps.pay.models import Wallet
 from apps.utils.email_sender import resend_sendmail
 from .models import Payment, Transfers, Banks
 from rest_framework.views import APIView, status
@@ -32,6 +32,12 @@ from paystackease import PayStackWebhook, PayStackSignatureVerifyError
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from .config import get_paystack_keys
 from django.template.loader import render_to_string
+from django.shortcuts import get_object_or_404
+from .models import Wallet, Escrow
+from .serializers import WalletSerializer, WithdrawalSerializer
+
+
+
 
 ENV = config("ENV")
 
@@ -599,3 +605,41 @@ class MakePaymentView(APIView):
             return Response({
                 'message':'error occured at {e}'
             },status=status.HTTP_400_BAD_REQUEST)
+
+
+
+class MyWalletView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        serializer = WalletSerializer(wallet)
+        return Response(serializer.data)
+
+
+class ReleaseEscrowView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, escrow_id):
+        escrow = get_object_or_404(Escrow, id=escrow_id)
+        escrow.release_funds()
+        return Response({"detail": "Escrow released successfully"})
+
+
+class CreateWithdrawalView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        wallet = request.user.wallet
+        serializer = WithdrawalSerializer(data=request.data)
+
+        if serializer.is_valid():
+            withdrawal = serializer.save(
+                wallet=wallet,
+                user=request.user,
+                reference=f"WDR-{wallet.id}-{timezone.now().timestamp()}"
+            )
+            withdrawal.process_withdrawal()
+            return Response(WithdrawalSerializer(withdrawal).data)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

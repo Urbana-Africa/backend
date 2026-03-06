@@ -5,20 +5,22 @@ from django.utils import timezone
 from django.utils.text import slugify
 from django.core.validators import MinValueValidator
 import uuid
-
+import secrets
+import string
 from apps.authentication.models import User
 
 
 
-# ---------------------------
-# Base
-# ---------------------------
-def generate_custom_uuid():
+ALPHABET = string.ascii_letters + string.digits  # 62 chars
+
+def generate_custom_uuid(length=20):
     """
-    Generates a UUID-like 36-character string, same format as a standard UUID.
-    Example: '550e8400-e29b-41d4-a716-446655440000'
+    Generates a secure random ID.
+
+    Example:
+    '4fK2x8PqL9sWm3QzT7aB'
     """
-    return str(uuid.uuid4())
+    return ''.join(secrets.choice(ALPHABET) for _ in range(length))
 
 class BaseModel(models.Model):
     """
@@ -27,7 +29,7 @@ class BaseModel(models.Model):
     """
     id = models.CharField(
         primary_key=True,
-        max_length=20,
+        max_length=50,
         editable=False,
         default=generate_custom_uuid
     )

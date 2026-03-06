@@ -1,8 +1,8 @@
 from django.contrib import admin
 
-from apps.customers.models import Address, Order, OrderItem, CartItem
+from apps.customers.models import Address, Order, OrderItem, CartItem, ReturnRequest
 
 # Register your models here.
 
 
-admin.site.register([OrderItem, Order, CartItem, Address])
+admin.site.register([OrderItem, Order, CartItem, Address, ReturnRequest])

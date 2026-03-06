@@ -6,12 +6,13 @@ from rest_framework.decorators import action
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.pagination import PageNumberPagination
-
+import threading
+from django.template.loader import render_to_string
 from apps.core.models import *
 from apps.customers.models import *
 from apps.designers.models import *
 from .serializers import *
-
+from apps.utils.email_sender import resend_sendmail
 
 class AdminPagination(PageNumberPagination):
     page_size = 12
@@ -193,6 +194,82 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
     ordering_fields = ["created_at"]
     ordering = ["-created_at"]
 
+    lookup_field = "return_id"
+    lookup_url_kwarg = "return_id"
+
+    @action(detail=True, methods=["post"], url_path="action")
+    def perform_action(self, request, return_id=None):
+        """
+        POST /admin/returns/{return_id}/action
+
+        Body:
+        {
+            "action": "approve" | "reject",
+            "reason": "optional rejection reason"
+        }
+        """
+
+        instance = self.get_object()
+
+        action_type = request.data.get("action")
+        reason = request.data.get("reason", "")
+
+        if action_type not in ["approve", "reject"]:
+            return Response(
+                {"detail": "Invalid action. Must be 'approve' or 'reject'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order = instance.order_item.order
+        customer = order.customer
+
+        context = {
+            "customer": customer,
+            "return_request": instance,
+            "order": order,
+            "order_item": instance.order_item,
+            "reject_reason": reason,
+        }
+
+        if action_type == "approve":
+
+            instance.admin_status = "approved"
+            instance.save()
+
+            subject = f"Your Return Request #{instance.return_id} Has Been Approved"
+
+            message = render_to_string(
+                "administrator/return_approved.html",
+                context,
+            )
+
+        elif action_type == "reject":
+
+            if not reason:
+                return Response(
+                    {"detail": "Rejection reason is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            instance.admin_status = "rejected"
+            instance.reject_reason = reason
+            instance.save()
+
+            subject = f"Your Return Request #{instance.return_id} Was Rejected"
+
+            message = render_to_string(
+                "administrator/return_rejected.html",
+                context,
+            )
+
+        # Send email asynchronously
+        threading.Thread(
+            target=resend_sendmail,
+            args=(subject, [customer.user.email], message),
+        ).start()
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 # =====================================================
 # DESIGNER MANAGEMENT
 # =====================================================

@@ -16,26 +16,7 @@ class Migration(migrations.Migration):
     operations = [ migrations.DeleteModel(
             name='Wallets',
         ),
-        
-        migrations.CreateModel(
-            name='Escrow',
-            fields=[
-                ('id', models.CharField(default=apps.utils.uuid_generator.generate_custom_id, editable=False, max_length=50, primary_key=True, serialize=False)),
-                ('order_id', models.CharField(max_length=100)),
-                ('amount', models.DecimalField(decimal_places=2, max_digits=14)),
-                ('platform_commission', models.DecimalField(decimal_places=2, default=0, max_digits=14)),
-                ('status', models.CharField(choices=[('held', 'Held'), ('released', 'Released'), ('refunded', 'Refunded')], default='held', max_length=50)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('released_at', models.DateTimeField(blank=True, null=True)),
-                ('customer', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='customer_escrows', to=settings.AUTH_USER_MODEL)),
-                ('designer', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='designer_escrows', to=settings.AUTH_USER_MODEL)),
-                ('payment', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='pay.payment')),
-            ],
-            options={
-                'db_table': 'escrows',
-            },
-        ),
-      
+              
         migrations.CreateModel(
             name='Wallet',
             fields=[

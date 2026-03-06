@@ -13,8 +13,24 @@ from apps.authentication.models import User
 # ---------------------------
 # Base
 # ---------------------------
+def generate_custom_uuid():
+    """
+    Generates a UUID-like 36-character string, same format as a standard UUID.
+    Example: '550e8400-e29b-41d4-a716-446655440000'
+    """
+    return str(uuid.uuid4())
+
 class BaseModel(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    """
+    All models inherit this base model.
+    By default, it uses a custom ID instead of UUID.
+    """
+    id = models.CharField(
+        primary_key=True,
+        max_length=20,
+        editable=False,
+        default=generate_custom_uuid
+    )
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)

@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 
+from apps.authentication.serializers import UserSerializer
 from apps.core.models import (
     Product, Category, Brand, Currency, Sizes,
     MediaAsset, Review, ShippingMethod,
@@ -150,10 +151,20 @@ class AdminOrderTrackingSerializer(AdminBaseSerializer):
 # =====================================================
 
 class AdminReturnRequestSerializer(AdminBaseSerializer):
+    product_photos = MediaAssetSerializer(many=True, read_only=True)
+    packaging_photo = MediaAssetSerializer(read_only=True)
+    unboxing_video = MediaAssetSerializer(read_only=True)
+
     class Meta(AdminBaseSerializer.Meta):
         model = ReturnRequest
         read_only_fields = ["return_id", "created_at", "resolved_at"]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['customer'] = UserSerializer(instance.order_item.order.customer.user).data
+        data['designer'] = AdminDesignerSerializer(instance.order_item.designer.designer_profile).data
+        return data
+    
     def update(self, instance, validated_data):
         admin_status = validated_data.get("admin_status")
 

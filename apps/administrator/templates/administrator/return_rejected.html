@@ -1,0 +1,27 @@
+<h2>Hello {{ customer.first_name }},</h2>
+
+<p>
+Unfortunately, your return request
+<strong>#{{ return_request.return_id }}</strong> ({{ order_item.product.name }})
+has been rejected.
+</p>
+
+<p>
+<strong>Reason:</strong><br>
+{{ reject_reason }}
+</p>
+
+<p>
+Order Reference: <strong>{{ order.order_id }}</strong>
+</p>
+<p>
+Order Item ID: <strong>{{ order_item.item_id }}</strong>
+</p>
+<p>
+If you believe this decision was made in error,
+please contact Urbana support.
+</p>
+
+<p>
+<strong>Urbana Support Team</strong>
+</p>

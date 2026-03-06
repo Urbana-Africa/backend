@@ -1,13 +1,11 @@
 import uuid
 from django.db import models
-from django.core.exceptions import ObjectDoesNotExist
 from django.conf import settings
 from django.utils.text import slugify
 from django.core.validators import MinValueValidator
 from apps.authentication.models import User
-from apps.core.models import Color, Product, Sizes
-from apps.pay.models import Invoice
-from apps.utils.uuid_generator import generate_random_numbers
+from apps.core.models import BaseModel, Color, MediaAsset, Product, Sizes
+from apps.pay.models import Escrow, Invoice
 
 
 class Customer(models.Model):
@@ -114,6 +112,11 @@ class OrderItem(models.Model):
         ('cancelled', 'Cancelled'),
         ('returned', 'Returned'),
     ]
+    CUSTOMER_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('received', 'Received'),
+        ('returned', 'Returned'),
+    ]
     COLLECTION_DESTINATION_STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('processing', 'Processing'),
@@ -124,6 +127,7 @@ class OrderItem(models.Model):
         ('returned', 'Returned'),
     ]
     designer = models.ForeignKey(User, on_delete=models.CASCADE, null=True,default=None, related_name='order_items')
+    escrow = models.OneToOneField(Escrow, on_delete=models.CASCADE, null=True,default=None, related_name='order_item')
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
     item_id = models.CharField(max_length=100, null=True, default=generate_item_id)
     color = models.ForeignKey(Color, on_delete=models.SET_NULL, null=True, default = None, related_name='color')
@@ -138,8 +142,10 @@ class OrderItem(models.Model):
     designer_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     collection_destination_status = models.CharField(max_length=20, choices=COLLECTION_DESTINATION_STATUS_CHOICES, default='pending')
     collection_origin_status = models.CharField(max_length=20, choices=COLLECTION_ORIGIN_STATUS_CHOICES, default='pending')
+    customer_status = models.CharField(max_length=20, choices=CUSTOMER_STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True, null= True)
-
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    
     def subtotal(self):
         return self.quantity * self.amount
 
@@ -150,39 +156,82 @@ class OrderItem(models.Model):
             self.designer = self.product.user
         super().save(*args, **kwargs)
         
-class ReturnRequest(models.Model):
-    """Return request for an order item."""
-    order_item = models.ForeignKey(OrderItem, on_delete=models.CASCADE, related_name='return_requests')
-    reason = models.TextField()
-    is_approved = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-    resolved_at = models.DateTimeField(blank=True, null=True)
-    return_id= models.CharField(max_length=20, default='', blank=True)
-    STATUS_CHOICES = [
-        ('pending', 'Pending'),
-        ('canceled', 'Canceled'),
-        ('returned', 'Returned'),
-        ('rejected', 'Rejected')
-    ]
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    designer_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    admin_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+class ReturnRequest(BaseModel):
 
-    def __str__(self):
-        return f"Return {self.order_item.product.name} ({self.status})"
+    class Status(models.TextChoices):
+        PENDING = "pending"
+        REVIEWING = "reviewing"
+        APPROVED = "approved"
+        REJECTED = "rejected"
+        RETURNED = "returned"
+        REFUNDED = "refunded"
+        CANCELED = "canceled"
 
-    def save(self,*args, **kwargs):
+    class Reason(models.TextChoices):
+        DAMAGED = "damaged"
+        WRONG_ITEM = "wrong_item"
+        WRONG_SIZE = "wrong_size"
+        NOT_AS_DESCRIBED = "not_as_described"
+        POOR_QUALITY = "poor_quality"
+        MISSING_PARTS = "missing_parts"
+        LATE_DELIVERY = "late_delivery"
+        OTHER = "other"
+
+    order_item = models.ForeignKey(
+        OrderItem,
+        on_delete=models.CASCADE,
+        related_name="return_requests"
+    )
+
+    return_id = models.CharField(max_length=20, unique=True, editable=False)
+
+    reason = models.CharField(max_length=50, choices=Reason.choices)
+
+    description = models.TextField(blank=True)
+    reject_reason = models.TextField(blank=True)
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING
+    )
+    designer_status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    admin_status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    customer_status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    # Evidence
+    product_photos = models.ManyToManyField(
+        MediaAsset,
+        blank=True,
+        related_name="return_product_photos"
+    )
+
+    packaging_photo = models.ForeignKey(
+        MediaAsset,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="return_packaging_photo"
+    )
+
+    unboxing_video = models.ForeignKey(
+        MediaAsset,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="return_unboxing_video"
+    )
+
+    # workflow timestamps
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
         if not self.return_id:
-            for _ in range(5):
-                return_id = f'URBRE_{generate_random_numbers(10)}'
-                try:
-                    ReturnRequest.objects.get(return_id = return_id)
-                except ObjectDoesNotExist:
-                    self.return_id = return_id
-                    break
+            self.return_id = f"RET-{uuid.uuid4().hex[:8].upper()}"
         super().save(*args, **kwargs)
 
-
+    def __str__(self):
+        return self.return_id
 # Add after existing models
 
 

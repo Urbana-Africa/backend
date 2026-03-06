@@ -7,6 +7,8 @@ from . import views as payviews
 
 urlpatterns = [
     # path('make-payment', payviews.MakePayment.as_view(),name='pay'),
+      path("wallet/summary", payviews.WalletSummaryView.as_view()),
+    path("wallet/withdraw", payviews.CreateWithdrawalView.as_view()),
     path('withdraw', payviews.Withdraw.as_view(), name='withdraw'),
     path('', payviews.Dashboard.as_view(), name='pay_dashboard'),
     path('my-transactions', payviews.MyTransactions.as_view(),

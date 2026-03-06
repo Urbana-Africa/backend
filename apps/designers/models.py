@@ -196,19 +196,19 @@ class ShipmentTracking(BaseModel):
     def __str__(self):
         return f"Shipment for Order #{self.order.id}"
 
-class MediaAsset(BaseModel):
-    class MediaType(models.TextChoices):
-        IMAGE = "image"
-        VIDEO = "video"
-        DOCUMENT = "document"
+# class MediaAsset(BaseModel):
+#     class MediaType(models.TextChoices):
+#         IMAGE = "image"
+#         VIDEO = "video"
+#         DOCUMENT = "document"
 
-    file = models.FileField(upload_to="uploads/%Y/%m/%d/")
-    media_type = models.CharField(max_length=20, choices=MediaType.choices, default=MediaType.IMAGE)
-    alt_text = models.CharField(max_length=255, blank=True, null=True)
-    caption = models.TextField(blank=True, null=True)
+#     file = models.FileField(upload_to="uploads/%Y/%m/%d/")
+#     media_type = models.CharField(max_length=20, choices=MediaType.choices, default=MediaType.IMAGE)
+#     alt_text = models.CharField(max_length=255, blank=True, null=True)
+#     caption = models.TextField(blank=True, null=True)
 
-    def __str__(self):
-        return self.alt_text or str(self.file)
+#     def __str__(self):
+#         return self.alt_text or str(self.file)
 
 
 class DesignerStory(BaseModel):

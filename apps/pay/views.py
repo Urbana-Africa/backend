@@ -13,7 +13,8 @@ from django.views import View
 from django.utils import timezone
 from pytz import utc
 from rest_framework.permissions import IsAuthenticated
-
+from django.db.models import Sum
+from .models import WalletTransaction
 from apps.pay.models import Wallet
 from apps.utils.email_sender import resend_sendmail
 from .models import Payment, Transfers, Banks
@@ -643,3 +644,52 @@ class CreateWithdrawalView(APIView):
             return Response(WithdrawalSerializer(withdrawal).data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+
+class CreateWithdrawalView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        wallet = request.user.wallet
+
+        serializer = WithdrawalSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        withdrawal = serializer.save(
+            wallet=wallet,
+            user=request.user,
+            reference=f"WDR-{wallet.id}-{timezone.now().timestamp()}"
+        )
+
+        withdrawal.process_withdrawal()
+
+        return Response({
+            "message": "Withdrawal request submitted successfully."
+        })
+
+
+class WalletSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+
+        lifetime_earnings = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type="escrow_release",
+            status="completed"
+        ).aggregate(total=Sum("amount"))["total"] or 0
+
+        recent_transactions = WalletTransaction.objects.filter(
+            wallet=wallet
+        ).order_by("-created_at")[:10]
+
+        return Response({
+            "available_balance": wallet.available_balance,
+            "pending_balance": wallet.pending_balance,
+            "lifetime_earnings": lifetime_earnings,
+            "recent_activity": WalletTransactionSerializer(recent_transactions, many=True).data
+        })
+    
+
+

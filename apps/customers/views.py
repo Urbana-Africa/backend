@@ -11,7 +11,7 @@ from .serializers import (
     CustomerSerializer, AddressSerializer, InvoiceSerializer, WishlistSerializer,
     CartItemSerializer, OrderSerializer, ReturnRequestSerializer
 )
-from apps.core.models import Product, ShippingMethod
+from apps.core.models import MediaAsset, Product, ShippingMethod
 from django.utils import timezone
 from .models import OrderTracking
 from .serializers import OrderTrackingSerializer
@@ -380,23 +380,89 @@ class OrderDetailView(APIView):
 
 # ---------------- Return Requests ----------------
 class ReturnRequestView(APIView):
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        returns = ReturnRequest.objects.filter(order_item__order__customer=request.user.customer_profile)
+        returns = ReturnRequest.objects.filter(
+            order_item__order__customer=request.user.customer_profile
+        ).order_by("-created_at")
         serializer = ReturnRequestSerializer(returns, many=True)
-        return Response({"status":"success", "message": "Return requests retrieved successfully.", "data": serializer.data})
+
+        return Response({
+            "status": "success",
+            "message": "Return requests retrieved successfully.",
+            "data": serializer.data
+        })
+
 
     def post(self, request):
-        order_item_id = request.data.get('order_item_id')
-        reason = request.data.get('reason')
-        try:
-            order_item = OrderItem.objects.get(id=order_item_id, order__customer=request.user.customer_profile)
-        except OrderItem.DoesNotExist:
-            return Response({"status":"error", "message": "Order item not found."}, status=404)
 
-        return_request,_ = ReturnRequest.objects.get_or_create(order_item=order_item)
-        return_request.reason=reason
+        order_item_id = request.data.get("order_item_id")
+        reason = request.data.get("reason")
+        description = request.data.get("description")
+
+        try:
+            order_item = OrderItem.objects.get(
+                id=order_item_id,
+                order__customer=request.user.customer_profile
+            )
+
+        except OrderItem.DoesNotExist:
+            return Response({
+                "status": "error",
+                "message": "Order item not found"
+            }, status=404)
+
+        # prevent duplicate return
+        if ReturnRequest.objects.filter(order_item=order_item).exists():
+            return Response({
+                "status": "error",
+                "message": "Return already requested for this item"
+            }, status=400)
+
+        return_request = ReturnRequest.objects.create(
+            order_item=order_item,
+            reason=reason,
+            description=description
+        )
+
+        # product photos
+        photos = request.FILES.getlist("product_photos")
+
+        for photo in photos:
+            media = MediaAsset.objects.create(
+                file=photo,
+                media_type=MediaAsset.MediaType.IMAGE
+            )
+            return_request.product_photos.add(media)
+
+        # packaging photo
+        packaging = request.FILES.get("packaging_photo")
+
+        if packaging:
+            media = MediaAsset.objects.create(
+                file=packaging,
+                media_type=MediaAsset.MediaType.IMAGE
+            )
+            return_request.packaging_photo = media
+
+        # unboxing video
+        video = request.FILES.get("unboxing_video")
+
+        if video:
+            media = MediaAsset.objects.create(
+                file=video,
+                media_type=MediaAsset.MediaType.VIDEO
+            )
+            return_request.unboxing_video = media
+
         return_request.save()
+
         serializer = ReturnRequestSerializer(return_request)
-        return Response({"status":"success", "message": "Return request submitted successfully.", "data": serializer.data})
+
+        return Response({
+            "status": "success",
+            "message": "Return request submitted successfully.",
+            "data": serializer.data
+        })

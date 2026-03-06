@@ -457,15 +457,15 @@ class WalletTransaction(models.Model):
 class Escrow(models.Model):
     id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
 
-    order_id = models.CharField(max_length=100)
-    payment = models.ForeignKey("Payment", on_delete=models.CASCADE)
+    order_item_id = models.CharField(max_length=100)
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE)
 
     customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="customer_escrows")
     designer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="designer_escrows")
 
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     platform_commission = models.DecimalField(max_digits=14, decimal_places=2, default=0)
-
+    is_auto_released = models.BooleanField(default= False)
     status = models.CharField(max_length=50, choices=ESCROW_STATUS, default="held")
 
     created_at = models.DateTimeField(auto_now_add=True)

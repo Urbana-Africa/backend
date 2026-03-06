@@ -8,8 +8,7 @@ from .models import (
     Designer, Collection, DesignerProduct, DesignerStory, ProductImage, Shipment,
     ShippingOption, DesignerOrder, DesignerAnalytics, StoryView
 )
-from apps.core.serializers import ProductSerializer
-from .models import DesignerStory, MediaAsset
+from apps.core.serializers import MediaAssetSerializer, ProductSerializer
 
 
 class DesignerStorySerializer(serializers.ModelSerializer):
@@ -27,10 +26,7 @@ class StoryViewSerializer(serializers.ModelSerializer):
         fields = ['id', 'story', 'viewer', 'viewed_at']
 
         
-class MediaAssetSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = MediaAsset
-        fields = "__all__"
+
 
 class StorySerializer(serializers.ModelSerializer):
     media = MediaAssetSerializer(many=True, read_only=True)

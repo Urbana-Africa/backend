@@ -14,26 +14,26 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='category',
             name='id',
-            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=20, primary_key=True, serialize=False),
+            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=50, primary_key=True, serialize=False),
         ),
         migrations.AlterField(
             model_name='mediaasset',
             name='id',
-            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=20, primary_key=True, serialize=False),
+            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=50, primary_key=True, serialize=False),
         ),
         migrations.AlterField(
             model_name='product',
             name='id',
-            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=20, primary_key=True, serialize=False),
+            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=50, primary_key=True, serialize=False),
         ),
         migrations.AlterField(
             model_name='review',
             name='id',
-            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=20, primary_key=True, serialize=False),
+            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=50, primary_key=True, serialize=False),
         ),
         migrations.AlterField(
             model_name='usersettings',
             name='id',
-            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=20, primary_key=True, serialize=False),
+            field=models.CharField(default=apps.core.models.generate_custom_uuid, editable=False, max_length=50, primary_key=True, serialize=False),
         ),
     ]

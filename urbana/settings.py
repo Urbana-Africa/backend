@@ -227,26 +227,42 @@ SIMPLE_JWT = {
 
 CORS_ALLOW_CREDENTIALS = True
 
+# =====================================================
+# Production Security & Cookie Settings
+# =====================================================
 if IS_PRODUCTION:
-    # 1. Explicit list — most secure & reliable (preferred for known subdomains)
+    # Domain
+    COOKIE_DOMAIN = ".urbanaafrica.com"
+
+    # HTTPS required for secure cookies
+    COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = COOKIE_SECURE
+    CSRF_COOKIE_SECURE = COOKIE_SECURE
+    JWT_COOKIE_SECURE = COOKIE_SECURE
+
+    # Allow cross-subdomain cookies
+    SESSION_COOKIE_SAMESITE = "None"
+    CSRF_COOKIE_SAMESITE = "None"
+    JWT_COOKIE_SAMESITE = "None"
+
+    # Cookie flags
+    SESSION_COOKIE_HTTPONLY = True
+    CSRF_COOKIE_HTTPONLY = False  # frontend needs for AJAX POSTs
+    JWT_COOKIE_HTTPONLY = True
+
+    # Apply domain to all cookies
+    SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
+    CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN
+    JWT_COOKIE_DOMAIN = COOKIE_DOMAIN
+
+# =====================================================
+# CORS (Production)
+# =====================================================
+CORS_ALLOW_CREDENTIALS = True
+
+if IS_PRODUCTION:
+    # Explicitly known subdomains (optional, for extra safety)
     CORS_ALLOWED_ORIGINS = [
-        "https://urbanaafrica.com",
-        "https://www.urbanaafrica.com",
-        "https://api.urbanaafrica.com",          # if API calls itself
-        "https://admin.urbanaafrica.com",
-        "https://auth.urbanaafrica.com",
-        "https://customer.urbanaafrica.com",
-        "https://designer.urbanaafrica.com",
-        # add any others: blog., shop., etc.
-    ]
-
-    # 2. Fallback regex for any missed subdomains (e.g. future ones like preview.)
-    CORS_ALLOWED_ORIGIN_REGEXES = [
-        r"^https://([a-z0-9-]+\.)*urbanaafrica\.com$",
-    ]
-
-    # 3. CSRF must include all frontend origins that send forms/POSTs
-    CSRF_TRUSTED_ORIGINS = [
         "https://urbanaafrica.com",
         "https://www.urbanaafrica.com",
         "https://api.urbanaafrica.com",
@@ -256,7 +272,12 @@ if IS_PRODUCTION:
         "https://designer.urbanaafrica.com",
     ]
 
-    CORS_ALLOW_CREDENTIALS = True
+    # Regex to allow any subdomain dynamically
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^https://([a-z0-9-]+\.)*urbanaafrica\.com$",
+    ]
+
+    # Allowed request headers
     CORS_ALLOW_HEADERS = [
         "accept",
         "authorization",
@@ -265,8 +286,22 @@ if IS_PRODUCTION:
         "x-requested-with",
     ]
 
-    # Optional: expose headers if frontend needs them
+    # Headers frontend can read
     CORS_EXPOSE_HEADERS = ["Set-Cookie", "Authorization"]
+
+    # CSRF trusted origins
+    CSRF_TRUSTED_ORIGINS = [
+        "https://urbanaafrica.com",
+        "https://www.urbanaafrica.com",
+        "https://api.urbanaafrica.com",
+        "https://admin.urbanaafrica.com",
+        "https://auth.urbanaafrica.com",
+        "https://customer.urbanaafrica.com",
+        "https://designer.urbanaafrica.com",
+        # Optional regex to cover future subdomains
+        r"https://([a-z0-9-]+\.)*urbanaafrica\.com"
+    ]
+
 else:
     CORS_ALLOWED_ORIGINS = [
         "http://localhost:5173",
@@ -286,15 +321,19 @@ else:
     CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS.copy()
 
 # =====================================================
-# Production Security
+# Security Headers
 # =====================================================
-
 if IS_PRODUCTION:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     SECURE_SSL_REDIRECT = True
     SECURE_HSTS_SECONDS = 31536000  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+
+# =====================================================
+# Production Security
+# =====================================================
+
 
 # =====================================================
 # Static / Media

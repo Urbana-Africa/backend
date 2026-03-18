@@ -25,7 +25,7 @@ IS_DEVELOPMENT = ENV == "dev"
 ALLOWED_HOSTS = ["api.urbanaafrica.com"]
 
 if not IS_PRODUCTION:
-    ALLOWED_HOSTS += ["127.0.0.1", "localhost", "api.urbana.local"]
+    ALLOWED_HOSTS += ["127.0.0.1", "localhost", "api.urbana.local", "*.urbana.local"]
 
 # =====================================================
 # Installed Apps
@@ -55,7 +55,8 @@ INSTALLED_APPS = [
     "social_django",
     "drf_social_oauth2",
     "django_apscheduler",
-    'django_filters',
+    "django_filters",
+
     # Project apps
     "apps.administrator",
     "apps.authentication",
@@ -67,11 +68,11 @@ INSTALLED_APPS = [
 ]
 
 # =====================================================
-# Middleware
+# Middleware (CORS must be first!)
 # =====================================================
 
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",
+    "corsheaders.middleware.CorsMiddleware",           # Must be near the top
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -154,44 +155,33 @@ CHANNEL_LAYERS = {
 }
 
 # =====================================================
-# Cookie Domain & Security Flags
+# Cookie & Security Settings
 # =====================================================
 
 if IS_PRODUCTION:
-    COOKIE_DOMAIN = ".urbanaafrica.com"
-    COOKIE_SECURE = True
-    SESSION_COOKIE_SAMESITE = "Lax"          # Change to "None" only if cross-subdomain POST is truly required
-    CSRF_COOKIE_SAMESITE = "Lax"
-    JWT_COOKIE_SAMESITE = "Lax"
+    COOKIE_DOMAIN = ".urbanaafrica.com"          # shared across all subdomains
+    COOKIE_SECURE = True                          # required for SameSite=None
+    SESSION_COOKIE_SAMESITE = "None"              # required for cross-subdomain auth
+    CSRF_COOKIE_SAMESITE = "None"
+    JWT_COOKIE_SAMESITE = "None"
 else:
-    COOKIE_DOMAIN = ".urbana.local"
-    COOKIE_SECURE = False                    # Set True if using HTTPS in dev (recommended with mkcert)
+    COOKIE_DOMAIN = None                          # or ".urbana.local" if testing subdomains locally
+    COOKIE_SECURE = False
     SESSION_COOKIE_SAMESITE = "Lax"
     CSRF_COOKIE_SAMESITE = "Lax"
     JWT_COOKIE_SAMESITE = "Lax"
 
-# If you MUST support credentialed cross-origin POST from different subdomains:
-# SESSION_COOKIE_SAMESITE = "None"
-# CSRF_COOKIE_SAMESITE    = "None"
-# JWT_COOKIE_SAMESITE     = "None"
-# COOKIE_SECURE           = True   # ← browsers reject SameSite=None without Secure
-
-# =====================================================
-# Session & CSRF
-# =====================================================
-
+# Apply domain & secure flags
 SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
 SESSION_COOKIE_SECURE = COOKIE_SECURE
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = SESSION_COOKIE_SAMESITE
 
 CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN
 CSRF_COOKIE_SECURE = COOKIE_SECURE
-CSRF_COOKIE_HTTPONLY = False               # Frontend usually needs to read it
-CSRF_COOKIE_SAMESITE = CSRF_COOKIE_SAMESITE
+CSRF_COOKIE_HTTPONLY = False  # frontend needs to read it for AJAX
 
 # =====================================================
-# REST Framework & JWT
+# REST Framework & JWT (cookie-based for cross-subdomain)
 # =====================================================
 
 REST_FRAMEWORK = {
@@ -206,12 +196,11 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 10,
 }
 
-
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=config("JWT_ACCESS_MINUTES", default=60, cast=int)),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=config("JWT_REFRESH_DAYS", default=1, cast=int)),
 
-    # Cookie-based JWT (cross-subdomain)
+    # Cookie-based JWT (cross-subdomain support)
     "AUTH_COOKIE": "access_token",
     "AUTH_COOKIE_REFRESH": "refresh_token",
     "AUTH_COOKIE_DOMAIN": COOKIE_DOMAIN,
@@ -222,46 +211,13 @@ SIMPLE_JWT = {
 }
 
 # =====================================================
-# CORS
+# CORS Configuration
 # =====================================================
 
 CORS_ALLOW_CREDENTIALS = True
 
-# =====================================================
-# Production Security & Cookie Settings
-# =====================================================
 if IS_PRODUCTION:
-    # Domain
-    COOKIE_DOMAIN = ".urbanaafrica.com"
-
-    # HTTPS required for secure cookies
-    COOKIE_SECURE = True
-    SESSION_COOKIE_SECURE = COOKIE_SECURE
-    CSRF_COOKIE_SECURE = COOKIE_SECURE
-    JWT_COOKIE_SECURE = COOKIE_SECURE
-
-    # Allow cross-subdomain cookies
-    SESSION_COOKIE_SAMESITE = "None"
-    CSRF_COOKIE_SAMESITE = "None"
-    JWT_COOKIE_SAMESITE = "None"
-
-    # Cookie flags
-    SESSION_COOKIE_HTTPONLY = True
-    CSRF_COOKIE_HTTPONLY = False  # frontend needs for AJAX POSTs
-    JWT_COOKIE_HTTPONLY = True
-
-    # Apply domain to all cookies
-    SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
-    CSRF_COOKIE_DOMAIN = COOKIE_DOMAIN
-    JWT_COOKIE_DOMAIN = COOKIE_DOMAIN
-
-# =====================================================
-# CORS (Production)
-# =====================================================
-CORS_ALLOW_CREDENTIALS = True
-
-if IS_PRODUCTION:
-    # Explicitly known subdomains (optional, for extra safety)
+    # Explicit list — fastest & most reliable
     CORS_ALLOWED_ORIGINS = [
         "https://urbanaafrica.com",
         "https://www.urbanaafrica.com",
@@ -270,26 +226,15 @@ if IS_PRODUCTION:
         "https://auth.urbanaafrica.com",
         "https://customer.urbanaafrica.com",
         "https://designer.urbanaafrica.com",
+        # Add more subdomains here as they are launched
     ]
 
-    # Regex to allow any subdomain dynamically
+    # Fallback regex for future/unknown subdomains
     CORS_ALLOWED_ORIGIN_REGEXES = [
         r"^https://([a-z0-9-]+\.)*urbanaafrica\.com$",
     ]
 
-    # Allowed request headers
-    CORS_ALLOW_HEADERS = [
-        "accept",
-        "authorization",
-        "content-type",
-        "x-csrftoken",
-        "x-requested-with",
-    ]
-
-    # Headers frontend can read
-    CORS_EXPOSE_HEADERS = ["Set-Cookie", "Authorization"]
-
-    # CSRF trusted origins
+    # CSRF must match exact origins (no regex support)
     CSRF_TRUSTED_ORIGINS = [
         "https://urbanaafrica.com",
         "https://www.urbanaafrica.com",
@@ -298,11 +243,23 @@ if IS_PRODUCTION:
         "https://auth.urbanaafrica.com",
         "https://customer.urbanaafrica.com",
         "https://designer.urbanaafrica.com",
-        # Optional regex to cover future subdomains
-        r"https://([a-z0-9-]+\.)*urbanaafrica\.com"
     ]
 
+    # Allow common headers
+    CORS_ALLOW_HEADERS = [
+        "accept",
+        "authorization",
+        "content-type",
+        "x-csrftoken",
+        "x-requested-with",
+        "origin",
+    ]
+
+    # Headers frontend can access
+    CORS_EXPOSE_HEADERS = ["Set-Cookie", "Authorization"]
+
 else:
+    # Development: more permissive
     CORS_ALLOWED_ORIGINS = [
         "http://localhost:5173",
         "http://localhost:5174",
@@ -321,19 +278,16 @@ else:
     CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS.copy()
 
 # =====================================================
-# Security Headers
+# Production Security Headers
 # =====================================================
+
 if IS_PRODUCTION:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     SECURE_SSL_REDIRECT = True
-    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_SECONDS = 31536000          # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-
-# =====================================================
-# Production Security
-# =====================================================
-
+    X_FRAME_OPTIONS = "DENY"
 
 # =====================================================
 # Static / Media
@@ -346,26 +300,25 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 # =====================================================
-# Email (cleaned up duplicates)
+# Email Configuration (cleaned — pick one backend)
 # =====================================================
 
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = config("SMTP_HOST")
-EMAIL_PORT = config("SMTP_PORT", cast=int, default=587)
-EMAIL_HOST_USER = config("SMTP_USER")
-EMAIL_HOST_PASSWORD = config("SMTP_PASSWORD")
-EMAIL_USE_TLS = True
+# Option 1: Standard SMTP (your original)
+# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+# EMAIL_HOST = config("SMTP_HOST")
+# EMAIL_PORT = config("SMTP_PORT", cast=int, default=587)
+# EMAIL_HOST_USER = config("SMTP_USER")
+# EMAIL_HOST_PASSWORD = config("SMTP_PASSWORD")
+# EMAIL_USE_TLS = True
 
-# Resend (if you're using it instead)
+# Option 2: Resend (recommended for reliability — uncomment if using)
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "smtp.resend.com"
 EMAIL_PORT = 587
 EMAIL_HOST_USER = "resend"
 EMAIL_HOST_PASSWORD = config("RESEND_API_KEY")
 EMAIL_USE_TLS = True
-RESEND_SMTP_PORT=587
-RESEND_SMTP_HOST="smtp.resend.com"
-RESEND_SMTP_USERNAME="resend"
-RESEND_API_KEY= config("RESEND_API_KEY")
+
 # =====================================================
 # Misc / Third-party
 # =====================================================

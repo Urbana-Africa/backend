@@ -228,18 +228,45 @@ SIMPLE_JWT = {
 CORS_ALLOW_CREDENTIALS = True
 
 if IS_PRODUCTION:
+    # 1. Explicit list — most secure & reliable (preferred for known subdomains)
+    CORS_ALLOWED_ORIGINS = [
+        "https://urbanaafrica.com",
+        "https://www.urbanaafrica.com",
+        "https://api.urbanaafrica.com",          # if API calls itself
+        "https://admin.urbanaafrica.com",
+        "https://auth.urbanaafrica.com",
+        "https://customer.urbanaafrica.com",
+        "https://designer.urbanaafrica.com",
+        # add any others: blog., shop., etc.
+    ]
+
+    # 2. Fallback regex for any missed subdomains (e.g. future ones like preview.)
     CORS_ALLOWED_ORIGIN_REGEXES = [
         r"^https://([a-z0-9-]+\.)*urbanaafrica\.com$",
     ]
+
+    # 3. CSRF must include all frontend origins that send forms/POSTs
     CSRF_TRUSTED_ORIGINS = [
         "https://urbanaafrica.com",
+        "https://www.urbanaafrica.com",
         "https://api.urbanaafrica.com",
         "https://admin.urbanaafrica.com",
         "https://auth.urbanaafrica.com",
         "https://customer.urbanaafrica.com",
         "https://designer.urbanaafrica.com",
-        # add others as needed
     ]
+
+    CORS_ALLOW_CREDENTIALS = True
+    CORS_ALLOW_HEADERS = [
+        "accept",
+        "authorization",
+        "content-type",
+        "x-csrftoken",
+        "x-requested-with",
+    ]
+
+    # Optional: expose headers if frontend needs them
+    CORS_EXPOSE_HEADERS = ["Set-Cookie", "Authorization"]
 else:
     CORS_ALLOWED_ORIGINS = [
         "http://localhost:5173",

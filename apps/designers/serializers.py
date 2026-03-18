@@ -1,15 +1,24 @@
 from rest_framework import serializers
 
 from apps.authentication.serializers import UserSerializer
-from apps.core.models import Sizes
-from apps.customers.models import Order, OrderItem
+from apps.core.models import MediaAsset, Sizes
+from apps.customers.models import Order, OrderItem, ReturnRequest
 from apps.customers.serializers import AddressSerializer, CustomerSerializer
 from .models import (
     Designer, Collection, DesignerProduct, DesignerStory, ProductImage, Shipment,
     ShippingOption, DesignerOrder, DesignerAnalytics, StoryView
 )
 from apps.core.serializers import MediaAssetSerializer, ProductSerializer
+from django.utils import timezone
 
+
+# =====================================================
+# GENERIC BASE SERIALIZER
+# =====================================================
+
+class BaseSerializer(serializers.ModelSerializer):
+    class Meta:
+        fields = "__all__"
 
 class DesignerStorySerializer(serializers.ModelSerializer):
     views_count = serializers.IntegerField(source='views.count', read_only=True)
@@ -167,4 +176,111 @@ class DesignerDashboardSerializer(serializers.Serializer):
 
     sales_over_time = serializers.ListField()
     top_products = serializers.ListField()
+
+
+class MediaAssetSerializer(serializers.ModelSerializer):
+    file = serializers.SerializerMethodField()
+    file_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MediaAsset
+        fields = [
+            'id',
+            'file',
+            'file_name',
+            'media_type',
+            'alt_text',
+            'caption',
+            'created_at',  # optional
+        ]
+        read_only_fields = fields  # all read-only from designer perspective
+
+    def get_file(self, obj):
+        if obj.file:
+            return obj.file.url
+        return None
+
+    def get_file_name(self, obj):
+        if obj.file:
+            return obj.file.name.split('/')[-1]
+        return None
+
+
+class DesignerSerializer(serializers.ModelSerializer):
+    lookbook_files = MediaAssetSerializer(many=True, read_only=True)
+    # Optional: return absolute URLs for profile/banner if needed
+    profile_picture = serializers.ImageField(read_only=True)
+    banner_image = serializers.ImageField(read_only=True)
+    full_name = serializers.SerializerMethodField()
+    email = serializers.CharField(source="user.email")
+    class Meta:
+        model = Designer
+        fields = [
+            'id',
+            'user',               # optional — usually just ID or username
+            'brand_name',
+            'story',
+            'bio',
+            'specialty',
+            'country',
+            'years_of_experience',
+            'website',
+            'instagram',
+            'full_name',
+            'email',
+            'profile_picture',
+            'banner_image',
+            'lookbook_files',     # ← now included!
+            'status',
+            'is_verified',
+            'slug',
+            'created_at',
+            'status_updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'user',
+            'status',
+            'is_verified',
+            'slug',
+            'created_at',
+            'status_updated_at',
+            'lookbook_files',     # prevent accidental write via this field
+        ]
+
+    def get_full_name(self, obj):
+        return f"{obj.user.first_name} {obj.user.last_name}"
+
+
+
+class ReturnRequestSerializer(BaseSerializer):
+    product_photos = MediaAssetSerializer(many=True, read_only=True)
+    packaging_photo = MediaAssetSerializer(read_only=True)
+    unboxing_video = MediaAssetSerializer(read_only=True)
+
+    class Meta(BaseSerializer.Meta):
+        model = ReturnRequest
+        read_only_fields = ["return_id", "created_at", "resolved_at"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['customer'] = UserSerializer(instance.order_item.order.customer.user).data
+        data['designer'] = DesignerSerializer(instance.order_item.designer.designer_profile).data
+        data['order_item'] = OrderItemSerializer(instance.order_item).data
+
+        return data
+    
+    def update(self, instance, validated_data):
+        designer_status = validated_data.get("designer_status")
+
+        if designer_status in ["approved", "rejected"]:
+            instance.resolved_at = timezone.now()
+
+        instance = super().update(instance, validated_data)
+
+        
+        instance.order_item.designer_status = designer_status
+        instance.order_item.save()
+
+        return instance
 

@@ -13,7 +13,7 @@ def resend_sendmail(subject,recipient_list,message):
 
     subject = subject
     recipient_list = recipient_list
-    from_email = "team@schoolmummy.com"
+    from_email = "support@accounts.urbanaafrica.com"
     message = message
 
 

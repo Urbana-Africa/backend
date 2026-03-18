@@ -44,7 +44,7 @@ class MediaAssetSerializer(serializers.ModelSerializer):
     class Meta:
         model = MediaAsset
         fields = ["id", "file", "media_type", "alt_text", "caption"]
-
+        read_only_fields = ["id", "user", "created_at"]
 
 class DesignerSerializer(serializers.ModelSerializer):
     user = UserSerializer()

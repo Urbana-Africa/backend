@@ -1,4 +1,5 @@
 from decouple import config
+import requests
 
 ENV = config("ENV", default="dev")
 
@@ -43,3 +44,44 @@ def get_stripe_keys():
         "base": "https://api.stripe.com/v3",
     }
 
+
+def get_flutterwave_token():
+    
+    url = f"https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token"
+    headers = {
+    "Content-Type": "application/x-www-form-urlencoded"
+    }
+    fw_keys = get_flutterwave_keys()  
+
+    payload = {
+        "client_id":fw_keys['client_id'],
+        "client_secret": fw_keys['client_secret'],
+        "grant_type": "client_credentials"
+    }
+
+    response = requests.post(url, data=payload,headers=headers)
+    data = response.json()
+    print(data)
+
+    return data
+
+
+def get_flutterwave_token():
+    
+    url = f"https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token"
+    headers = {
+    "Content-Type": "application/x-www-form-urlencoded"
+    }
+    fw_keys = get_flutterwave_keys()  
+
+    payload = {
+        "client_id":fw_keys['client_id'],
+        "client_secret": fw_keys['client_secret'],
+        "grant_type": "client_credentials"
+    }
+
+    response = requests.post(url, data=payload,headers=headers)
+    data = response.json()
+    print(data)
+
+    return data

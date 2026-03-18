@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils.text import slugify
-from apps.core.models import BaseModel, Product
+from apps.core.models import BaseModel, MediaAsset, Product
 from django.utils import timezone
 
 from apps.customers.models import OrderItem
@@ -36,7 +36,7 @@ class Designer(BaseModel):
 
     website = models.URLField(blank=True)
     instagram = models.URLField(blank=True)
-
+    lookbook_files = models.ManyToManyField(MediaAsset)
     is_verified = models.BooleanField(default=False)
 
     # ✅ Single lifecycle field

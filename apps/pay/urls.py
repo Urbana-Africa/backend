@@ -4,12 +4,17 @@ from apps.pay.confirm import FlutterwaveConfirmView, PaystackConfirmView
 from apps.pay.initialize import InitializeFlutterwavePayment, InitializePaystackPayment, InitializeStripePayment
 from apps.pay.webhooks import FlutterwaveWebhookView, PaystackWebhookView, StripeWebhookView
 from . import views as payviews
+from rest_framework.routers import DefaultRouter
+from .views import AccountDetailView, FlutterWaveVerifyAccountNumber, FlutterwaveBanksView, InitiatePayoutView
+
+
+router = DefaultRouter(trailing_slash=False)
+
 
 urlpatterns = [
     # path('make-payment', payviews.MakePayment.as_view(),name='pay'),
       path("wallet/summary", payviews.WalletSummaryView.as_view()),
     path("wallet/withdraw", payviews.CreateWithdrawalView.as_view()),
-    path('withdraw', payviews.Withdraw.as_view(), name='withdraw'),
     path('', payviews.Dashboard.as_view(), name='pay_dashboard'),
     path('my-transactions', payviews.MyTransactions.as_view(),
          name='my_transactions'),
@@ -30,5 +35,11 @@ path("webhooks/stripe/", StripeWebhookView.as_view(), name="stripe-webhook"),
     path("init/flutterwave", InitializeFlutterwavePayment.as_view()),
     path("init/paystack", InitializePaystackPayment.as_view()),
     path("init/stripe", InitializeStripePayment.as_view()),
+      path("account", AccountDetailView.as_view(), name="account-detail"),
+          path("banks", FlutterwaveBanksView.as_view()),
+    path('fw/verify-account', FlutterWaveVerifyAccountNumber.as_view(),
+         ),
+              path('fw/initiate-payout', InitiatePayoutView.as_view(),
+         ),
     # path("capture-paypal-order/", payviews.CapturePayPalOrder.as_view(), name="paypal-capture"),
 ]

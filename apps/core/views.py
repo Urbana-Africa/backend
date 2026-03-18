@@ -10,7 +10,7 @@ from apps.designers.models import DesignerStory
 from apps.designers.serializers import StorySerializer
 from apps.utils.email_sender import resend_sendmail
 from django.db.models.functions import Lower
-from .models import Country, Currency, Category, Product, Review, Sizes, UserSettings
+from .models import Country, Currency, Category, MediaAsset, Product, Review, Sizes, UserSettings
 from .serializers import (
     ContactMessageSerializer, CountrySerializer, CurrencySerializer, MediaAssetSerializer,
     CategorySerializer, ProductSerializer, ReviewSerializer, SizesSerializer, UserSettingsSerializer
@@ -21,7 +21,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
-
+from rest_framework.viewsets import ModelViewSet
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied, NotFound
 from .models import Country, Currency
 from .serializers import (
     CountrySerializer,
@@ -360,15 +362,58 @@ class SizesListView(APIView):
 # ---------------------------
 # Media
 # ---------------------------
-class MediaAssetUploadView(APIView):
+
+
+class MediaAssetViewSet(ModelViewSet):
+    queryset = MediaAsset.objects.all()
+    serializer_class = MediaAssetSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = "id"  # matches your custom string ID
+
+    def get_queryset(self):
+        # Only return files uploaded by the current user
+        return MediaAsset.objects.filter(user=self.request.user)
+    
+    def perform_create(self, serializer):
+        # Automatically attach the logged-in user
+        serializer.save(user=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()  # looks up by custom id
+        print(request.data)
+        if instance.user != request.user:
+            print("Permission error")
+            raise PermissionDenied("You cannot delete this file.")
+        self.perform_destroy(instance)
+        return Response(
+            {"status": "success", "message": "File deleted successfully."},
+            status=status.HTTP_200_OK
+        )
+
+
+class MediaAssetDeleteView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        serializer = MediaAssetSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response({"status": "success", "media": serializer.data}, status=status.HTTP_201_CREATED)
-        return Response({"status": "error", "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+    def delete(self, request, id, *args, **kwargs):
+        """
+        Delete a media asset by its custom ID.
+        Only the user who uploaded it can delete it.
+        """
+        try:
+            asset = MediaAsset.objects.get(id=id)
+        except MediaAsset.DoesNotExist:
+            raise NotFound("Media asset not found.")
+
+        # if asset.user != request.user:
+        #     return Response(
+        #         {"status": "success", "message": "Permission denied"},
+        #         status=status.HTTP_400_BAD_REQUEST
+        #     )
+        asset.delete()
+        return Response(
+            {"status": "success", "message": "File deleted successfully."},
+            status=status.HTTP_200_OK
+        )
 
 
 # ---------------------------

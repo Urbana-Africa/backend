@@ -61,3 +61,12 @@ class InvoiceSerializer(serializers.ModelSerializer):
         if instance.payment:
             representation['payment'] = PaymentSerializer(instance.payment,many=False).data
         return representation
+
+class AccountDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccountDetail
+        fields = [
+            "id", "account_name", "account_number", "bank_code",
+            "bank_name", "recipient_code", "created_at", "updated_at"
+        ]
+        read_only_fields = ["recipient_code", "created_at", "updated_at"]

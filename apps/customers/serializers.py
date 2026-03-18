@@ -1,9 +1,10 @@
 from rest_framework import serializers
 
+from apps.authentication.serializers import UserSerializer
 from apps.pay.models import Invoice
 from apps.pay.serializers import PaymentSerializer
 from .models import Customer, Address, OrderTracking, Wishlist, CartItem, Order, OrderItem, ReturnRequest
-from apps.core.serializers import ColorSerializer, ProductSerializer, SizesSerializer
+from apps.core.serializers import ColorSerializer, DesignerSerializer, ProductSerializer, SizesSerializer
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -125,4 +126,6 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data =  super().to_representation(instance)
         data['order_item'] = OrderItemSerializer(instance.order_item).data
+        data['customer'] = UserSerializer(instance.order_item.order.customer.user).data
+        data['designer'] = DesignerSerializer(instance.order_item.designer.designer_profile).data
         return data

@@ -3,29 +3,49 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
-from django.core.exceptions import ObjectDoesNotExist
-from apps.core.models import Color, MediaAsset, Product
-from apps.core.serializers import ColorSerializer, ProductSerializer
+from apps.core.models import MediaAsset, Product
+from apps.core.serializers import ProductSerializer
 from apps.customers.models import OrderItem, ReturnRequest
-from apps.customers.serializers import ReturnRequestSerializer
+from apps.designers.serializers import ReturnRequestSerializer
 from django.db.models import Sum
-from django.db import transaction
-from apps.designers.shippo_service import create_or_fetch_tracking
-from .models import Designer, DesignerProduct, DesignerOrder, DesignerAnalytics, DesignerStory, Shipment, StoryView
+from apps.utils.pagination import StandardPagination
+from .models import Designer, DesignerProduct, DesignerStory, StoryView
 from .serializers import (
-    DesignerSerializer, CollectionSerializer, DesignerProductSerializer, DesignerStorySerializer, MediaAssetSerializer, OrderItemSerializer, ProductSizeUpdateSerializer,
-    ShippingOptionSerializer, DesignerOrderSerializer, DesignerAnalyticsSerializer, StoryViewSerializer
+    DesignerSerializer, DesignerProductSerializer, DesignerStorySerializer, OrderItemSerializer, StoryViewSerializer
 )
-from .models import InventoryAlert, ShipmentTracking, DesignerProduct, DesignerOrder
-from .serializers import InventoryAlertSerializer, PromotionSerializer, ShipmentTrackingSerializer
-from django.utils import timezone
+from rest_framework import status
+from django.utils.text import slugify
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
 import csv
 from io import StringIO
-from django.core.paginator import Paginator
-from django.shortcuts import get_object_or_404
+from .models import InventoryAlert
+from .serializers import InventoryAlertSerializer
+from django.utils import timezone
+from django.template.loader import render_to_string
+import threading
+from apps.utils.email_sender import resend_sendmail
+import csv
+from io import StringIO
 from django.db.models.functions import TruncWeek
+from rest_framework.decorators import action
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
+from rest_framework import viewsets
 
 
+class DesignerBaseViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
+
+    filter_backends = [
+        DjangoFilterBackend,
+        SearchFilter,
+        OrderingFilter,
+    ]
+    
 class DesignerStoryListView(APIView):
     """List all stories for the authenticated designer or create new story."""
     permission_classes = [IsAuthenticated]
@@ -118,657 +138,294 @@ class InventoryAlertListView(APIView):
         serializer = InventoryAlertSerializer(alerts, many=True)
         return Response({"status":"success", "message": "Inventory alerts retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
 
-# -------------------------------
-# Bulk Product Upload
-# -------------------------------
-class ProductUploadView(APIView):
-    """Upload multiple products via CSV."""
-    permission_classes = [IsAuthenticated]
+class DesignerStoryViewSet(DesignerBaseViewSet):
+    serializer_class = DesignerStorySerializer
+    lookup_field = "id"
 
-    def post(self, request):
-        product_serializer = ProductSerializer(data = request.data,partial = True)
+    def get_queryset(self):
+        return DesignerStory.objects.filter(
+            designer=self.request.user
+        ).order_by("-created_at")
 
-        if product_serializer.is_valid:
-            product_serializer.save(designer = request.user)
-            return Response({"status":"success", "message": "product uploaded.", "data": product_serializer.data}, status=status.HTTP_201_CREATED)
-        else:
-            return Response({"status":"error", "message": "Invalid data.", "data": product_serializer.data}, status=status.HTTP_400_BAD_REQUEST)
+    def perform_create(self, serializer):
+        serializer.save(designer=self.request.user)
+
+    @action(detail=False, permission_classes=[AllowAny])
+    def active(self, request):
+        """Public active stories"""
+        now = timezone.now()
+
+        stories = DesignerStory.objects.filter(
+            is_active=True,
+            start_time__lte=now,
+            end_time__gte=now
+        ).order_by("-created_at")
+
+        serializer = self.get_serializer(stories, many=True)
+
+        return Response({
+            "status": "success",
+            "message": "Active stories retrieved.",
+            "data": serializer.data
+        })
+
+    @action(detail=True, methods=["post"])
+    def view_story(self, request, pk=None):
+        """Customer views a story"""
+
+        story = self.get_object()
+        customer = request.user.customer_profile
+
+        view, _ = StoryView.objects.get_or_create(
+            story=story,
+            viewer=customer
+        )
+
+        serializer = StoryViewSerializer(view)
+
+        return Response({
+            "status": "success",
+            "message": "Story viewed.",
+            "data": serializer.data
+        })
 
 
-class BulkProductUploadView(APIView):
-    """Upload multiple products via CSV."""
-    permission_classes = [IsAuthenticated]
+class DesignerProductUploadViewSet(DesignerBaseViewSet):
 
-    def post(self, request):
-        file = request.FILES.get('file')
+    serializer_class = ProductSerializer
+    # parser_classes = (MultiPartParser, FormParser)  # needed for file uploads
+
+    def get_queryset(self):
+        # Only products belonging to the authenticated designer
+        return Product.objects.filter(user=self.request.user)
+
+    def create(self, request):
+        """
+        POST /designer-products/ → Create new product
+        """
+        serializer = self.get_serializer(data=request.data)
+
+        if serializer.is_valid():
+            product = serializer.save(user=request.user)
+
+            return Response({
+                "status": "success",
+                "message": "Product uploaded successfully",
+                "data": ProductSerializer(product).data
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def update(self, request, pk=None):
+        """
+        PUT /designer-products/<pk>/ → Update existing product
+        """
+        product = get_object_or_404(self.get_queryset(), pk=pk)
+
+        serializer = self.get_serializer(product, data=request.data, partial=False)
+
+        if serializer.is_valid():
+            serializer.save()  # user is already set, no need to touch it
+
+            return Response({
+                "status": "success",
+                "message": "Product updated successfully",
+                "data": serializer.data
+            })
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def partial_update(self, request, pk=None):
+        """
+        PATCH /designer-products/<pk>/ → Partial update
+        """
+        product = get_object_or_404(self.get_queryset(), pk=pk)
+
+        serializer = self.get_serializer(product, data=request.data, partial=True)
+
+        if serializer.is_valid():
+            serializer.save()
+
+            return Response({
+                "status": "success",
+                "message": "Product partially updated",
+                "data": serializer.data
+            })
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=["post"], url_path="bulk-upload")
+    def bulk_upload(self, request):
+        """
+        POST /designer-products/bulk-upload/ → Upload multiple products via CSV
+        """
+        file = request.FILES.get("file")
+
         if not file:
-            return Response({"status":"error", "message": "CSV file required.", "data": None}, status=status.HTTP_400_BAD_REQUEST)
-
-        csv_file = StringIO(file.read().decode())
-        reader = csv.DictReader(csv_file)
-        created_products = []
-
-        for row in reader:
-            # Expecting CSV columns: title, description, price, stock
-            product = Product.objects.create(
-                title=row.get('title'),
-                description=row.get('description'),
-                price=row.get('price')
-            )
-            designer_product = DesignerProduct.objects.create(
-                user=request.user,
-                product=product,
-                stock=int(row.get('stock', 0))
-            )
-            created_products.append(designer_product)
-
-        serializer = DesignerProductSerializer(created_products, many=True)
-        return Response({"status":"success", "message": "Bulk products uploaded.", "data": serializer.data}, status=status.HTTP_201_CREATED)
-
-# -------------------------------
-# Order Status Update
-# -------------------------------
-
-
-class UpdateOrderStatusView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    @transaction.atomic
-    def post(self, request):
-        status_update = request.data.get("status")
-        item_id = request.data.get("item_id")
-        tracking_number = request.data.get("tracking_number")
-        carrier = request.data.get("carrier")
-        print(request.data)
-
-        allowed_statuses = [
-            "pending",
-            "processing",
-            "shipped",
-            "delivered",
-            "cancelled",
-            "returned",
-        ]
-
-        # Validate status
-        if status_update not in allowed_statuses:
-            return Response(
-                {
-                    "status": "error",
-                    "message": "Invalid status.",
-                    "data": None,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"error": "CSV file is required"}, status=400)
 
         try:
-            order_item = OrderItem.objects.get(item_id=item_id, designer=request.user)
+            csv_file = StringIO(file.read().decode("utf-8"))
+            reader = csv.DictReader(csv_file)
 
-        except DesignerOrder.DoesNotExist:
-            return Response(
-                {
-                    "status": "error",
-                    "error": "Order not found.",
-                    "data": None,
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            created_products = []
 
-        # ------------------------------
-        # If status is shipped → require tracking
-        # ------------------------------
-        if status_update == "shipped":
-            if not tracking_number or not carrier:
-                return Response(
-                    {
-                        "status": "error",
-                        "message": "Carrier and tracking number are required when marking as shipped.",
-                        "data": None,
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
+            for row in reader:
+                product = Product.objects.create(
+                    user=request.user,
+                    title=row.get("title", "").strip(),
+                    description=row.get("description", "").strip(),
+                    price=float(row.get("price", 0)),
+                    # add other Product fields you want from CSV
                 )
 
-            # ------------------------------
-            # If carrier is "other" → DO NOT call Shippo
-            # ------------------------------
-            if carrier == "other":
-                Shipment.objects.update_or_create(
-                    order_item=order_item,
-                    defaults={
-                        "carrier": carrier,
-                        "tracking_number": tracking_number,
-                        "tracking_status": "UNKNOWN",
-                        "tracking_data": {},
-                    },
+                designer_product = DesignerProduct.objects.create(
+                    user=request.user,
+                    product=product,
+                    stock=int(row.get("stock", 0)),
+                    # add other DesignerProduct fields if needed
                 )
 
-            else:
-                # ------------------------------
-                # Shippo-supported carrier
-                # ------------------------------
-                try:
-                    tracking_data = create_or_fetch_tracking(
-                        carrier=carrier,
-                        tracking_number=tracking_number,
-                    )
+                created_products.append(designer_product)
 
-                    Shipment.objects.update_or_create(
-                        order_item=order_item,
-                        defaults={
-                            "carrier": carrier,
-                            "tracking_number": tracking_number,
-                            "tracking_status": tracking_data["status"],
-                            # "tracking_data": tracking_data["raw"],
-                        },
-                    )
+            serializer = DesignerProductSerializer(created_products, many=True)
 
-                    # Auto-sync delivered
-                    if tracking_data["status"] == "DELIVERED":
-                        status_update = "delivered"
+            return Response({
+                "status": "success",
+                "message": f"{len(created_products)} products uploaded successfully",
+                "data": serializer.data
+            }, status=status.HTTP_201_CREATED)
 
-                except Exception as e:
-                    print(f"Tracking validation failed: {str(e)}")
-                    return Response(
-                        {
-                            "status": "error",
-                            "error": f"Tracking validation failed: {str(e)}",
-                            "data": None,
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-        # ------------------------------
-        # Update Order Status
-        # ------------------------------
+        except Exception as e:
+            return Response({
+                "status": "error",
+                "message": f"Bulk upload failed: {str(e)}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    
+
+class DesignerOrderViewSet(DesignerBaseViewSet):
+
+    serializer_class = OrderItemSerializer
+    lookup_field = "item_id"
+
+    def get_queryset(self):
+
+        return OrderItem.objects.filter(
+            product__user=self.request.user
+        ).select_related(
+            "order",
+            "product"
+        ).order_by("-created_at")
+
+    @action(detail=True, methods=["post"])
+    def update_status(self, request, item_id=None):
+
+        order_item = self.get_object()
+
+        status_update = request.data.get("status")
+
         order_item.designer_status = status_update
         order_item.save()
 
-        serializer = OrderItemSerializer(order_item)
-
-        return Response(
-            {
-                "status": "success",
-                "message": "Order status updated successfully.",
-                "data": serializer.data,
-            },
-            status=status.HTTP_200_OK,
-        )
+        return Response({
+            "status": "success",
+            "data": OrderItemSerializer(order_item).data
+        })
 
 
-# -------------------------------
-# Shipment Tracking
-# -------------------------------
-class ShipmentTrackingView(APIView):
-    permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        designer = request.user
-        shipments = ShipmentTracking.objects.filter(order__user=designer)
-        serializer = ShipmentTrackingSerializer(shipments, many=True)
-        return Response({"status":"success", "message": "Shipments retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
 
-    def post(self, request, order_id):
+
+class DesignerProfileViewSet(DesignerBaseViewSet):
+    serializer_class = DesignerSerializer
+    parser_classes = (JSONParser, FormParser, MultiPartParser)
+
+    def list(self, request):
+        profile, _ = Designer.objects.get_or_create(user=request.user)
+        serializer = self.get_serializer(profile)
+        return Response({
+            "status": "success",
+            "data": serializer.data
+        })
+
+    @action(detail=False, methods=["post", "put"], url_path="setup")
+    def setup_profile(self, request):
+        profile, created = Designer.objects.get_or_create(user=request.user)
+        # ================= FILE HANDLING =================
+        lookbook_files = request.FILES.getlist('lookbook_files[]')
+        profile_picture = request.FILES.get('profile_picture')
+        banner_image = request.FILES.get('banner_image')
+
+        new_assets = []
+
         try:
-            shipment, _ = ShipmentTracking.objects.get_or_create(order_id=order_id)
-            shipment.tracking_number = request.data.get('tracking_number')
-            shipment.carrier = request.data.get('carrier')
-            shipment.status = request.data.get('status', shipment.status)
-            shipment.last_updated = timezone.now()
-            shipment.save()
-            serializer = ShipmentTrackingSerializer(shipment)
-            return Response({"status":"success", "message": "Shipment updated.", "data": serializer.data}, status=status.HTTP_200_OK)
-        except DesignerOrder.DoesNotExist:
-            return Response({"status":"error", "message": "Order not found.", "data": None}, status=status.HTTP_404_NOT_FOUND)
+            if profile_picture:
+                profile.profile_picture = profile_picture
+                profile.save(update_fields=['profile_picture'])
 
-# -------------------------------
-# Promotions / Discounts
-# -------------------------------
-class PromotionListView(APIView):
-    permission_classes = [IsAuthenticated]
+            if banner_image:
+                profile.banner_image = banner_image
+                profile.save(update_fields=['banner_image'])
+            if lookbook_files:
+                for file in lookbook_files:
+                    if file.size > 20 * 1024 * 1024:
+                        return Response(
+                            {"error": f"{file.name} exceeds 20MB"},
+                            status=400
+                        )
 
-    def get(self, request):
-        designer = request.user
-        promotions = designer.promotions.filter(end_date__gte=timezone.now())
-        serializer = PromotionSerializer(promotions, many=True)
-        return Response({"status":"success", "message": "Promotions retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
+                    asset = MediaAsset.objects.create(
+                        file=file,
+                        media_type=(
+                            MediaAsset.MediaType.IMAGE
+                            if file.content_type.startswith('image/')
+                            else MediaAsset.MediaType.DOCUMENT
+                        ),
+                        alt_text=file.name,
+                    )
+                    new_assets.append(asset)
+                    profile.lookbook_files.add(asset)
 
-    def post(self, request):
-        serializer = PromotionSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(user=request.user)
-            return Response({"status":"success", "message": "Promotion created.", "data": serializer.data}, status=status.HTTP_201_CREATED)
-        return Response({"status":"error", "message": "Invalid data.", "data": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-# -------------------------------
-# Designer Profile
-# -------------------------------
-class DesignerProfileView(APIView):
-    """Retrieve or update designer profile."""
-    permission_classes =([IsAuthenticated])
-    def get(self, request):
-        try:
-            designer = Designer.objects.get(user = request.user)
-            serializer = DesignerSerializer(designer)
-            return Response({"status":"success", "message": "Designer profile retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
-        except ObjectDoesNotExist:
-            return Response({"status":"success", "message": "Designer profile not found.", "data": False}, status=status.HTTP_404_NOT_FOUND)
-
-
-    def put(self, request):
-        profile, _ = Designer.objects.get_or_create(
-            user=request.user
-        )
-        serializer = DesignerSerializer(
-            profile, data=request.data, partial=True
-        )
-        if serializer.is_valid():
-            serializer.save(user=request.user)
-            return Response(
-                {"status": "success", "data": serializer.data},
-                status=status.HTTP_200_OK
-            )
-        return Response(
-            {"status": "error", "errors": serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-
-# -------------------------------
-# Products Management
-# -------------------------------
-class DesignerProductView(APIView):
-    """List all designer products or add a new product."""
-    permission_classes = [IsAuthenticated]
-    # parser_classes = (MultiPartParser, FormParser)
-
-    def get(self, request):
-        try:
-            products = request.user.products.all()
-            serializer = ProductSerializer(products, many=True)
-            return Response({"status":"success", "message": "Products retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
-        except Exception as e:
-            print(e)
-            return Response({"status":"error", "message": "Could not fetch products"}, status=status.HTTP_400_BAD_REQUEST)
-
-
-    def post(self, request):
-        try:
-
-            serializer = ProductSerializer(
-                data=request.data,
-                partial=True,
-                context={"request": request}
-            )
-            if serializer.is_valid():
-                product = serializer.save(user=request.user)
-                return Response(
-                    {"status": "success", "message": "Product uploaded.", "data": ProductSerializer(product).data},
-                    status=status.HTTP_201_CREATED
-                )
-            else:
-                return Response(
-                    {"status": "error", "message": str(serializer.errors)},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
         except Exception as e:
             return Response(
-                {"status": "error", "message": "Invalid data."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": str(e)},
+                status=400
             )
 
-    def put(self,request):
-        try:
-            product = Product.objects.get(id=request.data['product_id'],user= request.user)
-            product_serializer = ProductSerializer(instance = product, data = request.data, partial = True)
-            if product_serializer.is_valid():
-                product_serializer.save()
-            return Response({"status":"success", "message": "Products retrieved.", "data": product_serializer.data}, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            print(e)
-            return Response(
-                {"status": "error", "message": "Invalid data."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-class UpdateProductStatusView(APIView):
-    permission_classes = [IsAuthenticated]
-    # parser_classes = (MultiPartParser, FormParser)
-    def put(self, request):
-        try:
-            product = Product.objects.get(id=request.data['product_id'],user= request.user)
-            product_status = request.data['status']
-            if product_status == 'publish':
-                product.is_published = True
-            elif product_status == 'unpublish':
-                product.is_published = False
-            product.save()
-            return Response(
-                {"status": "success", "message": "Product uploaded.", "data": ProductSerializer(product).data},
-                status=status.HTTP_201_CREATED
-            )
-           
-        except Exception as e:
-            print(e)
-            return Response(
-                {"status": "error", "message": "Invalid data."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-class DesignerUploadProductMediaView(APIView):
-    permission_classes = [IsAuthenticated]
-    # parser_classes = (MultiPartParser, FormParser)
-
-    def post(self, request):
-        try:
-            product = Product.objects.get(id=request.data['product_id'],user= request.user)
-            images = request.FILES.getlist("media[]")
-            new_assets = []
-            for img in images:
-                asset = MediaAsset.objects.create(
-                    file=img,
-                    media_type=MediaAsset.MediaType.IMAGE,
-                )
-                product.media.add(asset)
-                new_assets.append(asset)
-            return Response(
-                {"status": "success", "message": "Product uploaded.", "data": MediaAssetSerializer(new_assets, many=True).data},
-                status=status.HTTP_201_CREATED
-            )
-           
-        except Exception as e:
-            print(e)
-            return Response(
-                {"status": "error", "message": "Invalid data."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    def delete(self,request):
-        try:
-            product = Product.objects.get(id=request.data['product_id'],user= request.user)
-            media = MediaAsset.objects.get(id=request.data['media_id'], products = product)
-            media.delete()
-
-            return Response(
-                {"status": "success", "message": "Media deleted"},
-                status=status.HTTP_200_OK
-            )
-        except Exception as e:
-            print(e)
-            return Response(
-                {"status": "error", "message": "Invalid data."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-
-class DesignerProductDetailView(APIView):
-    """Retrieve, update, or delete a designer product."""
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, product_id):
-        try:
-            product = request.user.products.get(id=product_id)
-            serializer = DesignerProductSerializer(product)
-            return Response({"status":"success", "message": "Product retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
-        except DesignerProduct.DoesNotExist:
-            return Response({"status":"error", "message": "Product not found.", "data": None}, status=status.HTTP_404_NOT_FOUND)
-
-# -------------------------------
-# Collections Management
-# -------------------------------
-class DesignerCollectionListView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        designer = request.user
-        collections = designer.collections.all()
-        serializer = CollectionSerializer(collections, many=True)
-        return Response({"status":"success", "message": "Collections retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
-
-# -------------------------------
-# Shipping Options
-# -------------------------------
-class DesignerShippingListView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        designer = request.user
-        shipping_options = designer.shipping_options.all()
-        serializer = ShippingOptionSerializer(shipping_options, many=True)
-        return Response({"status":"success", "message": "Shipping options retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
-
-# -------------------------------
-# Orders Management
-# -------------------------------
-class DesignerOrderListView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        page = int(request.GET.get("page", 1))
-        limit = int(request.GET.get("limit", 10))
-
-        queryset = (
-            DesignerOrder.objects
-            .filter(user=request.user)
-            .order_by("-created_at")
-        )
-        for item in queryset.all():
-            item.order_item.save()
-        paginator = Paginator(queryset, limit)
-        page_obj = paginator.get_page(page)
-
-        serializer = DesignerOrderSerializer(page_obj, many=True)
-
-        return Response(
-            {
-                "status": "success",
-                "data": serializer.data,
-                "pagination": {
-                    "current_page": page_obj.number,
-                    "total_pages": paginator.num_pages,
-                    "total_items": paginator.count,
-                    "has_next": page_obj.has_next(),
-                    "has_previous": page_obj.has_previous(),
-                },
-            },
-            status=status.HTTP_200_OK,
-        )
-
-
-# -------------------------------
-# Analytics
-# -------------------------------
-class DesignerAnalyticsView(APIView):
-    """Retrieve analytics for designer."""
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        designer = request.user
-        analytics, _ = DesignerAnalytics.objects.get_or_create(user=designer)
-        serializer = DesignerAnalyticsSerializer(analytics)
-        return Response({"status":"success", "message": "Analytics retrieved.", "data": serializer.data}, status=status.HTTP_200_OK)
-
-
-
-
-class ProductColorView(APIView):
-    permission_classes = [IsAuthenticated]
-
-
-    def get(self, request):
-            """
-            List colors for a product
-            """
-            product_id = request.GET.get("product_id")
-
-            if not product_id:
-                return Response(
-                    {
-                        "status": "error",
-                        "message": "product query parameter is required",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            try:
-                product = Product.objects.get(id=product_id, user=request.user)
-            except Product.DoesNotExist:
-                return Response(
-                    {
-                        "status": "error",
-                        "message": "Product not found or permission denied",
-                    },
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-            colors = Color.objects.filter(product=product).order_by("name")
-
-            serializer = ColorSerializer(colors, many=True)
-
-            return Response(
-                {
-                    "status": "success",
-                    "data": serializer.data,
-                },
-                status=status.HTTP_200_OK,
-            )
-
-    def post(self, request):
-        """
-        Create a color
-        """
-        serializer = ColorSerializer(data=request.data)
-        print(request.data)
-        if not serializer.is_valid():
-            return Response(
-                {
-                    "status": "error",
-                    "errors": serializer.errors,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        product = serializer.validated_data["product"]
-
-        # Ownership check (VIEW-LEVEL, not serializer validation)
-        if product.user != request.user:
-            return Response(
-                {
-                    "status": "error",
-                    "message": "Permission denied",
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        color = serializer.save()
-
-        return Response(
-            {
-                "status": "success",
-                "message": "Color created successfully",
-                "data": {
-                    "id": color.id,
-                    "name": color.name,
-                    "hex_code": color.hex_code,
-                },
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    def delete(self, request):
-        """
-        Delete a color
-        """
-        color_id = request.data["color_id"]
-
-        if not color_id:
-            return Response(
-                {
-                    "status": "error",
-                    "error": "color_id query parameter is required",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            color = Color.objects.select_related("product").get(id=color_id)
-        except Color.DoesNotExist:
-            return Response(
-                {
-                    "status": "error",
-                    "error": "Color not found",
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if color.product.user != request.user:
-            return Response(
-                {
-                    "status": "error",
-                    "error": "Permission denied",
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        color.delete()
-
-        return Response(
-            {
-                "status": "success",
-                "message": "Color deleted successfully",
-            },
-            status=status.HTTP_200_OK,
-        )
-
-
-class UpdateProductSizes(APIView):
-    def put(self, request, product_id):
-        product = get_object_or_404(Product, id=product_id)
-
-        serializer = ProductSizeUpdateSerializer(
-            instance=product,
-            data=request.data
+        # ================= SERIALIZER =================
+        serializer = self.get_serializer(
+            profile,
+            data=request.data,
+            partial=True
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
-        return Response(
-            {
-                "status": "success",
-                "message": "Product sizes updated"
-            },
-            status=status.HTTP_200_OK
+        # slug
+        if 'brand_name' in request.data and request.data['brand_name']:
+            profile.slug = slugify(profile.brand_name)
+            profile.save(update_fields=['slug'])
+
+        return Response({
+            "status": "success",
+            "message": "Profile setup completed" if created else "Profile updated",
+            "data": serializer.data
+        })
+
+
+class DesignerDashboardViewSet(DesignerBaseViewSet):
+    queryset = OrderItem.objects.all()  # or .none() if you filter everywhere
+
+    def get_queryset(self):
+        # Normal filtering for list/retrieve/update/destroy
+        return super().get_queryset().filter(
+            product__user=self.request.user,
+            status__in=["processing", "shipped", "delivered"]
         )
 
-
-
-
-
-# ---------------- Return Requests ----------------
-class ReturnRequestView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        returns = ReturnRequest.objects.filter(order_item__product__user=request.user)
-        serializer = ReturnRequestSerializer(returns, many=True)
-        return Response({"status":"success", "message": "Return requests retrieved successfully.", "data": serializer.data})
-
-    def put(self, request):
-        return_item_id = request.data.get('return_item_id')
-        return_status = request.data.get('status')
-        try:
-            return_item = ReturnRequest.objects.get(id=return_item_id, order_item__product__user=request.user)
-        except ReturnRequest.DoesNotExist:
-            return Response({"status":"error", "message": "return item not found."}, status=404)
-        return_item.designer_status=return_status
-        return_item.save()
-        serializer = ReturnRequestSerializer(return_item)
-        return Response({"status":"success", "message": "Return request submitted successfully.", "data": serializer.data})
-
-
-class DesignerDashboardView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
+    @action(detail=False, methods=['get'], url_path='overview')
+    def dashboard(self, request):
         now = timezone.now()
         last_30 = now - timedelta(days=30)
         prev_30 = last_30 - timedelta(days=30)
@@ -833,32 +490,104 @@ class DesignerDashboardView(APIView):
 
         return Response(payload)
     
+# ---------------- Return Requests ----------------
+class DesignerReturnRequestViewSet(DesignerBaseViewSet):
 
-class OrderDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    serializer_class = ReturnRequestSerializer
 
-    def get(self, request):
-        item_id = request.GET.get('item_id')
-        try:
-            order_item = OrderItem.objects.get(item_id=item_id, designer=request.user)
-            serializer = OrderItemSerializer(order_item)
+    filterset_fields = ["status", "designer_status"]
+    search_fields = ["return_id"]
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
+    search_fields = ["return_id"]
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
 
-        except ObjectDoesNotExist:
+    lookup_field = "return_id"
+    lookup_url_kwarg = "return_id"
 
-            return Response(
-                {
-                    "status": "success",
-                    "data": False,
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        return Response(
-            {
-                "status": "success",
-                "data": serializer.data,
-            },
-            status=status.HTTP_200_OK,
+    def get_queryset(self):
+        return ReturnRequest.objects.select_related(
+            "order_item",
+            "order_item__order",
+            "order_item__product"
+        ).filter(
+            order_item__product__user=self.request.user
         )
+
+    @action(detail=True, methods=["post"], url_path="action")
+    def perform_action(self, request, return_id=None):
+        """
+        POST /designers/returns/{return_id}/action
+
+        Body:
+        {
+            "action": "approve" | "reject",
+            "reason": "optional rejection reason"
+        }
+        """
+
+        instance = self.get_object()
+
+        action_type = request.data.get("action")
+        reason = request.data.get("reason", "")
+
+        if action_type not in ["approve", "reject"]:
+            return Response(
+                {"detail": "Invalid action. Must be 'approve' or 'reject'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order = instance.order_item.order
+        customer = order.customer
+
+        context = {
+            "customer": customer,
+            "return_request": instance,
+            "order": order,
+            "order_item": instance.order_item,
+            "reject_reason": reason,
+        }
+
+        if action_type == "approve":
+
+            instance.designer_status = "approved"
+            instance.save()
+
+            subject = f"Your Return Request #{instance.return_id} Has Been Approved"
+
+            message = render_to_string(
+                "designers/return_approved.html",
+                context,
+            )
+
+        elif action_type == "reject":
+
+            if not reason:
+                return Response(
+                    {"detail": "Rejection reason is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            instance.designer_status = "rejected"
+            instance.reject_reason = reason
+            instance.save()
+
+            subject = f"Your Return Request #{instance.return_id} Was Rejected"
+
+            message = render_to_string(
+                "designers/return_rejected.html",
+                context,
+            )
+
+        # Send email asynchronously
+        threading.Thread(
+            target=resend_sendmail,
+            args=(subject, [customer.user.email], message),
+        ).start()
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 

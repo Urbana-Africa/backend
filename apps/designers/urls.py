@@ -1,62 +1,26 @@
-from django.urls import path
+from rest_framework.routers import DefaultRouter
+
 from .views import (
-    DesignerDashboardView,
-    DesignerProductView,
-    DesignerProfileView,
-    DesignerProductDetailView,
-    DesignerCollectionListView,
-    DesignerShippingListView,
-    DesignerOrderListView,
-    DesignerAnalyticsView,
-    InventoryAlertListView,
-    BulkProductUploadView,
-    OrderDetailView,
-    ProductColorView,
-    ReturnRequestView,
-    ShipmentTrackingView,
-    PromotionListView, DesignerStoryListView, DesignerStoryDetailView, ActiveStoriesListView, StoryViewCreateView, DesignerUploadProductMediaView,
-    UpdateOrderStatusView,
-    UpdateProductSizes,
-    UpdateProductStatusView)
+    # ViewSets
+    DesignerStoryViewSet,
+    DesignerProductUploadViewSet,
+    DesignerOrderViewSet,
+    DesignerProfileViewSet,
+    DesignerDashboardViewSet,
+    DesignerReturnRequestViewSet,
+)
 
-urlpatterns=[
-    # Designer CMS
-    path('stories', DesignerStoryListView.as_view(), name='designer-stories'),
-    path('stories/<int:story_id>', DesignerStoryDetailView.as_view(),
-         name='designer-story-detail'),
-path(
-    "products/<str:product_id>/sizes",
-    UpdateProductSizes.as_view(),
-    name="update-product-sizes",
-),
-    # Public stories
-    path('stories/active', ActiveStoriesListView.as_view(),),
-    path('product/media', DesignerUploadProductMediaView.as_view()),
-    path('product/colors', ProductColorView.as_view()),
-    path('product/update-status', UpdateProductStatusView.as_view()),
-    path('stories/<int:story_id>/view',
-         StoryViewCreateView.as_view(), name='story-view-create'),
-    path('inventory-alerts', InventoryAlertListView.as_view(),
-         name='inventory-alerts'),
-    path('bulk-upload', BulkProductUploadView.as_view(),
-         name='bulk-product-upload'),
-    path('orders/update-status',
-         UpdateOrderStatusView.as_view(), name='designer-order-update'),
-    path('shipments', ShipmentTrackingView.as_view(), name='shipments'),
-    path('shipments/<int:order_id>',
-         ShipmentTrackingView.as_view(), name='shipment-update'),
-    path('promotions', PromotionListView.as_view(), name='promotions'),
+router = DefaultRouter(trailing_slash=False)
 
-    path('profile', DesignerProfileView.as_view(), name='designer-profile'),
-    path('products', DesignerProductView.as_view(), name='designer-products'),
-    path('products/<int:product_id>', DesignerProductDetailView.as_view(),
-         name='designer-product-detail'),
-    path('collections', DesignerCollectionListView.as_view(),
-         name='designer-collections'),
-    path('shipping', DesignerShippingListView.as_view(), name='designer-shipping'),
-    path('orders', DesignerOrderListView.as_view(), name='designer-orders'),
-    path('orderdetail', OrderDetailView.as_view(), name='designer-order-details'),
-    path('analytics', DesignerAnalyticsView.as_view(), name='designer-analytics'),
-        path('returns', ReturnRequestView.as_view()),
-  path("dashboard/analytics", DesignerDashboardView.as_view()),
-]
+# -----------------------------
+# Designer APIs
+# -----------------------------
+router.register(r"stories", DesignerStoryViewSet, basename="designer-stories")
+router.register(r"products", DesignerProductUploadViewSet, basename="designer-products")
+router.register(r"orders", DesignerOrderViewSet, basename="designer-orders")
+router.register(r"profile", DesignerProfileViewSet, basename="designer-profile")
+router.register(r"dashboard", DesignerDashboardViewSet, basename="designer-dashboard")
+router.register(r"returns", DesignerReturnRequestViewSet, basename="designer-returns")
+
+
+urlpatterns = router.urls

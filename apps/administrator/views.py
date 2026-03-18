@@ -5,29 +5,16 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
-from rest_framework.pagination import PageNumberPagination
 import threading
 from django.template.loader import render_to_string
 from apps.core.models import *
 from apps.customers.models import *
 from apps.designers.models import *
+from apps.utils.pagination import StandardPagination
 from .serializers import *
 from apps.utils.email_sender import resend_sendmail
 
-class AdminPagination(PageNumberPagination):
-    page_size = 12
-    page_size_query_param = "page_size"
-    max_page_size = 100
 
-    def get_paginated_response(self, data):
-        return Response({
-            "count": self.page.paginator.count,
-            "total_pages": self.page.paginator.num_pages,
-            "current_page": self.page.number,
-            "next": self.get_next_link(),
-            "previous": self.get_previous_link(),
-            "results": data,
-        })
 
 # =====================================================
 # BASE ADMIN VIEWSET
@@ -35,7 +22,7 @@ class AdminPagination(PageNumberPagination):
 
 class AdminBaseViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminUser]
-    pagination_class = AdminPagination
+    pagination_class = StandardPagination
 
     filter_backends = [
         DjangoFilterBackend,
@@ -270,6 +257,10 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
 
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+
+
 # =====================================================
 # DESIGNER MANAGEMENT
 # =====================================================

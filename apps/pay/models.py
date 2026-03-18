@@ -10,6 +10,33 @@ from django.core.exceptions import ValidationError
 
 
 
+class AccountDetail(models.Model):
+    """
+    Bank account details for any user.
+    Used for payouts, refunds, and future transfers.
+    """
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="account_detail"
+    )
+
+    account_name = models.CharField(max_length=255)
+    account_number = models.CharField(max_length=20)
+    bank_code = models.CharField(max_length=10)
+    bank_name = models.CharField(max_length=100)
+    recipient_code = models.CharField(default='',blank=True,max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Account Detail"
+        verbose_name_plural = "Account Details"
+
+    def __str__(self):
+        return f"{self.user} – {self.bank_name}"
+
 class Currency(models.Model):
     
     id = models.CharField(
@@ -552,3 +579,59 @@ class Withdrawal(models.Model):
 
         self.status = "processing"
         self.save(update_fields=["status"])
+
+
+
+
+class Transaction(models.Model):
+
+    class TransactionType(models.TextChoices):
+        DEPOSIT = "deposit", "deposit"
+        WITHDRAWAL = "withdrawal", "withdrawal"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "pending"
+        COMPLETED = "completed", "completed"
+        FAILED = "failed", "failed"
+        CANCELLED = "cancelled", "cancelled"
+
+    id = models.CharField(
+        primary_key=True,
+        max_length=50,
+        default=generate_custom_id,
+        editable=False,
+    )
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="transactions"
+    )
+
+    transaction_type = models.CharField(
+        max_length=12,
+        choices=TransactionType.choices
+    )
+
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2
+    )
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.PENDING
+    )
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "transaction_type"]),
+            models.Index(fields=["status"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user} - {self.transaction_type} - {self.amount}"

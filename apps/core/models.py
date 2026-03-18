@@ -96,7 +96,7 @@ class MediaAsset(BaseModel):
         IMAGE = "image"
         VIDEO = "video"
         DOCUMENT = "document"
-
+    user = models.ForeignKey(User, on_delete=models.CASCADE,null = True, default=None, related_name="media_assets")
     file = models.FileField(upload_to="uploads/%Y/%m/%d/")
     media_type = models.CharField(max_length=20, choices=MediaType.choices, default=MediaType.IMAGE)
     alt_text = models.CharField(max_length=255, blank=True, null=True)

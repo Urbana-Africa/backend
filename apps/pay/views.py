@@ -1,8 +1,14 @@
 import threading
 from threading import Thread
 from django.http import HttpResponse
-
+# accounts/views.py
+from django.shortcuts import get_object_or_404
+from django.db import transaction
+from .models import AccountDetail
+from .serializers import AccountDetailSerializer
+import requests  # or use flutterwave-python SDK if you prefer
 import sys
+from typing import Dict, Optional
 from datetime import datetime
 from time import sleep
 from django.shortcuts import render
@@ -17,7 +23,7 @@ from django.db.models import Sum
 from .models import WalletTransaction
 from apps.pay.models import Wallet
 from apps.utils.email_sender import resend_sendmail
-from .models import Payment, Transfers, Banks
+from .models import Payment, Transfers
 from rest_framework.views import APIView, status
 from .serializers import *
 from rest_framework.response import Response
@@ -26,14 +32,11 @@ from decouple import config
 from paystackapi.verification import Verification
 from paystackapi.transfer import Transfer
 from paystackapi.trecipient import TransferRecipient
-from django.contrib.auth.hashers import check_password
-from .threads import TransferThread
 import importlib
 from paystackease import PayStackWebhook, PayStackSignatureVerifyError
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from .config import get_paystack_keys
+from .config import get_flutterwave_keys, get_paystack_keys
 from django.template.loader import render_to_string
-from django.shortcuts import get_object_or_404
 from .models import Wallet, Escrow
 from .serializers import WalletSerializer, WithdrawalSerializer
 
@@ -224,62 +227,6 @@ class CancelPayment( APIView):
             data = {'status': 'failed', 'canceled': False}
 
         return Response(data, status=status.HTTP_202_ACCEPTED)
-
-
-class Withdraw( APIView):
-
-    def get(self, request):
-        context = contextObj(request)
-        # try:
-        #     banks = requests.get('https://api.paystack.co/bank?country=nigeria',
-        #                          headers={'Authorization': f'Bearer {PS_SECRET_KEY}'}).json()['data']
-        #     for bank in banks:
-        #         bank_instance,created = Banks.objects.get_or_create(code=bank['code'])
-        #         bank_instance.name=bank['name']
-        #         bank_instance.save()
-        #     print(banks)
-        # except ObjectDoesNotExist:
-        #     messages.error(request,message="An error occured")
-        banks = Banks.objects.all()
-        user = request.user
-        context['banks'] = banks
-        wallet, created = Wallets.objects.get_or_create(user=user)
-        context['wallet'] = wallet
-        template = 'pay/withdraw.html'
-        try:
-            context['title'] = 'Transfer | Algoridm Pay'
-        except Exception:
-            pass
-        return render(request, template, context)
-
-    def post(self, request, ):
-
-        user = request.user
-        password = request.POST['password']
-        if check_password(password,user.password):
-            bank_code = request.POST['bank_code']
-            amount = int(request.POST['amount'])
-            account_number = request.POST['account_number']
-            account_name = request.POST['account_name']
-            description = request.POST['description']
-            description = "Algoridm pay - Withdrawal " + description
-            transfer = Transfers.objects.create(
-                user=user, amount=amount, bank_code=bank_code, account_name=account_name, account_number=account_number)
-            debit_wallet = debitwallet(user, transfer.amount)
-            if debit_wallet['status']=='success':
-                TransferThread(TransferToAccount(transfer, account_name,description,account_number,bank_code)).start()
-                transfer_amount = "{:,.2f}".format(transfer.amount)
-
-                data = {'status':'processing','amount':transfer_amount}
-            elif debit_wallet['insufficient_balance']:
-
-                transfer.delete()
-                data = debit_wallet
-
-        else:
-            data={'invalid_password':True}
-
-        return Response(data=data)
 
 
 class CheckAccountNumber( APIView):
@@ -646,28 +593,6 @@ class CreateWithdrawalView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 
-class CreateWithdrawalView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        wallet = request.user.wallet
-
-        serializer = WithdrawalSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        withdrawal = serializer.save(
-            wallet=wallet,
-            user=request.user,
-            reference=f"WDR-{wallet.id}-{timezone.now().timestamp()}"
-        )
-
-        withdrawal.process_withdrawal()
-
-        return Response({
-            "message": "Withdrawal request submitted successfully."
-        })
-
-
 class WalletSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -691,5 +616,438 @@ class WalletSummaryView(APIView):
             "recent_activity": WalletTransactionSerializer(recent_transactions, many=True).data
         })
     
+
+
+class AccountDetailView(APIView):
+    """
+    ViewSet for managing user's bank account details with Flutterwave recipient creation.
+    
+    - list:   GET /accounts/          → list own account details
+    - create: POST /accounts/         → create + generate recipient_code on Flutterwave
+    - retrieve: GET /accounts/<pk>/   → get single detail
+    - update: PUT /accounts/<pk>/     → full update
+    - partial_update: PATCH /accounts/<pk>/ → partial update
+    """
+    
+    serializer_class = AccountDetailSerializer
+    permission_classes = [IsAuthenticated]
+
+
+    def get(self,request):
+        try:
+            account=AccountDetail.objects.get(user=request.user)
+            return Response({
+                    'data':AccountDetailSerializer(account,many=False).data,
+                    'status':'success',
+
+                },status=status.HTTP_200_OK)
+
+        except ObjectDoesNotExist:
+            return Response({
+               'data':False,
+            },status=status.HTTP_200_OK)
+        
+
+        except Exception as e:
+            return Response({
+                'data':[],
+                'status':'error',
+                'message':f'error occured at {e}'
+            },status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self,request):
+        try:
+            account=AccountDetail.objects.get(user=request.user).delete()
+            return Response({
+                    
+                    'status':'success',
+
+                },status=status.HTTP_200_OK)
+
+        except ObjectDoesNotExist:
+            return Response({
+                'status':'error',
+                'message':f'No Data'
+            },status=status.HTTP_404_NOT_FOUND)
+        
+
+        except Exception as e:
+            return Response({
+                'data':[],
+                'status':'error',
+                'message':f'error occured at {e}'
+            },status=status.HTTP_400_BAD_REQUEST)
+
+
+
+    def post(self, request):
+        
+        """
+        Create or update bank account details for a user.
+        If user is a Partner, create/update Paystack recipient_code.
+        """
+
+        user = request.user
+
+        account_name = request.data.get("account_name")
+        account_number = request.data.get("account_number")
+        bank_code = request.data.get("bank_code")
+        bank_name = request.data.get("bank_name")
+
+        if not all([account_name, account_number, bank_code, bank_name]):
+            return Response(
+                {"error": "All bank fields are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            
+            with transaction.atomic():
+                response = create_fw_transfer_recipient(
+                    access_token=get_flutterwave_keys()['secret_key'],
+                    # fw_token['access_token'],
+                    name=account_name,
+                    account_number=account_number,
+                    bank_code=bank_code,
+                    bank_name=bank_name
+                )
+                print('Recepient ',response)
+                account_detail, _ = AccountDetail.objects.update_or_create(
+                    user=user,
+                    defaults={
+                        "account_name": account_name,
+                        "account_number": account_number,
+                        "bank_code": bank_code,
+                        "bank_name": bank_name,
+                        "recipient_code": response["data"]["id"]
+                    },
+                )
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "status": "success",
+                "data": AccountDetailSerializer(account_detail).data
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+   
+
+
+class FlutterwaveBanksView(APIView):
+    """
+    Retrieves the list of banks in a given country using Flutterwave API.
+    """
+
+    def get(self, request):
+        country = request.query_params.get(
+            "country", "NG")  # default to Nigeria
+
+        url = f"https://api.flutterwave.com/v3/banks/{country.upper()}"
+        keys = get_flutterwave_keys()
+        headers = {
+            "Authorization": f"Bearer {keys['secret_key']}",
+        }
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            return Response(
+                {"status": "error",
+                    "message": f"Failed to fetch banks: {str(e)}"},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        data = resp.json()
+        if data.get("status") != "success":
+            return Response(
+                {"status": "error", "message": data.get(
+                    "message", "Unknown error")},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        # Return only relevant bank info
+        banks = [{"name": b["name"], "code": b["code"]}
+                 for b in data.get("data", [])]
+
+        return Response({"status": "success", "banks": banks}, status=status.HTTP_200_OK)
+
+
+
+
+
+def create_fw_transfer_recipient(
+    access_token: str,
+    name: str,
+    account_number: str,
+    bank_code: str,
+    bank_name: str,
+    country: str = "NG",           # default to Ghana
+    currency: str = "NGN",         # default to Ghana cedi
+    email: Optional[str] = None,   # optional but recommended
+    type_override: Optional[str] = None,  # allow manual override if needed
+) -> Dict:
+    """
+    Create or find a Flutterwave transfer recipient.
+    
+    Returns a dict like:
+    {
+        "status": "success" | "error",
+        "message": str,
+        "data": dict | None,
+        "recipient_code": str | None
+    }
+    """
+    base_url = "https://api.flutterwave.com/v3"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    # Determine correct type based on country
+    type_map = {
+        "NG": "nuban",
+        "GH": "ghipss",
+        "KE": "pesalink",
+        "UG": "mobile_money",
+        # add more countries as needed
+    }
+
+    recipient_type = type_override or type_map.get(country.upper(), "nuban")
+
+    try:
+        # ── STEP 1: Check if this account already exists as beneficiary ──
+        list_url = f"{base_url}/beneficiaries"
+        params = {"currency": currency}  # optional filter
+        response = requests.get(list_url, headers=headers, params=params, timeout=15)
+
+        if response.status_code != 200:
+            return {
+                "status": "error",
+                "message": f"Failed to list beneficiaries: {response.status_code} - {response.text}",
+                "data": None,
+                "recipient_code": None,
+            }
+
+        data = response.json()
+        if data.get("status") != "success":
+            return {
+                "status": "error",
+                "message": data.get("message", "Unknown error listing beneficiaries"),
+                "data": None,
+                "recipient_code": None,
+            }
+
+        beneficiaries = data.get("data", [])
+        for ben in beneficiaries:
+            if (
+                ben.get("account_number") == account_number
+                and ben.get("account_bank") == bank_code
+                and ben.get("currency") == currency
+            ):
+                return {
+                    "status": "success",
+                    "message": "Recipient already exists",
+                    "data": ben,
+                    "recipient_code": ben.get("recipient_code"),
+                }
+
+        # ── STEP 2: Create new recipient ──
+        create_url = f"{base_url}/beneficiaries"
+        payload = {
+            "account_bank": bank_code,
+            "account_number": account_number,
+            "account_name": name.strip(),
+            "bank_name": bank_name.strip(),
+            "currency": currency,
+            "type": recipient_type,
+            "country": country.upper(),
+        }
+
+        if email:
+            payload["email"] = email.strip()
+
+        response = requests.post(create_url, json=payload, headers=headers, timeout=15)
+
+        if response.status_code not in (200, 201):
+            return {
+                "status": "error",
+                "message": f"Flutterwave rejected creation: {response.status_code} - {response.text}",
+                "data": None,
+                "recipient_code": None,
+            }
+
+        data = response.json()
+
+        if data.get("status") != "success":
+            return {
+                "status": "error",
+                "message": data.get("message", "Failed to create recipient"),
+                "data": data,
+                "recipient_code": None,
+            }
+
+        recipient = data.get("data", {})
+        recipient_code = recipient.get("recipient_code")
+
+        if not recipient_code:
+            return {
+                "status": "error",
+                "message": "Recipient created but no recipient_code returned",
+                "data": recipient,
+                "recipient_code": None,
+            }
+
+        return {
+            "status": "success",
+            "message": "Recipient created successfully",
+            "data": recipient,
+            "recipient_code": recipient_code,
+        }
+
+    except requests.Timeout:
+        return {
+            "status": "error",
+            "message": "Request timed out while communicating with Flutterwave",
+            "data": None,
+            "recipient_code": None,
+        }
+    except requests.RequestException as e:
+        return {
+            "status": "error",
+            "message": f"Network error contacting Flutterwave: {str(e)}",
+            "data": None,
+            "recipient_code": None,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Unexpected error: {str(e)}",
+            "data": None,
+            "recipient_code": None,
+        }
+FW_BASE_URL='https://api.flutterwave.com/v3'
+
+
+class FlutterWaveVerifyAccountNumber(APIView):
+    def get(self,request):
+        try: 
+            fw_keys = get_flutterwave_keys()    
+            url = "https://api.flutterwave.com/v3/accounts/resolve"
+            headers = {
+                "Authorization": f"Bearer {fw_keys['secret_key']}",
+                 "Content-Type": "application/json"
+            }
+
+            payload = {
+                "account_number": request.GET.get('account_number'),
+                "account_bank": '044' if ENV == 'dev' else  request.GET.get('bank_code')
+            }
+
+            response = requests.post(url, json=payload, headers=headers)
+            print(response.json())
+            
+            return Response({
+                'status':'success',
+                'data':response.json()['data']
+            })
+        
+        except Exception as e:
+            return Response({
+                'status':'error',
+                'message':f'error occured at {e}'
+            })
+
+
+
+
+
+class InitiatePayoutView(APIView):
+
+    def post(self, request):
+        try:
+            amount = float(request.data.get("amount"))
+            narration = request.data.get("narration")
+
+            wallet = Wallet.objects.get(user=request.user)
+            account_detail = AccountDetail.objects.get(
+                user=request.user,
+            )
+
+            if wallet.is_locked:
+                return Response(
+                    {"message": "Transaction cannot be processed. Try again in few minutes", "status": "error"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if amount > wallet.available_balance:
+                return Response(
+                    {"message": "Insufficient funds", "status": "error"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # create local transaction
+            transaction = Transaction.objects.create(
+                user=request.user,
+                transaction_type="withdrawal",
+                amount=amount,
+                description=narration,
+            )
+
+            headers = {
+                "Authorization": f"Bearer {get_flutterwave_keys()['secret_key']}",
+                "Content-Type": "application/json",
+            }
+
+            payload = {
+                "account_bank": account_detail.bank_code,
+                "account_number": account_detail.account_number,
+                "amount": amount,
+                "narration": narration,
+                "currency": "NGN",
+                "reference": str(transaction.id),
+                # "callback_url": f"{settings.BASE_URL}/pay/webhook/flutterwave",
+                "debit_currency": "NGN"
+            }
+
+            response = requests.post(
+                "https://api.flutterwave.com/v3/transfers",
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+            data = response.json()
+            # print(data)
+
+            if data.get("status") != "success":
+                return Response(
+                    {"status": "error", "data": data},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # deduct balance only after successful API request
+            wallet.available_balance -= amount
+            wallet.save()
+
+            return Response(
+                {"status": "success", "data": data},
+                status=status.HTTP_200_OK
+            )
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 
 

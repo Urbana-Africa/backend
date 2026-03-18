@@ -163,6 +163,8 @@ class AdminReturnRequestSerializer(AdminBaseSerializer):
         data = super().to_representation(instance)
         data['customer'] = UserSerializer(instance.order_item.order.customer.user).data
         data['designer'] = AdminDesignerSerializer(instance.order_item.designer.designer_profile).data
+        data['order_item'] = AdminOrderItemSerializer(instance.order_item).data
+
         return data
     
     def update(self, instance, validated_data):

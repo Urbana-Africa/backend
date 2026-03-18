@@ -333,3 +333,6 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY", default="")
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
 SHIPPO_API_KEY = config("SHIPPO_API_KEY", default="")
+
+CORS_ALLOWED_ORIGINS = ["*"]
+CORS_ALLOW_CREDENTIALS = True

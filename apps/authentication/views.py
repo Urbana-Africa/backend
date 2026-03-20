@@ -8,7 +8,7 @@ from apps.customers.models import Customer
 from apps.utils.email_sender import resend_sendmail
 from .serializers import *
 from rest_framework import status
-from django.contrib.auth import login, logout, authenticate
+from django.contrib.auth import login, authenticate, logout
 from rest_framework.permissions import IsAuthenticated,AllowAny
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.core.exceptions import ObjectDoesNotExist
@@ -161,7 +161,8 @@ class SetCSRFCookie(APIView):
 
 
 class Logout(APIView):
-    permission_classes = ([IsAuthenticated])
+    permission_classes = ([])
+    authentication_classes=()
 
     def post(self, request):
 

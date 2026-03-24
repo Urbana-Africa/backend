@@ -8,7 +8,7 @@ from apps.customers.models import Customer
 from apps.utils.email_sender import resend_sendmail
 from .serializers import *
 from rest_framework import status
-from django.contrib.auth import login, authenticate, logout
+from django.contrib.auth import logout
 from rest_framework.permissions import IsAuthenticated,AllowAny
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.core.exceptions import ObjectDoesNotExist
@@ -30,125 +30,149 @@ def getUserData(request):
     return serialized_user
 
 
-class CustomTokenObtainPairView(TokenObtainPairView, APIView):
+class CustomTokenObtainPairView(TokenObtainPairView):
+    """
+    Custom login endpoint for Refresh Ghana:
+    - Supports login with email OR username
+    - Checks is_deleted and is_active
+    - Sets HttpOnly cookies for access & refresh tokens (secure for SPA)
+    - Returns minimal user data (no tokens in body to reduce exposure)
+    """
     def post(self, request, *args, **kwargs):
-        try:
-            email = str(request.data["email"]).lower().strip()
-            password = str(request.data["password"]).strip()
-            try:
-                user = User.objects.get(email = email,is_deleted = False)
-            except ObjectDoesNotExist:
-                try:
-                    user = User.objects.get(username=email, is_deleted=False)
-                except ObjectDoesNotExist:
-                    return Response({'status':'error','message':'Invalid credentials'},status=status.HTTP_404_NOT_FOUND)
-            
-            if check_password(password,user.password):
-                # request_data = 
-                # request.data['email'] = user.email
-                if not user.is_active:
-                    return Response(
-                        {
-                            "status": "success",
-                            "in_active": True,
-                            "user": UserSerializer(user).data,
-                        },
-                        status=status.HTTP_200_OK,
-                    )
+        print(request.data)
+        email_or_username = str(request.data.get("email", "")).lower().strip()
+        password = str(request.data.get("password", "")).strip()
+        print(email_or_username)
 
-                # Let SimpleJWT generate tokens
-                # request.data["email"] = user.email
-                jwt_response = super().post(request, *args, **kwargs)
-
-                tokens = jwt_response.data
-                access_token = tokens["access"]
-                refresh_token = tokens["refresh"]
-                # Authenticate ONCE for session usage (React app)
-                authenticated_user = authenticate(
-                    request,
-                    email=user.email,
-                    password=password,
-                )
-
-                if authenticated_user:
-                    login(
-                        request,
-                        authenticated_user,
-                        backend="django.contrib.auth.backends.ModelBackend",
-                    )
-
-                res = Response(
-                    {
-                        "status": "success",
-                        "user": UserSerializer(user).data,
-                        "tokens": {
-                            "access_token": access_token,
-                            "refresh_token": refresh_token,
-                        },
-                    },
-                    status=status.HTTP_200_OK,
-                )
-
-                # HTTP-only cookies for web
-                res.set_cookie(
-                    key="access_token",
-                    value=str(access_token),
-                    httponly=True,
-                    secure=True,
-                    samesite="None",
-                    path="/",
-                )
-
-                res.set_cookie(
-                    key="refresh_token",
-                    value=str(refresh_token),
-                    httponly=True,
-                    secure=True,
-                    samesite="None",
-                    path="/",
-                )
-
-                return res
-            else:
-                return Response({'status':'error','message':'Invalid credentials'},status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
+        if not email_or_username or not password:
             return Response(
-                {"status": "error", "error": str(e)},
-                status=status.HTTP_409_CONFLICT,
+                {"status": "error", "message": "Email/Username and password are required"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
-class CustomTokenRefreshView(TokenRefreshView, APIView):
-    def post(self, request, *args, **kwargs):
+
         try:
-            refresh_token = request.COOKIES.get('refresh_token')
-            pre_access_token = request.COOKIES.get('access_token')
-            request.data['refresh'] = refresh_token
+            # Try email first, then username
+            user = User.objects.get(email=email_or_username, is_deleted=False)
+        except User.DoesNotExist:
+            try:
+                user = User.objects.get(username=email_or_username, is_deleted=False)
+            except User.DoesNotExist:
+                return Response(
+                    {"status": "error", "message": "Invalid credentials"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
 
-            response = super().post(request, *args, **kwargs)
-            
-            tokens = response.data
-            access_token = tokens['access']
-            res = Response()
-
-            res.data = {'refreshed': True}
-
-            res.set_cookie(
-                key='access_token',
-                value=str(access_token),
-                httponly=True,
-                secure=True,
-                samesite='None',
-                path='/'
+        if not check_password(password, user.password):
+            return Response(
+                {"status": "error", "message": "Invalid credentials"},
+                status=status.HTTP_401_UNAUTHORIZED,
             )
-            # res.data.update(tokens)
-            login(request, request.user, backend=settings.AUTHENTICATION_BACKENDS[-1])
-            return res
 
-        except Exception as e:
-            print('failed',e)
-            return Response({'refreshed': False,'message':str(e),'status':'error'},status=status.HTTP_400_BAD_REQUEST)
+        if not user.is_active:
+            return Response(
+                {
+                    "status": "success",
+                    "inactive": True,
+                    "user": UserSerializer(user).data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # Generate tokens using SimpleJWT
+        refresh = RefreshToken.for_user(user)
+        access_token = str(refresh.access_token)
+        refresh_token = str(refresh)
+
+        # Prepare response (no tokens in body → more secure)
+        response = Response(
+            {
+                "status": "success",
+                "message": "Login successful",
+                "user": UserSerializer(user).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+        # Set secure HttpOnly cookies (use your settings values!)
+        from django.conf import settings
+
+        response.set_cookie(
+            key=settings.SIMPLE_JWT["AUTH_COOKIE"],  # "access_token"
+            value=access_token,
+            max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],  # False in dev, True in prod
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],  # "Lax" in dev, "None" in prod if needed
+            path="/",
+            domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],  # ".urbana.local" or ".urbanaafrica.com"
+        )
+
+        response.set_cookie(
+            key=settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],  # "refresh_token"
+            value=refresh_token,
+            max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            path="/",
+            domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+        )
+
+        return response
 
 
+
+
+class CustomTokenRefreshView(TokenRefreshView):
+    """
+    Refresh access token using HttpOnly refresh cookie.
+    Returns new access token via cookie (not response body).
+    """
+
+    def post(self, request, *args, **kwargs):
+        refresh_token = request.COOKIES.get(
+            settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"]
+        )
+
+        if not refresh_token:
+            return Response(
+                {"message": "No refresh token", "status": "error"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        serializer = self.get_serializer(data={"refresh": refresh_token})
+
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            return Response(
+                {"message": "Invalid or expired refresh token", "status": "error"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        access_token = serializer.validated_data.get("access")
+
+        res = Response(
+            {
+                "status": "success",
+                "refreshed": True,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+        res.set_cookie(
+            key=settings.SIMPLE_JWT["AUTH_COOKIE"],  # "access_token"
+            value=access_token,
+            max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            path="/",
+            domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+        )
+
+        return res
+    
 @method_decorator(ensure_csrf_cookie,'get')
 class SetCSRFCookie(APIView):
     permission_classes = ([IsAuthenticated])

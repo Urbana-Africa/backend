@@ -9,7 +9,6 @@ from .views import (
     ContactMessageView,
     CountryListView,
     CurrencyListView,
-    DesignerDetailView,
     DesignerListView,
     FeaturedProductsView,
     MediaAssetDeleteView,
@@ -79,12 +78,12 @@ urlpatterns += [
 
     # 🏢 Designers
     path("designers", DesignerListView.as_view(), name="designer-list"),
-    path("<slug:slug>", DesignerDetailView.as_view(), name="designer-detail"),
+    path("settings", UserSettingsView.as_view(), name="user-settings"),
     path("collection/<slug:slug>", CollectionDetailView.as_view(), name="designer-collection-detail"),
     path("collections/trending", TrendingCollectionsView.as_view(), name="trending-collections"),
+    # path("<slug:slug>", DesignerDetailView.as_view(), name="designer-detail"),
 
     # ⚙ User Settings
-    path("settings", UserSettingsView.as_view(), name="user-settings"),
 ]
 
 # -------------------------------

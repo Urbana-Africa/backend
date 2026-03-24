@@ -203,7 +203,7 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
         """
         POST /designer-products/ → Create new product
         """
-        serializer = self.get_serializer(data=request.data)
+        serializer = self.get_serializer(data=request.data,partial=True)
 
         if serializer.is_valid():
             product = serializer.save(user=request.user)

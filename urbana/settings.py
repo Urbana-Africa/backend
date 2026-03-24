@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     "apps.pay",
     "apps.core",
     "apps.aps",
+    "apps.newsletter"
 ]
 
 # =====================================================
@@ -172,10 +173,10 @@ if IS_PRODUCTION:
     JWT_COOKIE_SAMESITE = "None"
 else:
     COOKIE_DOMAIN = None                          # or ".urbana.local" if testing subdomains locally
-    COOKIE_SECURE = False
+    COOKIE_SECURE = True
     SESSION_COOKIE_SAMESITE = "Lax"
     CSRF_COOKIE_SAMESITE = "Lax"
-    JWT_COOKIE_SAMESITE = "Lax"
+    JWT_COOKIE_SAMESITE = "None"
 
 # Apply domain & secure flags
 SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
@@ -192,8 +193,8 @@ CSRF_COOKIE_HTTPONLY = False  # frontend needs to read it for AJAX
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework.authentication.SessionAuthentication",
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        'apps.authentication.jwtauth.CookieJWTAuthentication',  # cookie-based JWT
+        # "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticatedOrReadOnly",
@@ -203,8 +204,6 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=config("JWT_ACCESS_MINUTES", default=60, cast=int)),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=config("JWT_REFRESH_DAYS", default=1, cast=int)),
 
     # Cookie-based JWT (cross-subdomain support)
     "AUTH_COOKIE": "access_token",
@@ -214,6 +213,11 @@ SIMPLE_JWT = {
     "AUTH_COOKIE_HTTP_ONLY": True,
     "AUTH_COOKIE_SAMESITE": JWT_COOKIE_SAMESITE,
     "AUTH_COOKIE_PATH": "/",
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),          # short!
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,          # Issue new refresh on each refresh
+    "BLACKLIST_AFTER_ROTATION": True,       # Invalidate old one
+    "UPDATE_LAST_LOGIN": True,              # Optional
 }
 
 # =====================================================

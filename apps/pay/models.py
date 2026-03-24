@@ -37,6 +37,8 @@ class AccountDetail(models.Model):
     def __str__(self):
         return f"{self.user} – {self.bank_name}"
 
+
+
 class Currency(models.Model):
     
     id = models.CharField(

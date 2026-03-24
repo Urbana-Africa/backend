@@ -40,6 +40,7 @@ PyJWT
 pytz
 python-dateutil
 python-decouple
+rave_python
 redis
 requests
 requests-oauthlib

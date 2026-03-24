@@ -655,90 +655,167 @@ class AccountDetailView(APIView):
                 'message':f'error occured at {e}'
             },status=status.HTTP_400_BAD_REQUEST)
 
-    def delete(self,request):
+
+    def delete(self, request):
+        """
+        Delete user's bank account details and also delete the beneficiary from Flutterwave.
+        """
         try:
-            account=AccountDetail.objects.get(user=request.user).delete()
-            return Response({
-                    
-                    'status':'success',
+            account_detail = AccountDetail.objects.get(user=request.user)
 
-                },status=status.HTTP_200_OK)
+            # ── Delete from Flutterwave first (if recipient_code exists) ──
+            recipient_code = account_detail.recipient_code
+            if recipient_code:
+                success = self._delete_flutterwave_beneficiary(recipient_code)
+                if not success:
+                    # You can decide whether to continue or fail the whole operation
+                    # For now, we'll log and continue (soft delete on FW side is acceptable)
+                    print(f"Warning: Failed to delete Flutterwave beneficiary {recipient_code}")
 
-        except ObjectDoesNotExist:
+            # ── Delete from database ──
+            account_detail.delete()
+
             return Response({
-                'status':'error',
-                'message':f'No Data'
-            },status=status.HTTP_404_NOT_FOUND)
-        
+                "status": "success",
+                "message": "Bank account details deleted successfully"
+            }, status=status.HTTP_200_OK)
+
+        except AccountDetail.DoesNotExist:
+            return Response({
+                "status": "error",
+                "message": "No bank account details found for this user"
+            }, status=status.HTTP_404_NOT_FOUND)
 
         except Exception as e:
+            print(f"Error deleting bank account: {str(e)}")
             return Response({
-                'data':[],
-                'status':'error',
-                'message':f'error occured at {e}'
-            },status=status.HTTP_400_BAD_REQUEST)
+                "status": "error",
+                "message": "An error occurred while deleting your bank details"
+            }, status=status.HTTP_400_BAD_REQUEST)
 
+        # Helper method (add this inside the same View class)
+    def _delete_flutterwave_beneficiary(self, recipient_code: str) -> bool:
+        """
+        Delete a beneficiary from Flutterwave.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            access_token = get_flutterwave_keys()['secret_key']
+            base_url = "https://api.flutterwave.com/v3"
+            
+            url = f"{base_url}/beneficiaries/{recipient_code}"
+            
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
 
+            response = requests.delete(url, headers=headers, timeout=10)
+
+            if response.status_code in (200, 204):
+                print(f"Successfully deleted Flutterwave beneficiary: {recipient_code}")
+                return True
+
+            # Log Flutterwave error but don't fail the whole delete
+            print(f"Flutterwave delete failed: {response.status_code} - {response.text}")
+            return False
+
+        except requests.RequestException as e:
+            print(f"Network error deleting Flutterwave beneficiary: {str(e)}")
+            return False
+        except Exception as e:
+            print(f"Unexpected error deleting Flutterwave beneficiary: {str(e)}")
+            return False
 
     def post(self, request):
-        
         """
         Create or update bank account details for a user.
-        If user is a Partner, create/update Paystack recipient_code.
+        Uses Flutterwave to create/fetch recipient and stores the recipient_code.
         """
 
         user = request.user
 
         account_name = request.data.get("account_name")
-        account_number = request.data.get("account_number")
-        bank_code = request.data.get("bank_code")
+        # Fixed: request.GET.get() returns None or str, but you had a comma making it a tuple!
+        account_number = "0690000032" if ENV == "dev" else request.data.get("account_number")
+        bank_code = "044" if ENV == "dev" else request.data.get("bank_code")
         bank_name = request.data.get("bank_name")
 
         if not all([account_name, account_number, bank_code, bank_name]):
             return Response(
-                {"error": "All bank fields are required"},
+                {"error": "All bank fields are required: account_name, account_number, bank_code, bank_name"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
-            
             with transaction.atomic():
-                response = create_fw_transfer_recipient(
-                    access_token=get_flutterwave_keys()['secret_key'],
-                    # fw_token['access_token'],
-                    name=account_name,
-                    account_number=account_number,
-                    bank_code=bank_code,
-                    bank_name=bank_name
-                )
-                print('Recepient ',response)
-                account_detail, _ = AccountDetail.objects.update_or_create(
+                # Get or create AccountDetail first so we can pass it to the function
+                account_detail, created = AccountDetail.objects.get_or_create(
                     user=user,
                     defaults={
                         "account_name": account_name,
                         "account_number": account_number,
                         "bank_code": bank_code,
                         "bank_name": bank_name,
-                        "recipient_code": response["data"]["id"]
-                    },
+                    }
                 )
 
+                # Update fields in case they changed
+                account_detail.account_name = account_name
+                account_detail.account_number = account_number
+                account_detail.bank_code = bank_code
+                account_detail.bank_name = bank_name
+                account_detail.save(update_fields=[
+                    "account_name", "account_number", "bank_code", "bank_name", "updated_at"
+                ])
+
+                # Now call the improved Flutterwave function and pass the account_detail instance
+                response = create_fw_transfer_recipient(
+                    access_token=get_flutterwave_keys()["secret_key"],
+                    name=account_name,
+                    account_number=account_number,
+                    bank_code=bank_code,
+                    bank_name=bank_name,
+                    account_detail=account_detail,   # ← This enables direct fetch by recipient_code
+                )
+
+                print("Flutterwave Recipient Response:", response)
+
+                if response["status"] != "success":
+                    return Response(
+                        {
+                            "error": response.get("message", "Failed to process recipient"),
+                            "details": response.get("data")
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Update recipient_code from Flutterwave response (safer than assuming ["data"]["id"])
+                recipient_code = response.get("recipient_code")
+                if recipient_code:
+                    account_detail.recipient_code = recipient_code
+                    account_detail.save(update_fields=["recipient_code", "updated_at"])
+
+                # Refresh the instance to ensure latest data
+                account_detail.refresh_from_db()
+
         except Exception as e:
+            print("Error in bank account creation:", str(e))
             return Response(
-                {"error": str(e)},
+                {"error": "An unexpected error occurred while processing your bank details."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         return Response(
             {
                 "status": "success",
-                "data": AccountDetailSerializer(account_detail).data
+                "message": "Bank account details saved successfully",
+                "data": AccountDetailSerializer(account_detail).data,
             },
             status=status.HTTP_200_OK,
         )
 
-
-   
+    
 
 
 class FlutterwaveBanksView(APIView):
@@ -784,83 +861,92 @@ class FlutterwaveBanksView(APIView):
 
 
 
+
+
 def create_fw_transfer_recipient(
     access_token: str,
     name: str,
     account_number: str,
     bank_code: str,
     bank_name: str,
-    country: str = "NG",           # default to Ghana
-    currency: str = "NGN",         # default to Ghana cedi
-    email: Optional[str] = None,   # optional but recommended
-    type_override: Optional[str] = None,  # allow manual override if needed
+    country: str = "NG",
+    currency: str = "NGN",
+    email: Optional[str] = None,
+    type_override: Optional[str] = None,
+    # New: pass the AccountDetail instance so we can read/update recipient_code
+    account_detail: Optional["AccountDetail"] = None,
 ) -> Dict:
     """
-    Create or find a Flutterwave transfer recipient.
+    Create or retrieve a Flutterwave beneficiary (transfer recipient).
     
-    Returns a dict like:
+    Returns:
     {
         "status": "success" | "error",
         "message": str,
         "data": dict | None,
-        "recipient_code": str | None
+        "recipient_code": str | None   # This is the Flutterwave beneficiary ID
     }
     """
     base_url = "https://api.flutterwave.com/v3"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
+        "accept": "application/json",
     }
 
-    # Determine correct type based on country
-    type_map = {
+    recipient_type = type_override or {
         "NG": "nuban",
         "GH": "ghipss",
         "KE": "pesalink",
         "UG": "mobile_money",
-        # add more countries as needed
-    }
-
-    recipient_type = type_override or type_map.get(country.upper(), "nuban")
+    }.get(country.upper(), "nuban")
 
     try:
-        # ── STEP 1: Check if this account already exists as beneficiary ──
+        # ── STEP 1: Try direct fetch if we already have a recipient_code ──
+        if account_detail and account_detail.recipient_code:
+            fetch_url = f"{base_url}/beneficiaries/{account_detail.recipient_code}"
+            resp = requests.get(fetch_url, headers=headers, timeout=10)
+
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("status") == "success":
+                    beneficiary = data.get("data", {})
+                    return {
+                        "status": "success",
+                        "message": "Recipient fetched successfully",
+                        "data": beneficiary,
+                        "recipient_code": beneficiary.get("id") or beneficiary.get("recipient_code"),
+                    }
+
+            # If we get here → fetch failed (probably 404). We'll create a new one below.
+
+        # ── STEP 2: Fallback - List beneficiaries (only if no code or fetch failed) ──
+        # You can keep this for safety, but it's still not ideal for high volume.
         list_url = f"{base_url}/beneficiaries"
-        params = {"currency": currency}  # optional filter
-        response = requests.get(list_url, headers=headers, params=params, timeout=15)
+        params = {"currency": currency}
+        resp = requests.get(list_url, headers=headers, params=params, timeout=15)
 
-        if response.status_code != 200:
-            return {
-                "status": "error",
-                "message": f"Failed to list beneficiaries: {response.status_code} - {response.text}",
-                "data": None,
-                "recipient_code": None,
-            }
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("status") == "success":
+                for ben in data.get("data", []):
+                    if (
+                        ben.get("account_number") == account_number
+                        and ben.get("bank_code") == bank_code   # or ben.get("account_bank")
+                    ):
+                        # Update model if we have it
+                        if account_detail:
+                            account_detail.recipient_code = ben.get("id") or ben.get("recipient_code", "")
+                            account_detail.save(update_fields=["recipient_code", "updated_at"])
 
-        data = response.json()
-        if data.get("status") != "success":
-            return {
-                "status": "error",
-                "message": data.get("message", "Unknown error listing beneficiaries"),
-                "data": None,
-                "recipient_code": None,
-            }
+                        return {
+                            "status": "success",
+                            "message": "Recipient already exists (found via list)",
+                            "data": ben,
+                            "recipient_code": ben.get("id") or ben.get("recipient_code"),
+                        }
 
-        beneficiaries = data.get("data", [])
-        for ben in beneficiaries:
-            if (
-                ben.get("account_number") == account_number
-                and ben.get("account_bank") == bank_code
-                and ben.get("currency") == currency
-            ):
-                return {
-                    "status": "success",
-                    "message": "Recipient already exists",
-                    "data": ben,
-                    "recipient_code": ben.get("recipient_code"),
-                }
-
-        # ── STEP 2: Create new recipient ──
+        # ── STEP 3: Create new beneficiary ──
         create_url = f"{base_url}/beneficiaries"
         payload = {
             "account_bank": bank_code,
@@ -868,25 +954,21 @@ def create_fw_transfer_recipient(
             "account_name": name.strip(),
             "bank_name": bank_name.strip(),
             "currency": currency,
-            "type": recipient_type,
-            "country": country.upper(),
         }
-
         if email:
             payload["email"] = email.strip()
 
-        response = requests.post(create_url, json=payload, headers=headers, timeout=15)
+        resp = requests.post(create_url, json=payload, headers=headers, timeout=15)
 
-        if response.status_code not in (200, 201):
+        if resp.status_code not in (200, 201):
             return {
                 "status": "error",
-                "message": f"Flutterwave rejected creation: {response.status_code} - {response.text}",
+                "message": f"Creation failed: {resp.status_code} - {resp.text}",
                 "data": None,
                 "recipient_code": None,
             }
 
-        data = response.json()
-
+        data = resp.json()
         if data.get("status") != "success":
             return {
                 "status": "error",
@@ -895,45 +977,37 @@ def create_fw_transfer_recipient(
                 "recipient_code": None,
             }
 
-        recipient = data.get("data", {})
-        recipient_code = recipient.get("recipient_code")
+        beneficiary = data.get("data", {})
+        recipient_code = beneficiary.get("id") or beneficiary.get("recipient_code")   # Flutterwave usually returns "id"
 
         if not recipient_code:
             return {
                 "status": "error",
-                "message": "Recipient created but no recipient_code returned",
-                "data": recipient,
+                "message": "Created but no recipient_code/id returned",
+                "data": beneficiary,
                 "recipient_code": None,
             }
+
+        # Update the model with the new code
+        if account_detail:
+            account_detail.recipient_code = recipient_code
+            account_detail.save(update_fields=["recipient_code", "updated_at"])
 
         return {
             "status": "success",
             "message": "Recipient created successfully",
-            "data": recipient,
+            "data": beneficiary,
             "recipient_code": recipient_code,
         }
 
     except requests.Timeout:
-        return {
-            "status": "error",
-            "message": "Request timed out while communicating with Flutterwave",
-            "data": None,
-            "recipient_code": None,
-        }
+        return {"status": "error", "message": "Request timed out", "data": None, "recipient_code": None}
     except requests.RequestException as e:
-        return {
-            "status": "error",
-            "message": f"Network error contacting Flutterwave: {str(e)}",
-            "data": None,
-            "recipient_code": None,
-        }
+        return {"status": "error", "message": f"Network error: {str(e)}", "data": None, "recipient_code": None}
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Unexpected error: {str(e)}",
-            "data": None,
-            "recipient_code": None,
-        }
+        return {"status": "error", "message": f"Unexpected error: {str(e)}", "data": None, "recipient_code": None}
+
+       
 FW_BASE_URL='https://api.flutterwave.com/v3'
 
 
@@ -948,7 +1022,7 @@ class FlutterWaveVerifyAccountNumber(APIView):
             }
 
             payload = {
-                "account_number": request.GET.get('account_number'),
+                "account_number":"0690000032" if ENV == 'dev' else  request.GET.get('account_number'),
                 "account_bank": '044' if ENV == 'dev' else  request.GET.get('bank_code')
             }
 

@@ -277,16 +277,28 @@ class CartView(APIView):
 
     def post(self, request):
         product_id = request.data.get('product_id')
+        size_id = request.data.get('size')
+        color_id = request.data.get('color')
+        quantity = int(request.data.get('quantity', 1))
+
         customer, _ = Customer.objects.get_or_create(user = request.user)
         try:
             product = Product.objects.get(id=product_id, is_published=True)
         except Product.DoesNotExist:
             return Response({"status":"error", "message": "Product not found."}, status=404)
-        serializer = CartItemSerializer(data = request.data, partial = True)
-        if serializer.is_valid():
-            serializer.save(customer = customer, product = product)
-        else:
-            print(serializer.error_messages)
+            
+        cart_item, created = CartItem.objects.get_or_create(
+            customer=customer,
+            product=product,
+            size_id=size_id,
+            color_id=color_id,
+            defaults={'quantity': quantity}
+        )
+        
+        if not created:
+            cart_item.quantity += quantity
+            cart_item.save()
+            
         return Response({"status":"success", "message": "Cart updated successfully."})
     
 
@@ -298,19 +310,61 @@ class CartView(APIView):
             product = Product.objects.get(id=product_id, is_published=True)
         except Product.DoesNotExist:
             return Response({"status":"error", "message": "Product not found."}, status=404)
-        cart_item = CartItem.objects.get(id=cart_item_id)
-        serializer = CartItemSerializer(cart_item, data = request.data, partial = True)
-        if serializer.is_valid():
-            serializer.save(customer = customer, product = product)
+
+        if cart_item_id:
+            try:
+                cart_item = CartItem.objects.get(id=cart_item_id)
+            except CartItem.DoesNotExist:
+                # 🧟‍♂️ React provided a zombie item ID (cart not cleared after Checkout) -> Auto-heal it!
+                size_id = request.data.get('size')
+                color_id = request.data.get('color')
+                cart_item, _ = CartItem.objects.get_or_create(
+                    product=product, size_id=size_id, color_id=color_id, customer=customer,
+                    defaults={'quantity': int(request.data.get('quantity', 1))}
+                )
+                
+            serializer = CartItemSerializer(cart_item, data = request.data, partial = True)
+            if serializer.is_valid():
+                serializer.save(customer = customer, product = product)
+            else:
+                return Response({"status":"error", "message": "Validation failed", "errors": serializer.errors}, status=400)
         else:
-            print(serializer.error_messages)
+            # Fallback for syncs before id refreshes
+            size_id = request.data.get('size')
+            color_id = request.data.get('color')
+            cart_item, created = CartItem.objects.get_or_create(
+                product=product, size_id=size_id, color_id=color_id, customer=customer,
+                defaults={'quantity': int(request.data.get('quantity', 1))}
+            )
+            
+            serializer = CartItemSerializer(cart_item, data = request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save(customer = customer, product = product)
+            else:
+                return Response({"status":"error", "message": "Validation failed", "errors": serializer.errors}, status=400)
+                    
         return Response({"status":"success", "message": "Cart updated successfully."})
 
     def delete(self, request):
         item_id = request.data.get('item_id')
-        deleted, _ = CartItem.objects.filter(id=item_id, customer=request.user.customer_profile).delete()
-        if deleted:
-            return Response({"status":"success", "message": "Item removed from cart."})
+        if item_id:
+            deleted, _ = CartItem.objects.filter(id=item_id, customer=request.user.customer_profile).delete()
+            if deleted:
+                return Response({"status":"success", "message": "Item removed from cart."})
+                
+        # Fallback to variant identifiers if explicitly omitted due to browser caching delays
+        product_id = request.data.get('product_id')
+        size_id = request.data.get('size_id')
+        color_id = request.data.get('color_id')
+        
+        if product_id and size_id and color_id:
+            deleted, _ = CartItem.objects.filter(
+                product_id=product_id, size_id=size_id, color_id=color_id, customer=request.user.customer_profile
+            ).delete()
+            
+            if deleted:
+                return Response({"status":"success", "message": "Item removed from cart."})
+                
         return Response({"status":"error", "message": "Item not found in cart."}, status=404)
 
 

@@ -55,7 +55,7 @@ class CartItem(models.Model):
     properties = models.JSONField(default=dict)
 
     class Meta:
-        unique_together = ('customer', 'product')
+        pass
 
     def subtotal(self):
         return self.quantity * self.product.price

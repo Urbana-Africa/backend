@@ -58,9 +58,9 @@ class CheckoutView(APIView):
                 #     is_default=True,  # optional
                 # )
 
-            # 2️⃣ Get shipping method
-            shipping_method_key = request.data['shipping_method']
-            shipping_amount = request.data['shipping_amount']
+            # 2️⃣ Clear shipping requirement
+            # shipping_method is passed down or defaulted to "Designer Fulfilled"
+            shipping_method = request.data.get('shipping_method', 'Designer Fulfilled')
 
             # 3️⃣ Calculate totals
             cart_items = CartItem.objects.filter(customer=customer).select_related('product')
@@ -70,16 +70,13 @@ class CheckoutView(APIView):
                 if item.product.stock < item.quantity:
                     return Response({"status":"error", "message":f'{item.product.name} is out of stock'}, status=400)
 
-            print(shipping_amount)
             subtotal = sum([item.subtotal() for item in cart_items])
-            total_amount = subtotal + int(shipping_amount)
+            total_amount = subtotal # logistics handled by designer
 
             # 4️⃣ Create Payment record
             invoice = Invoice.objects.create(
                 amount=total_amount,
                 user = request.user
-                # payment_method=request.data["payment_method"],
-                # is_paid=False
             )
 
             # 5️⃣ Create Order
@@ -88,7 +85,7 @@ class CheckoutView(APIView):
                 order_id= f"URBON-{round(random())*9}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random() * 99999999990).__round__()}",
                 customer=customer,
                 shipping_address=shipping_address,
-                shipping_method = request.data['shipping_method'],
+                shipping_method=shipping_method,
                 total_amount=total_amount,
                 status='pending'
             )
@@ -272,18 +269,15 @@ class CartView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        Customer.objects.get_or_create(user= request.user) 
+        customer, _ = Customer.objects.get_or_create(user=request.user)
 
-        cart_items = CartItem.objects.filter(customer=request.user.customer_profile)
+        cart_items = CartItem.objects.filter(customer=customer)
         serializer = CartItemSerializer(cart_items, many=True)
         return Response({"status":"success", "message": "Cart retrieved successfully.", "data": serializer.data})
 
     def post(self, request):
         product_id = request.data.get('product_id')
-        try:
-            customer = request.user.customer_profile
-        except Customer.DoesNotExist:
-            customer, _ = Customer.objects.get_or_create(user = request.user)
+        customer, _ = Customer.objects.get_or_create(user = request.user)
         try:
             product = Product.objects.get(id=product_id, is_published=True)
         except Product.DoesNotExist:
@@ -299,10 +293,7 @@ class CartView(APIView):
     def put(self, request):
         product_id = request.data.get('product_id')
         cart_item_id = request.data.get('cart_item_id')
-        try:
-            customer = request.user.customer_profile
-        except Customer.DoesNotExist:
-            customer, _ = Customer.objects.get_or_create(user = request.user)
+        customer, _ = Customer.objects.get_or_create(user = request.user)
         try:
             product = Product.objects.get(id=product_id, is_published=True)
         except Product.DoesNotExist:

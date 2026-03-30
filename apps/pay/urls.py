@@ -5,7 +5,7 @@ from apps.pay.initialize import InitializeFlutterwavePayment, InitializePaystack
 from apps.pay.webhooks import FlutterwaveWebhookView, PaystackWebhookView, StripeWebhookView
 from . import views as payviews
 from rest_framework.routers import DefaultRouter
-from .views import AccountDetailView, FlutterWaveVerifyAccountNumber, FlutterwaveBanksView, InitiatePayoutView
+from .views import AccountDetailView, FlutterWaveVerifyAccountNumber, FlutterwaveBanksView
 
 
 router = DefaultRouter(trailing_slash=False)
@@ -13,8 +13,13 @@ router = DefaultRouter(trailing_slash=False)
 
 urlpatterns = [
     # path('make-payment', payviews.MakePayment.as_view(),name='pay'),
-      path("wallet/summary", payviews.WalletSummaryView.as_view()),
-    path("wallet/withdraw", payviews.CreateWithdrawalView.as_view()),
+    path("wallet/summary", payviews.WalletSummaryView.as_view()),
+    path('withdrawals/request', payviews.RequestWithdrawalView.as_view()),
+    path('withdrawals/<str:withdrawal_id>/approve', payviews.ApproveWithdrawalView.as_view()),
+    path('withdrawals/<str:withdrawal_id>/process', payviews.ProcessWithdrawalView.as_view()),
+    path('withdrawals/<str:withdrawal_id>/complete', payviews.CompleteWithdrawalView.as_view()),
+    path('withdrawals/<str:withdrawal_id>/fail', payviews.FailWithdrawalView.as_view()),
+    path('escrow/<str:escrow_id>/release', payviews.ReleaseEscrowView.as_view()),
     path('', payviews.Dashboard.as_view(), name='pay_dashboard'),
     path('my-transactions', payviews.MyTransactions.as_view(),
          name='my_transactions'),
@@ -37,9 +42,6 @@ path("webhooks/stripe/", StripeWebhookView.as_view(), name="stripe-webhook"),
     path("init/stripe", InitializeStripePayment.as_view()),
       path("account", AccountDetailView.as_view(), name="account-detail"),
           path("banks", FlutterwaveBanksView.as_view()),
-    path('fw/verify-account', FlutterWaveVerifyAccountNumber.as_view(),
-         ),
-              path('fw/initiate-payout', InitiatePayoutView.as_view(),
-         ),
+    path('fw/verify-account', FlutterWaveVerifyAccountNumber.as_view()),
     # path("capture-paypal-order/", payviews.CapturePayPalOrder.as_view(), name="paypal-capture"),
 ]

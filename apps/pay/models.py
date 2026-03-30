@@ -503,34 +503,6 @@ class Escrow(models.Model):
     class Meta:
         db_table = "escrows"
 
-    @transaction.atomic
-    def release_funds(self):
-        if self.status != "held":
-            raise ValidationError("Escrow already processed")
-
-        designer_wallet, _ = Wallet.objects.get_or_create(user=self.designer)
-
-        designer_share = self.amount - self.platform_commission
-
-        # Move pending → available
-        designer_wallet.available_balance += designer_share
-        designer_wallet.save()
-
-        WalletTransaction.objects.create(
-            wallet=designer_wallet,
-            user=self.designer,
-            transaction_type="escrow_release",
-            status="completed",
-            amount=designer_share,
-            reference=f"ESCROW-{self.id}",
-            related_payment=self.payment,
-            related_order_id=self.order_id,
-        )
-
-        self.status = "released"
-        self.released_at = timezone.now()
-        self.save(update_fields=["status", "released_at"])
-
 
 # =============================
 # WITHDRAWALS (Flutterwave)
@@ -559,30 +531,6 @@ class Withdrawal(models.Model):
 
     class Meta:
         db_table = "withdrawals"
-
-    @transaction.atomic
-    def process_withdrawal(self):
-        if self.wallet.available_balance < self.amount:
-            raise ValidationError("Insufficient balance")
-
-        self.wallet.available_balance -= self.amount
-        self.wallet.is_locked = True
-        self.wallet.save()
-
-        WalletTransaction.objects.create(
-            wallet=self.wallet,
-            user=self.user,
-            transaction_type="withdrawal",
-            status="completed",
-            amount=self.amount,
-            reference=f"WDR-{self.id}",
-            description="Withdrawal to bank"
-        )
-
-        self.status = "processing"
-        self.save(update_fields=["status"])
-
-
 
 
 class Transaction(models.Model):

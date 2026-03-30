@@ -569,29 +569,100 @@ class ReleaseEscrowView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, escrow_id):
-        escrow = get_object_or_404(Escrow, id=escrow_id)
-        escrow.release_funds()
-        return Response({"detail": "Escrow released successfully"})
+        from apps.pay.services.escrow import release_escrow
+        try:
+            escrow = get_object_or_404(Escrow, id=escrow_id)
+            if request.user != escrow.customer and not request.user.is_superuser and not request.user.is_staff:
+                return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+            
+            release_escrow(escrow_id, request.user)
+            return Response({"detail": "Escrow released successfully"})
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class CreateWithdrawalView(APIView):
+class RequestWithdrawalView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        wallet = request.user.wallet
-        serializer = WithdrawalSerializer(data=request.data)
-
-        if serializer.is_valid():
-            withdrawal = serializer.save(
-                wallet=wallet,
+        from apps.pay.services.withdrawals import request_withdrawal
+        amount = request.data.get("amount")
+        if not amount:
+            return Response({"error": "Amount is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        account_detail = AccountDetail.objects.filter(user=request.user).first()
+        if not account_detail:
+            return Response({"error": "No bank account details found"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            withdrawal = request_withdrawal(
                 user=request.user,
-                reference=f"WDR-{wallet.id}-{timezone.now().timestamp()}"
+                amount=amount,
+                bank_code=account_detail.bank_code,
+                account_number=account_detail.account_number,
+                bank_name=account_detail.bank_name,
+                account_name=account_detail.account_name
             )
-            withdrawal.process_withdrawal()
-            return Response(WithdrawalSerializer(withdrawal).data)
+            return Response(WithdrawalSerializer(withdrawal).data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
+class ApproveWithdrawalView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, withdrawal_id):
+        if not request.user.is_superuser and not request.user.is_staff:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+        from apps.pay.services.withdrawals import approve_withdrawal
+        try:
+            withdrawal = approve_withdrawal(withdrawal_id, request.user)
+            return Response(WithdrawalSerializer(withdrawal).data)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ProcessWithdrawalView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, withdrawal_id):
+        if not request.user.is_superuser and not request.user.is_staff:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+        from apps.pay.services.withdrawals import process_withdrawal
+        try:
+            withdrawal = process_withdrawal(withdrawal_id, request.user)
+            return Response(WithdrawalSerializer(withdrawal).data)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CompleteWithdrawalView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, withdrawal_id):
+        if not request.user.is_superuser and not request.user.is_staff:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+        from apps.pay.services.withdrawals import complete_withdrawal
+        try:
+            withdrawal = complete_withdrawal(withdrawal_id)
+            return Response(WithdrawalSerializer(withdrawal).data)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FailWithdrawalView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, withdrawal_id):
+        if not request.user.is_superuser and not request.user.is_staff:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+        from apps.pay.services.withdrawals import fail_withdrawal
+        try:
+            withdrawal = fail_withdrawal(withdrawal_id, reason=request.data.get("reason", ""))
+            return Response(WithdrawalSerializer(withdrawal).data)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class WalletSummaryView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1039,89 +1110,3 @@ class FlutterWaveVerifyAccountNumber(APIView):
                 'status':'error',
                 'message':f'error occured at {e}'
             })
-
-
-
-
-
-class InitiatePayoutView(APIView):
-
-    def post(self, request):
-        try:
-            amount = float(request.data.get("amount"))
-            narration = request.data.get("narration")
-
-            wallet = Wallet.objects.get(user=request.user)
-            account_detail = AccountDetail.objects.get(
-                user=request.user,
-            )
-
-            if wallet.is_locked:
-                return Response(
-                    {"message": "Transaction cannot be processed. Try again in few minutes", "status": "error"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if amount > wallet.available_balance:
-                return Response(
-                    {"message": "Insufficient funds", "status": "error"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # create local transaction
-            transaction = Transaction.objects.create(
-                user=request.user,
-                transaction_type="withdrawal",
-                amount=amount,
-                description=narration,
-            )
-
-            headers = {
-                "Authorization": f"Bearer {get_flutterwave_keys()['secret_key']}",
-                "Content-Type": "application/json",
-            }
-
-            payload = {
-                "account_bank": account_detail.bank_code,
-                "account_number": account_detail.account_number,
-                "amount": amount,
-                "narration": narration,
-                "currency": "NGN",
-                "reference": str(transaction.id),
-                # "callback_url": f"{settings.BASE_URL}/pay/webhook/flutterwave",
-                "debit_currency": "NGN"
-            }
-
-            response = requests.post(
-                "https://api.flutterwave.com/v3/transfers",
-                json=payload,
-                headers=headers,
-                timeout=30
-            )
-
-            data = response.json()
-            # print(data)
-
-            if data.get("status") != "success":
-                return Response(
-                    {"status": "error", "data": data},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # deduct balance only after successful API request
-            wallet.available_balance -= amount
-            wallet.save()
-
-            return Response(
-                {"status": "success", "data": data},
-                status=status.HTTP_200_OK
-            )
-
-        except Exception as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-
-

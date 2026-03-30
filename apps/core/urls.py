@@ -26,6 +26,7 @@ from .views import (
     CategoryListView,
     ProductListView,
     ReviewCreateView,
+    SeedDummyDataView,
 )
 
 # -------------------------------
@@ -57,6 +58,9 @@ urlpatterns += [
 
     # 🏷 Categories
     path("categories", CategoryListView.as_view(), name="core-categories"),
+    
+    # 🧪 Seeding
+    path("seed-dummy-data", SeedDummyDataView.as_view(), name="seed-dummy-data"),
     
     # ✉ Contact
     path("contact", ContactMessageView.as_view(), name="contact-message"),

@@ -785,3 +785,133 @@ class SearchSuggestions(APIView):
 #     serializer_class = ProductSerializer
 #     filter_backends = [SearchFilter]
 #     search_fields = ["name"]
+
+
+class SeedDummyDataView(APIView):
+    """
+    Endpoint to generate a dummy approved Designer and 10 dummy Products.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from django.contrib.auth import get_user_model
+        import random
+        import requests
+        from django.core.files.base import ContentFile
+        from apps.designers.models import Designer, DesignerProduct
+        from apps.core.models import Category, Product, Currency, MediaAsset, Sizes, Color
+
+        User = get_user_model()
+
+        # 1. Create or get Category
+        category, _ = Category.objects.get_or_create(
+            name="Dummy Category",
+            defaults={"slug": "dummy-category"}
+        )
+
+        currency, _ = Currency.objects.get_or_create(
+            code="NGN",
+            defaults={"name": "Naira", "symbol": "₦", "is_active": True}
+        )
+
+        # 2. Create or get Dummy User
+        username = f"dummy_designer_{random.randint(1000, 9999)}"
+        email = f"{username}@example.com"
+        user, user_created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                "username": username,
+                "first_name": "Dummy",
+                "last_name": "Designer",
+                "is_active": True
+            }
+        )
+        if user_created:
+            user.set_password("password123")
+            user.save()
+
+        # 3. Create or update Designer profile
+        designer, _ = Designer.objects.get_or_create(
+            user=user,
+            defaults={
+                "brand_name": f"Dummy Brand {username}",
+                "status": Designer.Status.APPROVED,
+                "is_verified": True
+            }
+        )
+        designer.status = Designer.Status.APPROVED
+        
+        try:
+            profile_url = f"https://picsum.photos/seed/designer_{username}/400/400"
+            resp_prof = requests.get(profile_url, timeout=10)
+            if resp_prof.status_code == 200:
+                designer.profile_picture.save(f"profile_{username}.jpg", ContentFile(resp_prof.content), save=False)
+                designer.banner_image.save(f"banner_{username}.jpg", ContentFile(resp_prof.content), save=False)
+        except Exception as e:
+            print(f"Failed to fetch profile picture for {username}: {e}")
+
+        designer.save()
+
+        # Ensure some sizes exist globally
+        size_s, _ = Sizes.objects.get_or_create(name="S", defaults={"description": "Small"})
+        size_m, _ = Sizes.objects.get_or_create(name="M", defaults={"description": "Medium"})
+        size_l, _ = Sizes.objects.get_or_create(name="L", defaults={"description": "Large"})
+
+        # 4. Create 10 Dummy Products
+        created_products = []
+        for i in range(1, 11):
+            prod_name = f"Dummy Product {i} - {random.randint(100, 999)}"
+            slug_base = prod_name.lower().replace(" ", "-")
+
+            product = Product.objects.create(
+                user=user,
+                name=prod_name,
+                slug=slug_base,
+                description="This is an exclusive dummy product featuring modern designs and high-quality materials.",
+                price=random.randint(5000, 50000),
+                currency=currency,
+                category=category,
+                stock=50,
+                is_published=True,
+                is_admin_published=True,
+                is_active=True,
+                featured=True
+            )
+
+            # Attach Sizes
+            product.sizes.add(size_s, size_m, size_l)
+
+            # Attach Colors (Name must be globally unique per user's model design)
+            Color.objects.get_or_create(name=f"Black - {slug_base}", hex_code="#000000", product=product)
+            Color.objects.get_or_create(name=f"White - {slug_base}", hex_code="#FFFFFF", product=product)
+
+            # Generate and attach 1 dummy picture from picsum
+            try:
+                img_url = f"https://picsum.photos/seed/{slug_base}/800/800"
+                resp = requests.get(img_url, timeout=10)
+                if resp.status_code == 200:
+                    asset = MediaAsset.objects.create(
+                        user=user,
+                        media_type=MediaAsset.MediaType.IMAGE,
+                        alt_text=f"Dummy Image for {prod_name}"
+                    )
+                    asset.file.save(f"{slug_base}.jpg", ContentFile(resp.content), save=True)
+                    product.media.add(asset)
+            except Exception as e:
+                print(f"Failed to fetch image for {prod_name}: {e}")
+
+            DesignerProduct.objects.create(
+                designer=designer,
+                product=product,
+                featured=True,
+                is_active=True,
+                stock=50
+            )
+            created_products.append(product.name)
+
+        return Response({
+            "status": "success",
+            "message": "Successfully seeded dummy designer, products, and images.",
+            "designer": designer.brand_name,
+            "created_products": created_products
+        })

@@ -836,13 +836,14 @@ class SeedDummyDataView(APIView):
             defaults={
                 "brand_name": f"Dummy Brand {username}",
                 "status": Designer.Status.APPROVED,
-                "is_verified": True
+                "is_verified": True,
+                "country": "NG",
             }
         )
         designer.status = Designer.Status.APPROVED
         
         try:
-            profile_url = f"https://picsum.photos/seed/designer_{username}/400/400"
+            profile_url = f"https://lh3.googleusercontent.com/aida-public/AB6AXuA8tDKjTl6IryZVSGy3zfH575kPuZ0hC8JMAvsrqbJPyOAq74BuRzeLtodBr8VN2C-gSyCU5GnM2j1CNQ7EvWqBjEodKj4O1A9EVtSfLUeHT7jokO7uTOpOGxlNLEVsgY90SwTywyQJC-1tVx6jkx_OxC-qXCkR81S7sZ5S_Fc0H6-sTO6lT2nJbvJym1QrlPR2W-Trb4SdmvMePmieH-sPUS-4cTyS8GPmtkGdO5D0tWJEu51PWQuc2yRjyPygCPwCpuCi9PY-jsQ"
             resp_prof = requests.get(profile_url, timeout=10)
             if resp_prof.status_code == 200:
                 designer.profile_picture.save(f"profile_{username}.jpg", ContentFile(resp_prof.content), save=False)
@@ -887,7 +888,7 @@ class SeedDummyDataView(APIView):
 
             # Generate and attach 1 dummy picture from picsum
             try:
-                img_url = f"https://picsum.photos/seed/{slug_base}/800/800"
+                img_url = f"https://lh3.googleusercontent.com/aida-public/AB6AXuCOIN4HqXs7bddfJeL_Gr93Ms_8dvuFHy7E_3y36ftHUHnt6ZGPp_oTBXI9nyhE-Ho9HDK3NdDQjE4777OEYJesmDxyexbfbqJbK6Mh8zHHNzHh5iZBWo5CVFqSd4C7br0_4LVVYjfzxBhMhb-0EgJFhWQsOq4zCcjGMLEzHo7eDHWtFSNKDmtzHYzv1QvBxDwhduahPQVfzlcSpkhZju7yQpaIusTC_KgPVvoUSLqj7z97FioLknzG8hvv-AvAra8vxei-PIvB02k"
                 resp = requests.get(img_url, timeout=10)
                 if resp.status_code == 200:
                     asset = MediaAsset.objects.create(
@@ -914,4 +915,4 @@ class SeedDummyDataView(APIView):
             "message": "Successfully seeded dummy designer, products, and images.",
             "designer": designer.brand_name,
             "created_products": created_products
-        })
+        })

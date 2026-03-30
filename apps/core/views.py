@@ -860,7 +860,7 @@ class SeedDummyDataView(APIView):
 
         # 4. Create 10 Dummy Products
         created_products = []
-        for i in range(1, 11):
+        for i in range(1, 6):
             prod_name = f"Dummy Product {i} - {random.randint(100, 999)}"
             slug_base = prod_name.lower().replace(" ", "-")
 

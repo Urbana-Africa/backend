@@ -37,8 +37,8 @@ from paystackease import PayStackWebhook, PayStackSignatureVerifyError
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from .config import get_flutterwave_keys, get_paystack_keys
 from django.template.loader import render_to_string
-from .models import Wallet, Escrow
-from .serializers import WalletSerializer, WithdrawalSerializer
+from .models import Wallet, Escrow, Withdrawal, Invoice
+from .serializers import WalletSerializer, WalletTransactionSerializer, WithdrawalSerializer
 
 
 
@@ -684,7 +684,196 @@ class WalletSummaryView(APIView):
             "available_balance": wallet.available_balance,
             "pending_balance": wallet.pending_balance,
             "lifetime_earnings": lifetime_earnings,
+            "currency": wallet.currency,
             "recent_activity": WalletTransactionSerializer(recent_transactions, many=True).data
+        })
+
+
+class InitiatePayoutView(APIView):
+    """
+    POST /pay/fw/initiate-payout
+    Instant designer withdrawal — no admin gate.
+    Fires Flutterwave transfer immediately in background.
+    Returns the Withdrawal record so the frontend can poll status.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from apps.pay.services.withdrawals import request_withdrawal
+        amount = request.data.get("amount")
+        if not amount:
+            return Response({"error": "Amount is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        account_detail = AccountDetail.objects.filter(user=request.user).first()
+        if not account_detail:
+            return Response(
+                {"error": "No bank account found. Please add your bank details in Settings."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            withdrawal = request_withdrawal(
+                user=request.user,
+                amount=amount,
+                bank_code=account_detail.bank_code,
+                account_number=account_detail.account_number,
+                bank_name=account_detail.bank_name,
+                account_name=account_detail.account_name,
+            )
+            return Response({
+                "status": "success",
+                "message": "Withdrawal initiated. Processing in the background.",
+                "withdrawal": WithdrawalSerializer(withdrawal).data,
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class WithdrawalStatusView(APIView):
+    """
+    GET /pay/withdrawals/<id>/status
+    Polls Flutterwave for live transfer status and syncs DB.
+    Used by frontend background polling.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, withdrawal_id):
+        from apps.pay.services.withdrawals import check_withdrawal_status
+        try:
+            withdrawal = Withdrawal.objects.get(id=withdrawal_id, user=request.user)
+        except Withdrawal.DoesNotExist:
+            return Response({"error": "Withdrawal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        result = check_withdrawal_status(withdrawal_id)
+        # Refresh after potential status update
+        withdrawal.refresh_from_db()
+        return Response({
+            "status": result["status"],
+            "flutterwave_status": result.get("flutterwave_status"),
+            "withdrawal": WithdrawalSerializer(withdrawal).data,
+        })
+
+
+class WithdrawalListView(APIView):
+    """
+    GET /pay/withdrawals
+    Returns paginated withdrawal history for the requesting user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        withdrawals = Withdrawal.objects.filter(user=request.user).order_by("-created_at")
+        page = int(request.query_params.get("page", 1))
+        limit = int(request.query_params.get("limit", 20))
+        from django.core.paginator import Paginator
+        paginator = Paginator(withdrawals, limit)
+        page_obj = paginator.get_page(page)
+        return Response({
+            "results": WithdrawalSerializer(page_obj.object_list, many=True).data,
+            "total": paginator.count,
+            "pages": paginator.num_pages,
+            "current_page": page,
+        })
+
+
+class CustomerWalletSummaryView(APIView):
+    """
+    GET /pay/customer-wallet/summary
+    Customer wallet overview — balance + recent transactions.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        wallet, _ = Wallet.objects.get_or_create(
+            user=request.user,
+            defaults={"currency": "NGN"}
+        )
+        recent = WalletTransaction.objects.filter(wallet=wallet).order_by("-created_at")[:15]
+        total_refunds = WalletTransaction.objects.filter(
+            wallet=wallet, transaction_type="refund", status="completed"
+        ).aggregate(total=Sum("amount"))["total"] or 0
+
+        return Response({
+            "available_balance": wallet.available_balance,
+            "pending_balance": wallet.pending_balance,
+            "currency": wallet.currency,
+            "total_refunds_received": total_refunds,
+            "recent_activity": WalletTransactionSerializer(recent, many=True).data,
+        })
+
+
+class WalletPaymentView(APIView):
+    """
+    POST /pay/customer-wallet/pay
+    Deducts from the customer's wallet to pay an invoice.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        invoice_id = request.data.get("invoice_id")
+        if not invoice_id:
+            return Response({"error": "invoice_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            invoice = Invoice.objects.get(id=invoice_id, user=request.user, is_used=False)
+        except Invoice.DoesNotExist:
+            return Response({"error": "Invoice not found or already paid"}, status=status.HTTP_404_NOT_FOUND)
+
+        from decimal import Decimal
+        amount = Decimal(str(invoice.amount))
+
+        try:
+            wallet = Wallet.objects.select_for_update().get(user=request.user)
+        except Wallet.DoesNotExist:
+            return Response({"error": "Wallet not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        with transaction.atomic():
+            wallet = Wallet.objects.select_for_update().get(user=request.user)
+            if wallet.available_balance < amount:
+                return Response(
+                    {"error": "Insufficient wallet balance"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            wallet.available_balance -= amount
+            wallet.save(update_fields=["available_balance"])
+
+            ref = f"WALLET-PAY-{invoice_id}-{int(timezone.now().timestamp())}"
+
+            # Create a Payment record marking wallet as the method
+            payment = Payment.objects.create(
+                user=request.user,
+                amount=amount,
+                payment_method="wallet",
+                reference=ref,
+                processor="manual",
+                status="success",
+                is_paid=True,
+                date_time_paid=timezone.now(),
+            )
+
+            invoice.payment = payment
+            invoice.is_active = True
+            invoice.is_used = True
+            invoice.save()
+
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                user=request.user,
+                transaction_type="withdrawal",
+                status="completed",
+                amount=amount,
+                reference=ref,
+                related_payment=payment,
+                description=f"Wallet payment for invoice {invoice_id}",
+                completed_at=timezone.now(),
+            )
+
+        return Response({
+            "status": "success",
+            "message": "Payment successful",
+            "payment_id": payment.id,
+            "invoice_id": invoice_id,
         })
     
 

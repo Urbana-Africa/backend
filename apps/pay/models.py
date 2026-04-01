@@ -413,6 +413,7 @@ ESCROW_STATUS = (
     ("held", "Held"),
     ("released", "Released"),
     ("refunded", "Refunded"),
+    ("disputed", "Disputed"),
 )
 
 WITHDRAWAL_STATUS = (
@@ -486,7 +487,6 @@ class WalletTransaction(models.Model):
 class Escrow(models.Model):
     id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
 
-    order_item_id = models.CharField(max_length=100)
     payment = models.ForeignKey(Payment, on_delete=models.CASCADE)
 
     customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="customer_escrows")

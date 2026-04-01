@@ -504,10 +504,106 @@ class ReturnRequestView(APIView):
 
         return_request.save()
 
+        # 🔒 Lock escrow funds — keep held until admin resolves
+        try:
+            escrow = order_item.escrow
+            if escrow:
+                from apps.pay.services.escrow import hold_escrow_for_return
+                hold_escrow_for_return(escrow.id)
+        except Exception:
+            pass  # no escrow attached yet — safe to ignore
+
         serializer = ReturnRequestSerializer(return_request)
 
         return Response({
             "status": "success",
             "message": "Return request submitted successfully.",
             "data": serializer.data
+        })
+
+
+class ReturnResolveView(APIView):
+    """
+    PATCH /customers/returns/<id>/resolve
+    Admin-only: approve or reject a return request.
+
+    Body: { "action": "approve" | "reject", "reason": "..." }
+
+    approve → refund customer wallet, escrow → refunded
+    reject  → release escrow to designer wallet, escrow → released
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, return_id):
+        if not (request.user.is_staff or request.user.is_superuser):
+            return Response({"status": "error", "message": "Forbidden"}, status=403)
+
+        action = request.data.get("action")
+        reason = request.data.get("reason", "")
+
+        if action not in ("approve", "reject"):
+            return Response(
+                {"status": "error", "message": 'action must be "approve" or "reject"'},
+                status=400,
+            )
+
+        try:
+            return_request = ReturnRequest.objects.get(return_id=return_id)
+        except ReturnRequest.DoesNotExist:
+            return Response({"status": "error", "message": "Return request not found"}, status=404)
+
+        if return_request.status not in ("pending", "reviewing"):
+            return Response(
+                {"status": "error", "message": f"Cannot resolve a return in '{return_request.status}' state"},
+                status=400,
+            )
+
+        order_item = return_request.order_item
+
+        try:
+            escrow = order_item.escrow
+        except Exception:
+            escrow = None
+
+        if action == "approve":
+            return_request.status = ReturnRequest.Status.APPROVED
+            return_request.admin_status = ReturnRequest.Status.APPROVED
+            return_request.customer_status = ReturnRequest.Status.APPROVED
+            return_request.reject_reason = ""
+
+            if escrow:
+                from apps.pay.services.escrow import refund_escrow_to_customer
+                try:
+                    refund_escrow_to_customer(escrow.id)
+                except Exception as e:
+                    return Response(
+                        {"status": "error", "message": f"Escrow refund failed: {str(e)}"},
+                        status=500,
+                    )
+
+        elif action == "reject":
+            return_request.status = ReturnRequest.Status.REJECTED
+            return_request.admin_status = ReturnRequest.Status.REJECTED
+            return_request.reject_reason = reason
+
+            if escrow:
+                from apps.pay.services.escrow import release_escrow
+                try:
+                    release_escrow(escrow.id)
+                except Exception as e:
+                    return Response(
+                        {"status": "error", "message": f"Escrow release failed: {str(e)}"},
+                        status=500,
+                    )
+
+        from django.utils import timezone as tz
+        return_request.reviewed_at = tz.now()
+        return_request.resolved_at = tz.now()
+        return_request.save()
+
+        serializer = ReturnRequestSerializer(return_request)
+        return Response({
+            "status": "success",
+            "message": f"Return {action}d successfully.",
+            "data": serializer.data,
         })

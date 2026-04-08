@@ -37,8 +37,15 @@ from paystackease import PayStackWebhook, PayStackSignatureVerifyError
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from .config import get_flutterwave_keys, get_paystack_keys
 from django.template.loader import render_to_string
-from .models import Wallet, Escrow, Withdrawal, Invoice
-from .serializers import WalletSerializer, WalletTransactionSerializer, WithdrawalSerializer
+from .models import Wallet, Escrow, Withdrawal, Invoice, Payment, Transfers, WalletTransaction
+from .serializers import WalletSerializer, WalletTransactionSerializer, WithdrawalSerializer, PaymentSerializer, InvoiceSerializer
+from apps.designers.models import Designer, DesignerProduct
+from apps.core.models import Product
+from apps.customers.models import Customer, Address, Order, OrderItem
+from apps.pay.services.escrow import release_escrow, refund_escrow_to_customer
+from django.conf import settings
+import decimal
+import random
 
 
 
@@ -714,7 +721,9 @@ class InitiatePayoutView(APIView):
         try:
             withdrawal = request_withdrawal(
                 user=request.user,
-                amount=amount,
+                amount=amount, # USD debit amount
+                payout_amount=request.data.get("payout_amount", 0),
+                payout_currency=request.data.get("payout_currency", "NGN"),
                 bank_code=account_detail.bank_code,
                 account_number=account_detail.account_number,
                 bank_name=account_detail.bank_name,
@@ -1299,3 +1308,154 @@ class FlutterWaveVerifyAccountNumber(APIView):
                 'status':'error',
                 'message':f'error occured at {e}'
             })
+
+class SeedSalesView(APIView):
+    """
+    GET /api/pay/seed-sales
+    Seeds 5 successful and 2 returned sales for EVERY designer.
+    FOR TESTING WITHDRAWALS ONLY.
+    Simple GET request, no authentication needed (only in DEBUG mode).
+    """
+    permission_classes = [] 
+
+    @transaction.atomic
+    def get(self, request):
+        if not getattr(settings, "DEBUG", False):
+            return Response({"error": "Only available in DEBUG mode"}, status=status.HTTP_403_FORBIDDEN)
+
+        # 1. Get/Create Seed Customer
+        seed_user, created = User.objects.get_or_create(
+            username="seed_customer",
+            defaults={
+                "email": "seed@example.com",
+                "first_name": "Seed",
+                "last_name": "Customer"
+            }
+        )
+        if created:
+            seed_user.set_password("password123")
+            seed_user.save()
+
+        seed_customer, _ = Customer.objects.get_or_create(user=seed_user)
+        seed_address, _ = Address.objects.get_or_create(
+            customer=seed_customer,
+            label="Seeding Address",
+            defaults={
+                "line1": "123 Seed St",
+                "city": "Lagos",
+                "state": "Lagos",
+                "country": "Nigeria",
+                "postal_code": "100001"
+            }
+        )
+
+        designers = Designer.objects.all()
+        report = []
+
+        for designer in designers:
+            # 2. Get/Create a Product for this designer
+            dp = DesignerProduct.objects.filter(designer=designer).first()
+            if not dp:
+                # Create dummy core product first
+                core_product = Product.objects.create(
+                    name=f"Sample Product for {designer.brand_name or designer.user.get_full_name()}",
+                    price=decimal.Decimal(random.randint(2000, 10000)),
+                    user=designer.user
+                )
+                dp = DesignerProduct.objects.create(
+                    designer=designer,
+                    product=core_product,
+                    stock=100
+                )
+            
+            product = dp.product
+            
+            # 3. Create Orders and Sales
+            success_count = 0
+            return_count = 0
+
+            # 5 Successful Sales
+            for i in range(5):
+                self._create_sale(seed_customer, seed_address, designer, product, "success")
+                success_count += 1
+            
+            # 2 Returned Sales
+            for i in range(2):
+                self._create_sale(seed_customer, seed_address, designer, product, "returned")
+                return_count += 1
+            
+            report.append({
+                "designer": designer.brand_name or designer.user.username,
+                "successful": success_count,
+                "returned": return_count
+            })
+
+        return Response({
+            "message": "Seeding completed",
+            "report": report
+        })
+
+    def _create_sale(self, customer, address, designer, product, sale_type):
+        # Create Payment
+        amount = product.price
+        payment = Payment.objects.create(
+            user=customer.user,
+            amount=amount,
+            status="success",
+            is_paid=True,
+            date_time_paid=timezone.now(),
+            payment_method="online",
+            processor="manual"
+        )
+
+        # Create Invoice
+        invoice = Invoice.objects.create(
+            user=customer.user,
+            payment=payment,
+            amount=int(amount),
+            is_active=True
+        )
+
+        # Create Order
+        order = Order.objects.create(
+            customer=customer,
+            invoice=invoice,
+            shipping_address=address,
+            total_amount=amount,
+            sub_total=amount,
+            order_id=f"URBON-{round(random.random())*9}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random.random() * 99999999990).__round__()}",
+            status="delivered" if sale_type == "success" else "returned"
+        )
+
+        # Create Escrow
+        # Platform commission e.g. 10%
+        commission = amount * decimal.Decimal("0.10")
+        escrow = Escrow.objects.create(
+            payment=payment,
+            customer=customer.user,
+            designer=designer.user,
+            amount=amount,
+            platform_commission=commission,
+            status="held"
+        )
+
+        # Create OrderItem
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            designer=designer.user,
+            escrow=escrow,
+            tracking_number=f"URBITR-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random.random() * 99999999990).__round__()}",
+            quantity=1,
+            amount=amount,
+            sub_total=amount,
+            status="delivered" if sale_type == "success" else "returned",
+            customer_status="received" if sale_type == "success" else "returned"
+        )
+
+        if sale_type == "success":
+            # Release escrow
+            release_escrow(escrow.id)
+        else:
+            # Refund escrow (simulating return)
+            refund_escrow_to_customer(escrow.id)

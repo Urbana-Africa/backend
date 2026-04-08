@@ -192,17 +192,29 @@ class Logout(APIView):
     authentication_classes=()
 
     def post(self, request):
-
         try:
             logout(request)
-            # res.delete_cookie('access_token', path='/', samesite='None')
-            # res.delete_cookie('refresh_token', path='/', samesite='None')
-            # return {'success':True}
-            return Response({'success':True,'status':'success'})
+            response = Response({'success': True, 'status': 'success'})
+            
+            # 🍪 Clear HttpOnly JWT cookies
+            response.delete_cookie(
+                settings.SIMPLE_JWT["AUTH_COOKIE"],
+                path="/",
+                domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+                samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            )
+            response.delete_cookie(
+                settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+                path="/",
+                domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+                samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            )
+            
+            return response
 
         except Exception as e:
-            print(e)
-            return Response({'success':False})
+            print(f"Logout error: {e}")
+            return Response({'success': False, 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
 
 

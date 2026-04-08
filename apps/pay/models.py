@@ -514,7 +514,9 @@ class Withdrawal(models.Model):
     wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
 
-    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    amount = models.DecimalField(max_digits=14, decimal_places=2) # USD debit amount
+    payout_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    payout_currency = models.CharField(max_length=10, default="NGN")
 
     status = models.CharField(max_length=50, choices=WITHDRAWAL_STATUS, default="pending")
     reference = models.CharField(max_length=120, unique=True)

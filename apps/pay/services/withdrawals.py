@@ -18,19 +18,20 @@ def _fw_headers():
 
 
 @transaction.atomic
-def request_withdrawal(user, amount, bank_code, account_number, bank_name, account_name):
+def request_withdrawal(user, amount, payout_amount, payout_currency, bank_code, account_number, bank_name, account_name):
     """
-    Deducts balance, creates a Withdrawal record, and immediately fires the
-    Flutterwave transfer in a background thread (no admin-approval gate).
-    Returns the Withdrawal instance straight away so the caller can poll status.
+    Deducts balance (in USD), creates a Withdrawal record, and immediately fires the
+    Flutterwave transfer in a background thread.
     """
     wallet = Wallet.objects.select_for_update().filter(user=user).first()
     if not wallet:
         raise ValidationError("Wallet not found")
 
     amount = Decimal(str(amount))
-    if amount <= 0:
-        raise ValidationError("Withdrawal amount must be greater than zero")
+    payout_amount = Decimal(str(payout_amount))
+    
+    if amount <= 0 or payout_amount <= 0:
+        raise ValidationError("Withdrawal amounts must be greater than zero")
 
     if wallet.available_balance < amount:
         raise ValidationError("Insufficient balance")
@@ -44,7 +45,9 @@ def request_withdrawal(user, amount, bank_code, account_number, bank_name, accou
     withdrawal = Withdrawal.objects.create(
         wallet=wallet,
         user=user,
-        amount=amount,
+        amount=amount, # USD debit amount
+        payout_amount=payout_amount,
+        payout_currency=payout_currency,
         status="pending",
         reference=withdrawal_ref,
         bank_name=bank_name,
@@ -88,11 +91,11 @@ def _fire_flutterwave_transfer(withdrawal_id: str):
         payload = {
             "account_bank": withdrawal.bank_code,
             "account_number": withdrawal.account_number,
-            "amount": float(withdrawal.amount),
+            "amount": float(withdrawal.payout_amount), # Use dynamic payout amount
             "narration": f"Urbana payout – {withdrawal.reference}",
-            "currency": _get_user_currency(withdrawal.user),
+            "currency": withdrawal.payout_currency, # Use dynamic payout currency
             "reference": withdrawal.reference,
-            "debit_currency": "NGN",
+            "debit_currency": "NGN", # Flutterwave debit account is NGN-based
         }
 
         resp = requests.post(

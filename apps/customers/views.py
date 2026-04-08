@@ -82,7 +82,7 @@ class CheckoutView(APIView):
             # 5️⃣ Create Order
             order = Order.objects.create(
                 invoice=invoice,
-                order_id= f"URBON-{round(random())*9}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random() * 99999999990).__round__()}",
+                order_id= f"URBON-{round(random.random())*9}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random.random() * 99999999990).__round__()}",
                 customer=customer,
                 shipping_address=shipping_address,
                 shipping_method=shipping_method,
@@ -94,7 +94,7 @@ class CheckoutView(APIView):
             for item in cart_items:
                 order_item = OrderItem.objects.create(
                     order=order,
-                    tracking_number = f"URBITR-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random() * 99999999990).__round__()}",
+                    tracking_number = f"URBITR-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random.random() * 99999999990).__round__()}",
                     properties = item.properties,
                     product=item.product,
                     color=item.color,

@@ -28,8 +28,7 @@ def create_escrows_for_successful_payments():
     for item in order_items:
         payment = item.order.invoice.payment
 
-        Escrow.objects.create(
-            order_item_id=item.item_id,
+        escrow = Escrow.objects.create(
             payment=payment,
             customer=payment.user,
             designer=item.designer,
@@ -37,6 +36,8 @@ def create_escrows_for_successful_payments():
             platform_commission=calculate_platform_commission(item.sub_total),
             status="held",
         )
+        item.escrow = escrow
+        item.save(update_fields=["escrow"])
 
 
 
@@ -91,7 +92,7 @@ def release_escrows_for_received_items():
             amount=designer_share,
             reference=f"ESCROW-{escrow.id}",
             related_payment=escrow.payment,
-            related_order_id=escrow.order_item_id,
+            related_order_id=escrow.order_item.item_id,
             completed_at=timezone.now()
         )
 
@@ -145,7 +146,7 @@ def auto_release_escrows_after_24hrs():
             amount=designer_share,
             reference=f"AUTO-ESCROW-{escrow.id}",
             related_payment=escrow.payment,
-            related_order_id=escrow.order_item_id,
+            related_order_id=escrow.order_item.item_id,
             completed_at=timezone.now()
         )
 

@@ -9,7 +9,8 @@ from decouple import config
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = config("SECRET_KEY")
-DEBUG = config("DEBUG", default=False, cast=bool)
+DEBUG = True
+# DEBUG = config("DEBUG", default=False, cast=bool)
 ENV = config("ENV", default="dev").lower()  # dev | prod | staging
 
 if ENV not in ["dev", "prod", "staging"]:
@@ -126,20 +127,7 @@ if IS_DEVELOPMENT:
         }
     }
 else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.mysql",
-            "NAME": config("DB_NAME"),
-            "USER": config("DB_USER"),
-            "PASSWORD": config("DB_PASSWORD"),
-            "HOST": config("DB_HOST", default="localhost"),
-            "PORT": config("DB_PORT", default="3306"),
-            "OPTIONS": {
-                "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
-            },
-        }
-    }
-
+    # Use MySQL in production or staging, current setting is just placeholder
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
@@ -172,11 +160,11 @@ if IS_PRODUCTION:
     CSRF_COOKIE_SAMESITE = "None"
     JWT_COOKIE_SAMESITE = "None"
 else:
-    COOKIE_DOMAIN = None                          # or ".urbana.local" if testing subdomains locally
-    COOKIE_SECURE = True
+    COOKIE_DOMAIN = ".urbana.local"               # allow sharing across subdomains locally
+    COOKIE_SECURE = False
     SESSION_COOKIE_SAMESITE = "Lax"
     CSRF_COOKIE_SAMESITE = "Lax"
-    JWT_COOKIE_SAMESITE = "None"
+    JWT_COOKIE_SAMESITE = "Lax"                   # SameSite=None requires Secure=True (HTTPS)
 
 # Apply domain & secure flags
 SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
@@ -274,10 +262,17 @@ else:
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
+        "http://localhost:5176",
+        "http://127.0.0.1:5173",
+        "http://urbana.local:5172",
+        "http://api.urbana.local:8000",
+        "http://admin.urbana.local:5176",
+        "http://auth.urbana.local:5173",
+        "http://customer.urbana.local:5175",
+        "http://designer.urbana.local:5174",
         "https://localhost:5173",
         "https://localhost:5174",
         "https://localhost:5175",
-        "http://127.0.0.1:5173",
         "https://urbana.local:5172",
         "https://api.urbana.local:8000",
         "https://admin.urbana.local:5176",

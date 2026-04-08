@@ -67,4 +67,5 @@ urlpatterns = [
     path("account", AccountDetailView.as_view(), name="account-detail"),
     path("banks", FlutterwaveBanksView.as_view()),
     path("fw/verify-account", FlutterWaveVerifyAccountNumber.as_view()),
+    path("seed-sales", payviews.SeedSalesView.as_view(), name="seed_sales"),
 ]

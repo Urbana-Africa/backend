@@ -815,8 +815,8 @@ class SeedDummyDataView(APIView):
         )
 
         # 2. Create or get Dummy User
-        username = f"dummy_designer_{random.randint(1000, 9999)}"
-        email = f"{username}@example.com"
+        username = f"designer_{random.randint(1000, 9999)}"
+        email = f"{username}@urbanaafrica.com"
         user, user_created = User.objects.get_or_create(
             email=email,
             defaults={

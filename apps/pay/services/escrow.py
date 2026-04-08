@@ -12,7 +12,7 @@ def release_escrow(escrow_id, admin_user=None):
     Releases held escrow funds to the designer's wallet.
     Called when customer marks item received / auto-release timer fires.
     """
-    escrow = Escrow.objects.select_for_update().filter(id=escrow_id).first()
+    escrow = Escrow.objects.select_for_update().select_related('order_item').filter(id=escrow_id).first()
     if not escrow:
         raise ValidationError("Escrow not found")
 
@@ -33,7 +33,7 @@ def release_escrow(escrow_id, admin_user=None):
         amount=designer_share,
         reference=f"ESCROW-{escrow.id}",
         related_payment=escrow.payment,
-        related_order_id=escrow.order_item_id,
+        related_order_id=escrow.order_item.item_id,
         description="Escrow release to wallet",
     )
 
@@ -50,7 +50,7 @@ def refund_escrow_to_customer(escrow_id):
     Called when admin approves a return request.
     Full amount (including platform commission) is credited to the customer.
     """
-    escrow = Escrow.objects.select_for_update().filter(id=escrow_id).first()
+    escrow = Escrow.objects.select_for_update().select_related('order_item').filter(id=escrow_id).first()
     if not escrow:
         raise ValidationError("Escrow not found")
 
@@ -71,7 +71,7 @@ def refund_escrow_to_customer(escrow_id):
         amount=escrow.amount,
         reference=f"REFUND-ESCROW-{escrow.id}",
         related_payment=escrow.payment,
-        related_order_id=escrow.order_item_id,
+        related_order_id=escrow.order_item.item_id,
         description="Return approved — refund credited to wallet",
     )
 

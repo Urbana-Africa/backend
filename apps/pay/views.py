@@ -728,6 +728,7 @@ class InitiatePayoutView(APIView):
                 account_number=account_detail.account_number,
                 bank_name=account_detail.bank_name,
                 account_name=account_detail.account_name,
+                client_reference=request.data.get("client_reference"),
             )
             return Response({
                 "status": "success",
@@ -759,6 +760,7 @@ class WithdrawalStatusView(APIView):
         return Response({
             "status": result["status"],
             "flutterwave_status": result.get("flutterwave_status"),
+            "failure_reason": withdrawal.failure_reason,
             "withdrawal": WithdrawalSerializer(withdrawal).data,
         })
 

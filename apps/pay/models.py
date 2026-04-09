@@ -527,6 +527,7 @@ class Withdrawal(models.Model):
     bank_code = models.CharField(max_length=50)
     account_number = models.CharField(max_length=20)
     account_name = models.CharField(max_length=200)
+    failure_reason = models.TextField(blank=True, null=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)

@@ -18,7 +18,7 @@ def _fw_headers():
 
 
 @transaction.atomic
-def request_withdrawal(user, amount, payout_amount, payout_currency, bank_code, account_number, bank_name, account_name):
+def request_withdrawal(user, amount, payout_amount, payout_currency, bank_code, account_number, bank_name, account_name, client_reference=None):
     """
     Deducts balance (in USD), creates a Withdrawal record, and immediately fires the
     Flutterwave transfer in a background thread.
@@ -40,7 +40,8 @@ def request_withdrawal(user, amount, payout_amount, payout_currency, bank_code, 
     wallet.available_balance -= amount
     wallet.save(update_fields=["available_balance"])
 
-    withdrawal_ref = f"WDR-{wallet.id}-{int(timezone.now().timestamp())}"
+    # Generate reference or use client-provided idempotency key
+    withdrawal_ref = client_reference or f"WDR-{wallet.id}-{int(timezone.now().timestamp())}"
 
     withdrawal = Withdrawal.objects.create(
         wallet=wallet,
@@ -122,7 +123,8 @@ def _fire_flutterwave_transfer(withdrawal_id: str):
                 w.save()
         else:
             # FW rejected — refund balance
-            fail_withdrawal(withdrawal_id, reason=data.get("message", "Flutterwave error"))
+            error_msg = data.get("message", "Flutterwave error")
+            fail_withdrawal(withdrawal_id, reason=error_msg)
 
     except Exception as e:
         print(f"[Wallet] FW transfer error for {withdrawal_id}: {e}")
@@ -180,9 +182,9 @@ def check_withdrawal_status(withdrawal_id: str) -> dict:
             return {"status": "completed", "flutterwave_status": fw_status}
 
         elif fw_status in ("FAILED", "failed"):
-            fail_withdrawal(withdrawal_id, reason="Flutterwave transfer failed")
+            error_msg = data.get("message") or data.get("data", {}).get("complete_message") or "Flutterwave transfer failed"
+            fail_withdrawal(withdrawal_id, reason=error_msg)
             return {"status": "failed", "flutterwave_status": fw_status}
-
         return {"status": withdrawal.status, "flutterwave_status": fw_status}
 
     except Exception as e:
@@ -251,5 +253,7 @@ def fail_withdrawal(withdrawal_id, reason=""):
         txn.save(update_fields=["status"])
 
     withdrawal.status = "failed"
-    withdrawal.save(update_fields=["status"])
+    if reason:
+        withdrawal.failure_reason = reason
+    withdrawal.save(update_fields=["status", "failure_reason"])
     return withdrawal

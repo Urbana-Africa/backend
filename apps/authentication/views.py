@@ -766,9 +766,11 @@ class Signup(APIView):
         if serializer.is_valid():
             user = serializer.save()
             while True:
-                username = f'{user.first_name+user.last_name }{round(random()*9999)}'.lower()
+                first_name = user.first_name or ""
+                last_name = user.last_name or ""
+                username = f'{first_name}{last_name}{round(random()*999999)}'.lower()
                 try:
-                    user = User.objects.get(username= username)
+                    User.objects.get(username=username)
                 except ObjectDoesNotExist:
                     user.username = username
                     user.save()

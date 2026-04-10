@@ -1008,8 +1008,8 @@ class AccountDetailView(APIView):
 
         account_name = request.data.get("account_name")
         # Fixed: request.GET.get() returns None or str, but you had a comma making it a tuple!
-        account_number = "0690000032" if ENV == "dev" else request.data.get("account_number")
-        bank_code = "044" if ENV == "dev" else request.data.get("bank_code")
+        account_number = "0690000032" if getattr(settings, "DEBUG", False) else request.data.get("account_number")
+        bank_code = "044" if getattr(settings, "DEBUG", False) else request.data.get("bank_code")
         bank_name = request.data.get("bank_name")
 
         if not all([account_name, account_number, bank_code, bank_name]):
@@ -1293,8 +1293,8 @@ class FlutterWaveVerifyAccountNumber(APIView):
             }
 
             payload = {
-                "account_number":"0690000032" if ENV == 'dev' else  request.GET.get('account_number'),
-                "account_bank": '044' if ENV == 'dev' else  request.GET.get('bank_code')
+                "account_number":"0690000032" if getattr(settings, "DEBUG", False) else  request.GET.get('account_number'),
+                "account_bank": '044' if getattr(settings, "DEBUG", False) else  request.GET.get('bank_code')
             }
 
             response = requests.post(url, json=payload, headers=headers)

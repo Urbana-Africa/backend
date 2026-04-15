@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Urbana Studio Status Update</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1B1C1A; line-height: 1.6; margin: 0; padding: 0; background-color: #FBF9F5; }
+        .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        .header { background-color: #1B1C1A; padding: 40px; text-align: center; color: #ffffff; }
+        .content { padding: 40px; }
+        .logo { font-size: 24px; font-weight: 900; letter-spacing: -1px; text-transform: uppercase; }
+        .logo span { color: #EC6D13; font-weight: 300; }
+        .status-badge { display: inline-block; padding: 8px 16px; border-radius: 50px; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; }
+        .status-approved { background-color: #EC6D13; color: #ffffff; }
+        .status-rejected { background-color: #fce8e8; color: #ef4444; }
+        .status-pending { background-color: #f3f4f6; color: #374151; }
+        .status-blocked { background-color: #111827; color: #ffffff; }
+        h1 { font-size: 28px; font-weight: 900; margin-bottom: 20px; letter-spacing: -0.5px; }
+        p { margin-bottom: 20px; font-size: 14px; color: #4B5563; }
+        .feedback { background-color: #f9fafb; padding: 20px; border-radius: 12px; border: 1px border #e5e7eb; margin-top: 20px; }
+        .feedback h4 { margin: 0 0 10px 0; font-size: 12px; text-transform: uppercase; color: #9ca3af; letter-spacing: 1px; }
+        .feedback ul { margin: 0; padding-left: 20px; font-size: 13px; color: #374151; }
+        .footer { padding: 30px 40px; background-color: #f9fafb; text-align: center; font-size: 11px; color: #9ca3af; }
+        .button { display: inline-block; padding: 14px 28px; background-color: #1B1C1A; color: #ffffff; text-decoration: none; border-radius: 50px; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; transition: background 0.3s; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">URBANA<span>STUDIO</span></div>
+        </div>
+        <div class="content">
+            <div class="status-badge status-{{ designer.status }}">
+                {{ designer.status|upper }}
+            </div>
+            
+            <h1>Hello, {{ designer.brand_name|default:designer.user.first_name }}</h1>
+            
+            {% if designer.status == 'approved' %}
+                <p>We are delighted to welcome you to the <strong>Global Urbana Marketplace</strong>. Your brand has been curated and approved by our council.</p>
+                <p>You can now access your studio dashboard to manage orders, collections, and treasury.</p>
+                <a href="https://designer.urbanaafrica.com" class="button">Access Studio Dashboard</a>
+            {% elif designer.status == 'rejected' %}
+                <p>Thank you for your application to Urbana Studio. At this time, we require some refinements to your profile before we can approve your exhibition.</p>
+                <div class="feedback">
+                    <h4>Reviewer Feedback</h4>
+                    <ul>
+                    {% for reason in designer.status_reasons %}
+                        <li>{{ reason }}</li>
+                    {% endfor %}
+                    </ul>
+                </div>
+                <p style="margin-top: 20px;">You are welcome to update your profile and lookbooks for re-consideration.</p>
+                <a href="https://designer.urbanaafrica.com/onboard" class="button">Update Profile</a>
+            {% elif designer.status == 'blocked' %}
+                <p>Access to your Urbana Studio account has been restricted by our compliance council. If you believe this is a mistake, please reach out to our support team.</p>
+            {% else %}
+                <p>Your profile status has been updated to <strong>{{ designer.status }}</strong>. Our team is currently reviewing your latest updates.</p>
+            {% endif %}
+        </div>
+        <div class="footer">
+            &copy; 2026 Urbana Council. All rights reserved.<br>
+            Curation for the Modern African Artisan.
+        </div>
+    </div>
+</body>
+</html>

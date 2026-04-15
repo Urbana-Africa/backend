@@ -316,6 +316,52 @@ class AdminDesignerViewSet(AdminBaseViewSet):
             "stats": stats
         })
 
+    @action(detail=True, methods=["patch"], url_path="update-status")
+    def update_status(self, request, pk=None):
+        """
+        PATCH /admin/designers/{pk}/update-status
+        Triggers an email notification on every status update.
+        """
+        designer = self.get_object()
+        new_status = request.data.get("status")
+        status_reasons = request.data.get("status_reasons", [])
+
+        if not new_status:
+            return Response(
+                {"detail": "Status is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        designer.status = new_status
+        designer.status_reasons = status_reasons
+        
+        # If approved, we also mark as verified if not already
+        if new_status == Designer.Status.APPROVED:
+            designer.is_verified = True
+            
+        designer.save()
+
+        # Send email notification
+        try:
+            subject = f"Urbana Studio: Account Status Updated ({new_status.title()})"
+            context = {"designer": designer}
+            message = render_to_string("administrator/status_update.html", context)
+            
+            threading.Thread(
+                target=resend_sendmail,
+                args=(subject, [designer.user.email], message),
+            ).start()
+        except Exception as e:
+            # We don't want to fail the request if email fails, but we should log it
+            print(f"Error sending designer status update email: {str(e)}")
+
+        serializer = self.get_serializer(designer)
+        return Response({
+            "status": "success",
+            "message": f"Designer status updated to {new_status}",
+            "data": serializer.data
+        })
+
 class AdminDesignerProductViewSet(AdminBaseViewSet):
     queryset = DesignerProduct.objects.select_related("designer", "product")
     serializer_class = AdminDesignerProductSerializer

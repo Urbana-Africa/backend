@@ -5,6 +5,7 @@ from rest_framework.views import APIView,status
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apps.customers.models import Customer
+from apps.designers.models import Designer
 from apps.utils.email_sender import resend_sendmail
 from .serializers import *
 from rest_framework import status
@@ -526,7 +527,12 @@ class VerifyEmail(APIView):
                     code.delete()       
                     data['data'] = UserSerializer(user,many=False).data                    
                     data['status'] = 'success'          
-                    Customer.objects.get_or_create(user= user) 
+                    
+                    # Create appropriate profile
+                    if user.user_type == 'designer':
+                        Designer.objects.get_or_create(user=user)
+                    else:
+                        Customer.objects.get_or_create(user=user)
                 else:
                     data= {'status':'error','message':'invalid code'}
                 return Response({**data},status=status.HTTP_200_OK)
@@ -776,7 +782,12 @@ class Signup(APIView):
                     user.save()
                     break
             user.email = str(user.email).lower().strip()
+            # Handle user_type from request
+            user_type = request.data.get('user_type', 'customer')
+            if user_type in ['customer', 'designer']:
+                user.user_type = user_type
             user.save()
+            
             serialized_data = UserSerializer(user)
             send_verification_email(user)
             data = {'status':'success','data':serialized_data.data}

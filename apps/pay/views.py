@@ -520,13 +520,22 @@ class PaystackWebhookView(View):
         if event["event"] == "charge.success":
             session = event["data"]
             if session["status"] == "success":
-                payment = Payment.objects.get(payment_id = session["reference"])
-                payment.approved = True
-                payment.status = 'success'
-                payment.is_paid=True
-                payment.date_time_paid = datetime.now(utc)
-                payment.date_time_approved = datetime.now(utc)
-                payment.save()
+                try:
+                    payment = Payment.objects.get(reference=session["reference"])
+                    payment.approved = True
+                    payment.status = 'success'
+                    payment.is_paid=True
+                    payment.date_time_paid = datetime.now(utc)
+                    payment.date_time_approved = datetime.now(utc)
+                    payment.save()
+                    
+                    # Distribute Escrow
+                    from apps.pay.services.checkout import complete_successful_payment
+                    invoice = Invoice.objects.filter(payment=payment).first()
+                    if invoice:
+                        complete_successful_payment(payment, invoice)
+                except Payment.DoesNotExist:
+                    pass
         return HttpResponse(status=200)
 
 
@@ -863,10 +872,8 @@ class WalletPaymentView(APIView):
                 date_time_paid=timezone.now(),
             )
 
-            invoice.payment = payment
-            invoice.is_active = True
-            invoice.is_used = True
-            invoice.save()
+            from apps.pay.services.checkout import complete_successful_payment
+            complete_successful_payment(payment, invoice)
 
             WalletTransaction.objects.create(
                 wallet=wallet,

@@ -143,6 +143,8 @@ class OrderItem(models.Model):
     collection_destination_status = models.CharField(max_length=20, choices=COLLECTION_DESTINATION_STATUS_CHOICES, default='pending')
     collection_origin_status = models.CharField(max_length=20, choices=COLLECTION_ORIGIN_STATUS_CHOICES, default='pending')
     customer_status = models.CharField(max_length=20, choices=CUSTOMER_STATUS_CHOICES, default='pending')
+    masked_email = models.EmailField(blank=True, null=True, help_text="Forwarding alias that hides the real customer email.")
+    masked_phone = models.CharField(max_length=50, blank=True, null=True, help_text="Masked customer phone number for designer view.")
     created_at = models.DateTimeField(auto_now_add=True, null= True)
     delivered_at = models.DateTimeField(null=True, blank=True)
     
@@ -153,7 +155,18 @@ class OrderItem(models.Model):
         if not self.item_id:
             self.item_id = f"UOIT-{uuid.uuid4().hex[:15].upper()}"
         if not self.designer:
-            self.designer = self.product.user
+            if self.product:
+                self.designer = self.product.user
+                
+        # Generate masked data for designer protection
+        if not self.masked_email and self.order and self.order.customer:
+            from apps.utils.masking import generate_masked_email
+            self.masked_email = generate_masked_email(self.order.customer.user.email)
+            
+        if not self.masked_phone and self.order and self.order.customer:
+            from apps.utils.masking import generate_masked_phone
+            self.masked_phone = generate_masked_phone(self.order.customer.phone)
+
         super().save(*args, **kwargs)
         
 class ReturnRequest(BaseModel):

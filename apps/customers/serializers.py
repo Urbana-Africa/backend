@@ -3,7 +3,7 @@ from rest_framework import serializers
 from apps.authentication.serializers import UserSerializer
 from apps.pay.models import Invoice
 from apps.pay.serializers import PaymentSerializer
-from .models import Customer, Address, OrderTracking, Wishlist, CartItem, Order, OrderItem, ReturnRequest
+from .models import Customer, Address, OrderTracking, Wishlist, CartItem, Order, OrderItem, ReturnRequest, Dispute
 from apps.core.serializers import ColorSerializer, DesignerSerializer, ProductSerializer, SizesSerializer
 
 
@@ -94,10 +94,29 @@ class OrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
         fields = "__all__"
-        # fields = ['id', 'product', 'quantity', 'price','color']
 
-    # def get_subtotal(self, obj):
-    #     return obj.subtotal()
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Add return request info if exists
+        return_req = instance.return_requests.first() # latest one
+        if return_req:
+            data['return_request'] = {
+                'id': return_req.id,
+                'return_id': return_req.return_id,
+                'status': return_req.status
+            }
+        else:
+            data['return_request'] = None
+        
+        # calculate eligibility
+        data['is_return_eligible'] = False
+        if instance.status == 'delivered' and instance.delivered_at:
+             from django.utils import timezone
+             window = timezone.now() - instance.delivered_at
+             if window.days <= 7:
+                 data['is_return_eligible'] = True
+
+        return data
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -115,17 +134,34 @@ class OrderSerializer(serializers.ModelSerializer):
         data['invoice'] = InvoiceSerializer(instance.invoice).data
         return data
 
+class DisputeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Dispute
+        fields = "__all__"
+
+
 class ReturnRequestSerializer(serializers.ModelSerializer):
     order_item = OrderItemSerializer(read_only=True)
+    dispute = DisputeSerializer(read_only=True)
+    is_return_eligible = serializers.SerializerMethodField()
 
     class Meta:
         model = ReturnRequest
         fields = "__all__"
-        # fields = ['id', 'order_item', 'reason', 'status', 'created_at', 'resolved_at']
+
+    def get_is_return_eligible(self, obj):
+        return obj.is_return_eligible
 
     def to_representation(self, instance):
-        data =  super().to_representation(instance)
+        data = super().to_representation(instance)
         data['order_item'] = OrderItemSerializer(instance.order_item).data
         data['customer'] = UserSerializer(instance.order_item.order.customer.user).data
-        data['designer'] = DesignerSerializer(instance.order_item.designer.designer_profile).data
+        try:
+            data['designer'] = DesignerSerializer(instance.order_item.designer.designer_profile).data
+        except Exception:
+            data['designer'] = None
+        try:
+            data['dispute'] = DisputeSerializer(instance.dispute).data
+        except Exception:
+            data['dispute'] = None
         return data

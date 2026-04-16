@@ -552,6 +552,7 @@ class DesignerReturnRequestViewSet(DesignerBaseViewSet):
         if action_type == "approve":
 
             instance.designer_status = "approved"
+            instance.status = ReturnRequest.Status.APPROVED
             instance.save()
 
             subject = f"Your Return Request #{instance.return_id} Has Been Approved"
@@ -570,6 +571,7 @@ class DesignerReturnRequestViewSet(DesignerBaseViewSet):
                 )
 
             instance.designer_status = "rejected"
+            instance.status = ReturnRequest.Status.REJECTED
             instance.reject_reason = reason
             instance.save()
 
@@ -588,6 +590,33 @@ class DesignerReturnRequestViewSet(DesignerBaseViewSet):
 
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="confirm-receipt")
+    def confirm_receipt(self, request, return_id=None):
+        """
+        POST /designers/returns/{return_id}/confirm-receipt
+        Marks the return as received and triggers the refund process.
+        """
+        instance = self.get_object()
+
+        if instance.status != ReturnRequest.Status.APPROVED and instance.status != ReturnRequest.Status.RETURN_IN_TRANSIT:
+             return Response(
+                {"detail": "Return must be approved or in transit to confirm receipt."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instance.status = ReturnRequest.Status.RETURN_RECEIVED
+        instance.save()
+
+        # In a real system, this might trigger a background task to process the refund
+        # For now, we'll just update the status.
+
+        serializer = self.get_serializer(instance)
+        return Response({
+            "status": "success",
+            "message": "Return marked as received. Refund process initiated.",
+            "data": serializer.data
+        })
 
 
 

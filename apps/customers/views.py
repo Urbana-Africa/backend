@@ -6,10 +6,10 @@ from rest_framework.views import APIView
 from apps.core.serializers import ShippingMethodSerializer
 from apps.designers.models import DesignerOrder
 from apps.pay.models import Invoice
-from .models import Customer, Address, Wishlist, CartItem, Order, OrderItem, ReturnRequest
+from .models import Customer, Address, Wishlist, CartItem, Order, OrderItem, ReturnRequest, Dispute
 from .serializers import (
     CustomerSerializer, AddressSerializer, InvoiceSerializer, WishlistSerializer,
-    CartItemSerializer, OrderSerializer, ReturnRequestSerializer
+    CartItemSerializer, OrderSerializer, ReturnRequestSerializer, DisputeSerializer
 )
 from apps.core.models import MediaAsset, Product, ShippingMethod
 from django.utils import timezone
@@ -459,6 +459,22 @@ class ReturnRequestView(APIView):
                 "message": "Order item not found"
             }, status=404)
 
+        # validate return eligibility
+        if order_item.status not in ('delivered', 'returned'):
+            return Response({
+                "status": "error",
+                "message": "Returns can only be requested for delivered items."
+            }, status=400)
+
+        if order_item.delivered_at:
+            from datetime import timedelta
+            window = timezone.now() - order_item.delivered_at
+            if window.days > 7:
+                return Response({
+                    "status": "error",
+                    "message": "The 7-day return window for this item has closed."
+                }, status=400)
+
         # prevent duplicate return
         if ReturnRequest.objects.filter(order_item=order_item).exists():
             return Response({
@@ -607,3 +623,81 @@ class ReturnResolveView(APIView):
             "message": f"Return {action}d successfully.",
             "data": serializer.data,
         })
+
+
+# ---------------- Return Detail ----------------
+class ReturnDetailView(APIView):
+    """GET /customers/returns/<return_id> — fetch full detail for a single return."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, return_id):
+        try:
+            return_request = ReturnRequest.objects.get(
+                return_id=return_id,
+                order_item__order__customer=request.user.customer_profile
+            )
+        except ReturnRequest.DoesNotExist:
+            return Response({"status": "error", "message": "Return not found."}, status=404)
+
+        serializer = ReturnRequestSerializer(return_request)
+        return Response({"status": "success", "data": serializer.data})
+
+
+# ---------------- Dispute ----------------
+class DisputeView(APIView):
+    """POST /customers/disputes — open a dispute after a return is rejected."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return_id = request.data.get("return_id")
+        notes = request.data.get("notes", "")
+
+        try:
+            return_request = ReturnRequest.objects.get(
+                return_id=return_id,
+                order_item__order__customer=request.user.customer_profile
+            )
+        except ReturnRequest.DoesNotExist:
+            return Response({"status": "error", "message": "Return request not found."}, status=404)
+
+        if return_request.status != ReturnRequest.Status.REJECTED:
+            return Response({
+                "status": "error",
+                "message": "Disputes can only be opened on rejected return requests."
+            }, status=400)
+
+        if hasattr(return_request, "dispute"):
+            return Response({"status": "error", "message": "A dispute already exists for this return."}, status=400)
+
+        dispute = Dispute.objects.create(
+            return_request=return_request,
+            opened_by=request.user,
+            customer_notes=notes,
+        )
+
+        # Upload customer evidence photos
+        for photo in request.FILES.getlist("evidence_photos"):
+            media = MediaAsset.objects.create(
+                file=photo,
+                media_type=MediaAsset.MediaType.IMAGE
+            )
+            dispute.customer_evidence.add(media)
+
+        # Update return status
+        return_request.status = ReturnRequest.Status.DISPUTE_OPENED
+        return_request.save()
+
+        serializer = DisputeSerializer(dispute)
+        return Response({
+            "status": "success",
+            "message": "Dispute opened successfully.",
+            "data": serializer.data
+        }, status=201)
+
+    def get(self, request):
+        """GET /customers/disputes — list customer's disputes."""
+        disputes = Dispute.objects.filter(
+            return_request__order_item__order__customer=request.user.customer_profile
+        ).order_by("-created_at")
+        serializer = DisputeSerializer(disputes, many=True)
+        return Response({"status": "success", "data": serializer.data})

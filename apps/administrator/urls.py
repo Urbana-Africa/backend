@@ -34,6 +34,7 @@ router.register(r"order-tracking", AdminOrderTrackingViewSet, basename="admin-or
 # RETURN MANAGEMENT
 # =====================================================
 router.register(r"returns", AdminReturnRequestViewSet, basename="admin-returns")
+router.register(r"disputes", AdminDisputeViewSet, basename="admin-disputes")
 
 # =====================================================
 # DESIGNER MANAGEMENT

@@ -221,6 +221,7 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
         if action_type == "approve":
 
             instance.admin_status = "approved"
+            instance.status = ReturnRequest.Status.APPROVED
             instance.save()
 
             subject = f"Your Return Request #{instance.return_id} Has Been Approved"
@@ -239,6 +240,7 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
                 )
 
             instance.admin_status = "rejected"
+            instance.status = ReturnRequest.Status.REJECTED
             instance.reject_reason = reason
             instance.save()
 
@@ -257,6 +259,64 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
 
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminDisputeViewSet(AdminBaseViewSet):
+    queryset = Dispute.objects.select_related(
+        "return_request",
+        "return_request__order_item",
+        "opened_by"
+    )
+    serializer_class = AdminDisputeSerializer
+
+    filterset_fields = ["status", "resolution"]
+    search_fields = ["dispute_id"]
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
+
+    lookup_field = "dispute_id"
+    lookup_url_kwarg = "dispute_id"
+
+    @action(detail=True, methods=["post"], url_path="resolve")
+    def resolve(self, request, dispute_id=None):
+        """
+        POST /admin/disputes/{dispute_id}/resolve
+        Resolves a dispute and updates the return request status.
+        """
+        instance = self.get_object()
+        resolution = request.data.get("resolution")
+        admin_notes = request.data.get("admin_notes", "")
+        refund_amount = request.data.get("refund_amount")
+
+        if resolution not in Dispute.Resolution.values:
+            return Response(
+                {"detail": f"Invalid resolution. Must be one of: {Dispute.Resolution.values}"},
+                status=400
+            )
+
+        instance.resolution = resolution
+        instance.admin_notes = admin_notes
+        if refund_amount:
+            instance.refund_amount = refund_amount
+        
+        instance.status = Dispute.Status.RESOLVED
+        instance.resolved_at = timezone.now()
+        instance.save()
+
+        # Update associated return request
+        return_req = instance.return_request
+        return_req.status = ReturnRequest.Status.DISPUTE_RESOLVED
+        return_req.resolved_at = timezone.now()
+        return_req.save()
+
+        # Notification logic could go here (email to customer and designer)
+
+        serializer = self.get_serializer(instance)
+        return Response({
+            "status": "success",
+            "message": "Dispute resolved successfully.",
+            "data": serializer.data
+        })
 
 
 

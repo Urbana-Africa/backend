@@ -18,7 +18,7 @@ from apps.designers.models import (
 from apps.customers.models import (
     Customer, Address, Wishlist,
     CartItem, Order, OrderItem,
-    ReturnRequest, OrderTracking
+    ReturnRequest, OrderTracking, Dispute
 )
 
 
@@ -150,6 +150,21 @@ class AdminOrderTrackingSerializer(AdminBaseSerializer):
 # RETURN MANAGEMENT
 # =====================================================
 
+class AdminDisputeSerializer(AdminBaseSerializer):
+    customer_evidence = MediaAssetSerializer(many=True, read_only=True)
+    designer_evidence = MediaAssetSerializer(many=True, read_only=True)
+
+    class Meta(AdminBaseSerializer.Meta):
+        model = Dispute
+        read_only_fields = ["dispute_id", "created_at", "resolved_at"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['customer'] = UserSerializer(instance.return_request.order_item.order.customer.user).data
+        data['designer'] = AdminDesignerSerializer(instance.return_request.order_item.designer.designer_profile).data
+        return data
+
+
 class AdminReturnRequestSerializer(AdminBaseSerializer):
     product_photos = MediaAssetSerializer(many=True, read_only=True)
     packaging_photo = MediaAssetSerializer(read_only=True)
@@ -164,6 +179,10 @@ class AdminReturnRequestSerializer(AdminBaseSerializer):
         data['customer'] = UserSerializer(instance.order_item.order.customer.user).data
         data['designer'] = AdminDesignerSerializer(instance.order_item.designer.designer_profile).data
         data['order_item'] = AdminOrderItemSerializer(instance.order_item).data
+        try:
+            data['dispute'] = AdminDisputeSerializer(instance.dispute).data
+        except:
+            data['dispute'] = None
 
         return data
     

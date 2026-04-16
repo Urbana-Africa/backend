@@ -172,23 +172,31 @@ class OrderItem(models.Model):
 class ReturnRequest(BaseModel):
 
     class Status(models.TextChoices):
-        PENDING = "pending"
-        REVIEWING = "reviewing"
-        APPROVED = "approved"
-        REJECTED = "rejected"
-        RETURNED = "returned"
-        REFUNDED = "refunded"
-        CANCELED = "canceled"
+        PENDING             = "pending",             "Pending"
+        REVIEWING           = "reviewing",           "Reviewing"
+        APPROVED            = "approved",            "Approved"
+        REJECTED            = "rejected",            "Rejected"
+        RETURN_IN_TRANSIT   = "return_in_transit",   "Return In Transit"
+        RETURN_RECEIVED     = "return_received",     "Return Received"
+        REFUND_PENDING      = "refund_pending",      "Refund Pending"
+        REFUNDED            = "refunded",            "Refunded"
+        DISPUTE_OPENED      = "dispute_opened",      "Dispute Opened"
+        DISPUTE_UNDER_REVIEW= "dispute_under_review","Dispute Under Review"
+        DISPUTE_RESOLVED    = "dispute_resolved",    "Dispute Resolved"
+        DISPUTE_ESCALATED   = "dispute_escalated",   "Dispute Escalated"
+        RETURNED            = "returned",            "Returned"
+        CANCELED            = "canceled",            "Canceled"
 
     class Reason(models.TextChoices):
-        DAMAGED = "damaged"
-        WRONG_ITEM = "wrong_item"
-        WRONG_SIZE = "wrong_size"
-        NOT_AS_DESCRIBED = "not_as_described"
-        POOR_QUALITY = "poor_quality"
-        MISSING_PARTS = "missing_parts"
-        LATE_DELIVERY = "late_delivery"
-        OTHER = "other"
+        DAMAGED         = "damaged"
+        WRONG_ITEM      = "wrong_item"
+        WRONG_SIZE      = "wrong_size"
+        NOT_AS_DESCRIBED= "not_as_described"
+        POOR_QUALITY    = "poor_quality"
+        MISSING_PARTS   = "missing_parts"
+        LATE_DELIVERY   = "late_delivery"
+        CHANGED_MIND    = "changed_mind"
+        OTHER           = "other"
 
     order_item = models.ForeignKey(
         OrderItem,
@@ -204,13 +212,14 @@ class ReturnRequest(BaseModel):
     reject_reason = models.TextField(blank=True)
 
     status = models.CharField(
-        max_length=20,
+        max_length=30,
         choices=Status.choices,
         default=Status.PENDING
     )
-    designer_status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
-    admin_status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
-    customer_status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    designer_status = models.CharField(max_length=30, choices=Status.choices, default=Status.PENDING)
+    admin_status    = models.CharField(max_length=30, choices=Status.choices, default=Status.PENDING)
+    customer_status = models.CharField(max_length=30, choices=Status.choices, default=Status.PENDING)
+
     # Evidence
     product_photos = models.ManyToManyField(
         MediaAsset,
@@ -234,9 +243,21 @@ class ReturnRequest(BaseModel):
         related_name="return_unboxing_video"
     )
 
+    # Logistics
+    return_tracking_number = models.CharField(max_length=100, blank=True)
+
     # workflow timestamps
     reviewed_at = models.DateTimeField(null=True, blank=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def is_return_eligible(self):
+        """Returns True if still within the 7-day return window from delivery."""
+        from django.utils import timezone
+        delivered_at = self.order_item.delivered_at
+        if not delivered_at:
+            return False
+        return (timezone.now() - delivered_at).days <= 7
 
     def save(self, *args, **kwargs):
         if not self.return_id:
@@ -245,7 +266,70 @@ class ReturnRequest(BaseModel):
 
     def __str__(self):
         return self.return_id
-# Add after existing models
+
+
+class Dispute(BaseModel):
+    """A dispute raised by the customer after a return request is rejected."""
+
+    class Status(models.TextChoices):
+        OPENED        = "opened",         "Opened"
+        UNDER_REVIEW  = "under_review",   "Under Review"
+        RESOLVED      = "resolved",       "Resolved"
+        ESCALATED     = "escalated",      "Escalated"
+        CLOSED        = "closed",         "Closed"
+
+    class Resolution(models.TextChoices):
+        REFUND_APPROVED  = "refund_approved",  "Refund Approved"
+        REFUND_DENIED    = "refund_denied",    "Refund Denied"
+        PARTIAL_REFUND   = "partial_refund",   "Partial Refund"
+        PLATFORM_CREDIT  = "platform_credit",  "Platform Credit"
+
+    dispute_id = models.CharField(max_length=20, unique=True, editable=False)
+
+    return_request = models.OneToOneField(
+        ReturnRequest,
+        on_delete=models.CASCADE,
+        related_name="dispute"
+    )
+
+    opened_by = models.ForeignKey(
+        "authentication.User",
+        on_delete=models.CASCADE,
+        related_name="disputes_opened"
+    )
+
+    status = models.CharField(max_length=30, choices=Status.choices, default=Status.OPENED)
+    resolution = models.CharField(max_length=30, choices=Resolution.choices, null=True, blank=True)
+
+    # Customer side
+    customer_notes = models.TextField(blank=True)
+    customer_evidence = models.ManyToManyField(
+        MediaAsset,
+        blank=True,
+        related_name="dispute_customer_evidence"
+    )
+
+    # Designer side
+    designer_notes = models.TextField(blank=True)
+    designer_evidence = models.ManyToManyField(
+        MediaAsset,
+        blank=True,
+        related_name="dispute_designer_evidence"
+    )
+
+    # Admin resolution
+    admin_notes = models.TextField(blank=True)
+    refund_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.dispute_id:
+            self.dispute_id = f"DSP-{uuid.uuid4().hex[:8].upper()}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.dispute_id
 
 
 class OrderTracking(models.Model):

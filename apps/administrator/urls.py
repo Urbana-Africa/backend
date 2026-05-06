@@ -1,5 +1,11 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .views import *
+from apps.algorithm.views import (
+    AlgorithmConfigView,
+    AnomalyLogView,
+    CategoryBalanceView,
+)
 
 router = DefaultRouter(trailing_slash=False)
 # =====================================================
@@ -49,4 +55,9 @@ router.register(r"designer-shipments", AdminShipmentTrackingViewSet, basename="a
 router.register(r"inventory-alerts", AdminInventoryAlertViewSet, basename="admin-inventory-alerts")
 router.register(r"promotions", AdminPromotionViewSet, basename="admin-promotions")
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    # Algorithm Admin Endpoints
+    path("algorithm-config", AlgorithmConfigView.as_view(), name="admin-algo-config"),
+    path("category-balance", CategoryBalanceView.as_view(), name="admin-category-balance"),
+    path("anomalies", AnomalyLogView.as_view(), name="admin-anomalies"),
+]

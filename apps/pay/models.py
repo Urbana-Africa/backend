@@ -23,10 +23,16 @@ class AccountDetail(models.Model):
     )
 
     account_name = models.CharField(max_length=255)
-    account_number = models.CharField(max_length=20)
-    bank_code = models.CharField(max_length=10)
-    bank_name = models.CharField(max_length=100)
-    recipient_code = models.CharField(default='',blank=True,max_length=200)
+    account_number = models.CharField(max_length=100)  # Also stores Stripe acct_... ID
+    bank_code = models.CharField(max_length=50, blank=True, default="")
+    bank_name = models.CharField(max_length=100, blank=True, default="")
+    country = models.CharField(max_length=5, blank=True, default="NG")
+    account_type = models.CharField(
+        max_length=20,
+        choices=[("flutterwave", "Flutterwave"), ("stripe", "Stripe")],
+        default="flutterwave",
+    )
+    recipient_code = models.CharField(default='', blank=True, max_length=200)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -35,7 +41,7 @@ class AccountDetail(models.Model):
         verbose_name_plural = "Account Details"
 
     def __str__(self):
-        return f"{self.user} – {self.bank_name}"
+        return f"{self.user} – {self.bank_name or self.account_type}"
 
 
 

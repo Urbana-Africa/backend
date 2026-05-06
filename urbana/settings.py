@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework.authtoken",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "channels",
     "django_extensions",
     "django_cleanup.apps.CleanupConfig",
@@ -60,6 +61,7 @@ INSTALLED_APPS = [
 
     # Project apps
     "apps.administrator",
+    "apps.algorithm",
     "apps.authentication",
     "apps.customers",
     "apps.designers",
@@ -164,7 +166,7 @@ else:
     COOKIE_SECURE = False
     SESSION_COOKIE_SAMESITE = "Lax"
     CSRF_COOKIE_SAMESITE = "Lax"
-    JWT_COOKIE_SAMESITE = "Lax"                   # SameSite=None requires Secure=True (HTTPS)
+    JWT_COOKIE_SAMESITE = "Lax"
 
 # Apply domain & secure flags
 SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN
@@ -203,9 +205,9 @@ SIMPLE_JWT = {
     "AUTH_COOKIE_PATH": "/",
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),          # short!
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
-    "ROTATE_REFRESH_TOKENS": True,          # Issue new refresh on each refresh
-    "BLACKLIST_AFTER_ROTATION": True,       # Invalidate old one
-    "UPDATE_LAST_LOGIN": True,              # Optional
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,       # Invalidate old refresh tokens via blacklist app
+    "UPDATE_LAST_LOGIN": True,
 }
 
 # =====================================================
@@ -258,29 +260,20 @@ if IS_PRODUCTION:
 
 else:
     # Development: more permissive
-    CORS_ALLOWED_ORIGINS = [
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:5175",
-        "http://localhost:5176",
-        "http://127.0.0.1:5173",
-        "http://urbana.local:5172",
-        "http://api.urbana.local:8000",
-        "http://admin.urbana.local:5176",
-        "http://auth.urbana.local:5173",
-        "http://customer.urbana.local:5175",
-        "http://designer.urbana.local:5174",
-        "https://localhost:5173",
-        "https://localhost:5174",
-        "https://localhost:5175",
-        "https://urbana.local:5172",
-        "https://api.urbana.local:8000",
-        "https://admin.urbana.local:5176",
-        "https://auth.urbana.local:5173",
-        "https://customer.urbana.local:5175",
-        "https://designer.urbana.local:5174",
+    CORS_ALLOWED_ORIGINS = []
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^https?://([a-z0-9-]+\.)*urbana\.local(:\d+)?$",
+        r"^https?://localhost(:\d+)?$",
+        r"^https?://127\.0\.0\.1(:\d+)?$",
     ]
-    CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS.copy()
+    CSRF_TRUSTED_ORIGINS = [
+        "http://localhost:5172", "http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176",
+        "http://127.0.0.1:5172", "http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://127.0.0.1:5175", "http://127.0.0.1:5176",
+        "http://urbana.local:5172", "http://api.urbana.local:8000", "http://admin.urbana.local:5176",
+        "http://auth.urbana.local:5173", "http://customer.urbana.local:5175", "http://customer.urbana.local:5176", "http://designer.urbana.local:5174",
+        "http://urbana.local", "http://admin.urbana.local", "http://auth.urbana.local", "http://customer.urbana.local", "http://designer.urbana.local",
+        "https://urbana.local", "https://admin.urbana.local", "https://auth.urbana.local", "https://customer.urbana.local", "https://designer.urbana.local",
+    ]
 
 # =====================================================
 # Production Security Headers

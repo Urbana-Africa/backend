@@ -662,6 +662,31 @@ class ProductDetailView(APIView):
 # ---------------------------
 # Reviews
 # ---------------------------
+class ReviewListView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        product_id = request.GET.get("product")
+        designer_id = request.GET.get("designer")
+
+        if product_id:
+            reviews = Review.objects.filter(
+                product__id=product_id, is_approved=True
+            ).order_by("-created_at")
+        elif designer_id:
+            reviews = Review.objects.filter(
+                product__user__id=designer_id, is_approved=True
+            ).order_by("-created_at")
+        else:
+            return Response(
+                {"status": "error", "detail": "product or designer query parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = ReviewSerializer(reviews, many=True)
+        return Response({"results": serializer.data, "count": len(serializer.data)})
+
+
 class ReviewCreateView(APIView):
     permission_classes = [IsAuthenticated]
 

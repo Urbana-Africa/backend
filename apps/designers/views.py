@@ -312,7 +312,9 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
     def get_queryset(self):
 
         return OrderItem.objects.filter(
-            product__user=self.request.user
+            product__user=self.request.user,
+            order__invoice__payment__status='success',
+            order__invoice__payment__is_paid=True
         ).select_related(
             "order",
             "product"

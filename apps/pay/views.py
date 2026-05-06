@@ -1014,10 +1014,15 @@ class AccountDetailView(APIView):
         user = request.user
 
         account_name = request.data.get("account_name")
-        # Fixed: request.GET.get() returns None or str, but you had a comma making it a tuple!
-        account_number = "0690000032" if getattr(settings, "DEBUG", False) else request.data.get("account_number")
-        bank_code = "044" if getattr(settings, "DEBUG", False) else request.data.get("bank_code")
+        account_number = request.data.get("account_number")
+        bank_code = request.data.get("bank_code")
         bank_name = request.data.get("bank_name")
+        account_type = request.data.get("account_type", "flutterwave")
+        country = request.data.get("country", "NG")
+
+        if getattr(settings, "DEBUG", False) and account_type != "stripe":
+            account_number = account_number or "0690000032"
+            bank_code = bank_code or "044"
 
         if not all([account_name, account_number, bank_code, bank_name]):
             return Response(
@@ -1027,7 +1032,6 @@ class AccountDetailView(APIView):
 
         try:
             with transaction.atomic():
-                # Get or create AccountDetail first so we can pass it to the function
                 account_detail, created = AccountDetail.objects.get_or_create(
                     user=user,
                     defaults={
@@ -1035,46 +1039,54 @@ class AccountDetailView(APIView):
                         "account_number": account_number,
                         "bank_code": bank_code,
                         "bank_name": bank_name,
+                        "account_type": account_type,
+                        "country": country,
                     }
                 )
 
-                # Update fields in case they changed
                 account_detail.account_name = account_name
                 account_detail.account_number = account_number
                 account_detail.bank_code = bank_code
                 account_detail.bank_name = bank_name
+                account_detail.account_type = account_type
+                account_detail.country = country
                 account_detail.save(update_fields=[
-                    "account_name", "account_number", "bank_code", "bank_name", "updated_at"
+                    "account_name", "account_number", "bank_code", "bank_name", 
+                    "account_type", "country", "updated_at"
                 ])
 
-                # Now call the improved Flutterwave function and pass the account_detail instance
-                response = create_fw_transfer_recipient(
-                    access_token=get_flutterwave_keys()["secret_key"],
-                    name=account_name,
-                    account_number=account_number,
-                    bank_code=bank_code,
-                    bank_name=bank_name,
-                    account_detail=account_detail,   # ← This enables direct fetch by recipient_code
-                )
-
-                print("Flutterwave Recipient Response:", response)
-
-                if response["status"] != "success":
-                    return Response(
-                        {
-                            "error": response.get("message", "Failed to process recipient"),
-                            "details": response.get("data")
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
+                if account_type == "stripe":
+                    # For Stripe, the connected account ID is stored in account_number.
+                    # We don't need a Flutterwave recipient.
+                    account_detail.recipient_code = ""
+                    account_detail.save(update_fields=["recipient_code", "updated_at"])
+                else:
+                    # Call Flutterwave for African Banks
+                    response = create_fw_transfer_recipient(
+                        access_token=get_flutterwave_keys()["secret_key"],
+                        name=account_name,
+                        account_number=account_number,
+                        bank_code=bank_code,
+                        bank_name=bank_name,
+                        account_detail=account_detail,
                     )
 
-                # Update recipient_code from Flutterwave response (safer than assuming ["data"]["id"])
-                recipient_code = response.get("recipient_code")
-                if recipient_code:
-                    account_detail.recipient_code = recipient_code
-                    account_detail.save(update_fields=["recipient_code", "updated_at"])
+                    print("Flutterwave Recipient Response:", response)
 
-                # Refresh the instance to ensure latest data
+                    if response["status"] != "success":
+                        return Response(
+                            {
+                                "error": response.get("message", "Failed to process recipient"),
+                                "details": response.get("data")
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    recipient_code = response.get("recipient_code")
+                    if recipient_code:
+                        account_detail.recipient_code = recipient_code
+                        account_detail.save(update_fields=["recipient_code", "updated_at"])
+
                 account_detail.refresh_from_db()
 
         except Exception as e:

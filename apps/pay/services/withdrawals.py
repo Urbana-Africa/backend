@@ -5,7 +5,8 @@ from django.db import transaction
 from django.utils import timezone
 from apps.pay.models import Withdrawal, Wallet, WalletTransaction
 from django.core.exceptions import ValidationError
-from apps.pay.config import get_flutterwave_keys
+from apps.pay.config import get_flutterwave_keys, get_stripe_keys
+import stripe
 
 FW_BASE_URL = "https://api.flutterwave.com/v3"
 
@@ -67,12 +68,19 @@ def request_withdrawal(user, amount, payout_amount, payout_currency, bank_code, 
         description="Withdrawal Request",
     )
 
-    # Fire FW transfer in background so the API response is immediate
-    threading.Thread(
-        target=_fire_flutterwave_transfer,
-        args=(withdrawal.id,),
-        daemon=True,
-    ).start()
+    if payout_currency == "USD":
+        threading.Thread(
+            target=_fire_stripe_transfer,
+            args=(withdrawal.id,),
+            daemon=True,
+        ).start()
+    else:
+        # Fire FW transfer in background so the API response is immediate
+        threading.Thread(
+            target=_fire_flutterwave_transfer,
+            args=(withdrawal.id,),
+            daemon=True,
+        ).start()
 
     return withdrawal
 
@@ -130,6 +138,46 @@ def _fire_flutterwave_transfer(withdrawal_id: str):
         print(f"[Wallet] FW transfer error for {withdrawal_id}: {e}")
         # Don't auto-fail on network errors — leave as 'processing' for manual check
 
+def _fire_stripe_transfer(withdrawal_id: str):
+    """
+    Background thread: calls Stripe and updates the Withdrawal status.
+    Uses Stripe Transfers to move funds to the connected account.
+    """
+    try:
+        stripe.api_key = get_stripe_keys()['secret_key']
+        with transaction.atomic():
+            withdrawal = Withdrawal.objects.select_for_update().get(id=withdrawal_id)
+            if withdrawal.status != "pending":
+                return
+            withdrawal.status = "processing"
+            withdrawal.save(update_fields=["status"])
+
+        # Create Stripe Transfer
+        # account_number should be the connected Stripe account ID for the designer
+        transfer = stripe.Transfer.create(
+            amount=int(withdrawal.payout_amount * 100), # Stripe uses cents
+            currency="usd",
+            destination=withdrawal.account_number, # The connected account ID
+            transfer_group=withdrawal.reference,
+            description=f"Urbana payout – {withdrawal.reference}",
+            metadata={"withdrawal_id": withdrawal_id, "reference": withdrawal.reference}
+        )
+
+        with transaction.atomic():
+            w = Withdrawal.objects.select_for_update().get(id=withdrawal_id)
+            w.flutterwave_transfer_id = transfer.id # re-use this field or add a new one, we'll reuse it for now
+            w.status = "completed"
+            w.processed_at = timezone.now()
+            w.save()
+            _mark_wallet_txn_completed(w.reference)
+
+    except stripe.error.StripeError as e:
+        error_msg = str(e.user_message) if getattr(e, 'user_message', None) else str(e)
+        fail_withdrawal(withdrawal_id, reason=error_msg)
+    except Exception as e:
+        print(f"[Wallet] Stripe transfer error for {withdrawal_id}: {e}")
+
+
 
 def _get_user_currency(user) -> str:
     """Returns the user's preferred currency from their profile, defaulting to NGN."""
@@ -158,6 +206,8 @@ def check_withdrawal_status(withdrawal_id: str) -> dict:
         withdrawal = Withdrawal.objects.get(id=withdrawal_id)
     except Withdrawal.DoesNotExist:
         return {"status": "not_found"}
+    if withdrawal.status in ["completed", "failed", "rejected"]:
+        return {"status": withdrawal.status, "flutterwave_status": None}
 
     if not withdrawal.flutterwave_transfer_id:
         return {"status": withdrawal.status, "flutterwave_status": None}

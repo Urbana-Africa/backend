@@ -127,7 +127,8 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 class CustomTokenRefreshView(TokenRefreshView):
     """
     Refresh access token using HttpOnly refresh cookie.
-    Returns new access token via cookie (not response body).
+    Returns new access + refresh tokens via cookies (not response body).
+    Also rotates the refresh token cookie when ROTATE_REFRESH_TOKENS is True.
     """
 
     def post(self, request, *args, **kwargs):
@@ -152,6 +153,9 @@ class CustomTokenRefreshView(TokenRefreshView):
             )
 
         access_token = serializer.validated_data.get("access")
+        # When ROTATE_REFRESH_TOKENS=True, a new refresh token is issued.
+        # We MUST update the cookie, otherwise the next refresh will fail.
+        new_refresh_token = serializer.validated_data.get("refresh")
 
         res = Response(
             {
@@ -171,6 +175,19 @@ class CustomTokenRefreshView(TokenRefreshView):
             path="/",
             domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
         )
+
+        # Also rotate the refresh token cookie if a new one was issued
+        if new_refresh_token:
+            res.set_cookie(
+                key=settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],  # "refresh_token"
+                value=new_refresh_token,
+                max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+                httponly=True,
+                secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+                samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+                path="/",
+                domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+            )
 
         return res
 

@@ -59,7 +59,13 @@ class InvoiceSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         if instance.payment:
-            representation['payment'] = PaymentSerializer(instance.payment,many=False).data
+            representation['payment'] = PaymentSerializer(instance.payment, many=False).data
+        
+        # Include user info for payment processors
+        representation['user'] = {
+            'email': instance.user.email,
+            'full_name': instance.user.get_full_name() or instance.user.username
+        }
         return representation
 
 class AccountDetailSerializer(serializers.ModelSerializer):
@@ -67,6 +73,7 @@ class AccountDetailSerializer(serializers.ModelSerializer):
         model = AccountDetail
         fields = [
             "id", "account_name", "account_number", "bank_code",
-            "bank_name", "recipient_code", "created_at", "updated_at"
+            "bank_name", "country", "account_type",
+            "recipient_code", "created_at", "updated_at"
         ]
         read_only_fields = ["recipient_code", "created_at", "updated_at"]

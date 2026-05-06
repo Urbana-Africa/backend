@@ -1,0 +1,10 @@
+from django.apps import AppConfig
+
+
+class AlgorithmConfig(AppConfig):
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "apps.algorithm"
+    label = "algorithm"
+
+    def ready(self):
+        import apps.algorithm.signals  # noqa: F401

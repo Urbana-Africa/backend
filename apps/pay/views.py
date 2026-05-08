@@ -692,6 +692,12 @@ class WalletSummaryView(APIView):
             status="completed"
         ).aggregate(total=Sum("amount"))["total"] or 0
 
+        total_withdrawn = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type="withdrawal",
+            status="completed"
+        ).aggregate(total=Sum("amount"))["total"] or 0
+
         recent_transactions = WalletTransaction.objects.filter(
             wallet=wallet
         ).order_by("-created_at")[:10]
@@ -700,6 +706,7 @@ class WalletSummaryView(APIView):
             "available_balance": wallet.available_balance,
             "pending_balance": wallet.pending_balance,
             "lifetime_earnings": lifetime_earnings,
+            "total_withdrawn": total_withdrawn,
             "currency": wallet.currency,
             "recent_activity": WalletTransactionSerializer(recent_transactions, many=True).data
         })

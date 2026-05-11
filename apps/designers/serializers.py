@@ -6,7 +6,7 @@ from apps.customers.models import Order, OrderItem, ReturnRequest
 from apps.customers.serializers import AddressSerializer, CustomerSerializer
 from .models import (
     Designer, Collection, DesignerProduct, DesignerStory, ProductImage, Shipment,
-    ShippingOption, DesignerOrder, DesignerAnalytics, StoryView
+    ShippingOption, DesignerOrder, DesignerAnalytics, StoryView, Notification
 )
 from apps.core.serializers import MediaAssetSerializer, ProductSerializer
 from django.utils import timezone
@@ -283,4 +283,20 @@ class ReturnRequestSerializer(BaseSerializer):
         instance.order_item.save()
 
         return instance
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = [
+            "id",
+            "title",
+            "message",
+            "notification_type",
+            "is_read",
+            "link",
+            "created_at",
+            "read_at",
+        ]
+        read_only_fields = ["id", "created_at"]
 

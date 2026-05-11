@@ -248,3 +248,33 @@ class Shipment(models.Model):
     tracking_status = models.CharField(max_length=100, blank=True, null=True)
     tracking_data = models.JSONField(blank=True, null=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+# -------------------------------
+# Notifications
+# -------------------------------
+class Notification(BaseModel):
+    class Type(models.TextChoices):
+        ORDER = "order", "Order"
+        PRODUCT = "product", "Product"
+        PROFILE = "profile", "Profile"
+        PAYOUT = "payout", "Payout"
+        SYSTEM = "system", "System"
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notifications")
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    notification_type = models.CharField(
+        max_length=20,
+        choices=Type.choices,
+        default=Type.SYSTEM,
+    )
+    is_read = models.BooleanField(default=False)
+    link = models.CharField(max_length=500, blank=True, null=True)
+    read_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.title} ({self.user.email})"

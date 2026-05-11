@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from apps.core.serializers import ShippingMethodSerializer
-from apps.designers.models import DesignerOrder
+from apps.designers.models import DesignerOrder, Notification
 from apps.pay.models import Invoice
 from .models import Customer, Address, Wishlist, CartItem, Order, OrderItem, ReturnRequest, Dispute
 from .serializers import (
@@ -106,6 +106,25 @@ class CheckoutView(APIView):
                 item.product.stock = item.product.stock - item.quantity if item.product.stock > 0 else 0
                 item.product.save()
                 DesignerOrder.objects.create(order_item = order_item,user=order_item.product.user)
+
+                # Notify designer of new order
+                Notification.objects.create(
+                    user=order_item.product.user,
+                    title="New order received",
+                    message=f"You have a new order for {item.product.name} (Qty: {item.quantity}).",
+                    notification_type=Notification.Type.ORDER,
+                    link=f"/orders/{order_item.id}",
+                )
+
+                # Low stock alert
+                if item.product.stock <= 5 and item.product.stock >= 0:
+                    Notification.objects.create(
+                        user=order_item.product.user,
+                        title="Low stock alert",
+                        message=f"Your product '{item.product.name}' is running low. Only {item.product.stock} units left in stock.",
+                        notification_type=Notification.Type.PRODUCT,
+                        link=f"/products/edit/{item.product.id}",
+                    )
 
             # 7️⃣ Clear cart
             cart_items.delete()
@@ -700,4 +719,4 @@ class DisputeView(APIView):
             return_request__order_item__order__customer=request.user.customer_profile
         ).order_by("-created_at")
         serializer = DisputeSerializer(disputes, many=True)
-        return Response({"status": "success", "data": serializer.data})
+        return Response({"status": "success", "data": serializer.data})

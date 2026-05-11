@@ -3,15 +3,16 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
-from apps.core.models import MediaAsset, Product
-from apps.core.serializers import ProductSerializer
+from apps.core.models import MediaAsset, Product, Color, Sizes
+from apps.core.serializers import ProductSerializer, ColorSerializer, SizesSerializer, MediaAssetSerializer
 from apps.customers.models import OrderItem, ReturnRequest
 from apps.designers.serializers import ReturnRequestSerializer
 from django.db.models import Sum
 from apps.utils.pagination import StandardPagination
-from .models import Designer, DesignerProduct, DesignerStory, StoryView
+from .models import Designer, DesignerProduct, DesignerStory, StoryView, Notification
 from .serializers import (
-    DesignerSerializer, DesignerProductSerializer, DesignerStorySerializer, OrderItemSerializer, StoryViewSerializer
+    DesignerSerializer, DesignerProductSerializer, DesignerStorySerializer, OrderItemSerializer, StoryViewSerializer,
+    NotificationSerializer
 )
 from rest_framework import status
 from django.utils.text import slugify
@@ -193,11 +194,19 @@ class DesignerStoryViewSet(DesignerBaseViewSet):
 class DesignerProductUploadViewSet(DesignerBaseViewSet):
 
     serializer_class = ProductSerializer
-    # parser_classes = (MultiPartParser, FormParser)  # needed for file uploads
+    parser_classes = (MultiPartParser, FormParser, JSONParser)  # needed for file uploads and JSON
 
     def get_queryset(self):
         # Only products belonging to the authenticated designer
         return Product.objects.filter(user=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "status": "success",
+            "data": serializer.data
+        })
 
     def create(self, request):
         """
@@ -222,7 +231,7 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
         """
         product = get_object_or_404(self.get_queryset(), pk=pk)
 
-        serializer = self.get_serializer(product, data=request.data, partial=False)
+        serializer = self.get_serializer(product, data=request.data, partial=True)
 
         if serializer.is_valid():
             serializer.save()  # user is already set, no need to touch it
@@ -301,8 +310,126 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
                 "status": "error",
                 "message": f"Bulk upload failed: {str(e)}"
             }, status=status.HTTP_400_BAD_REQUEST)
-    
-    
+
+    # -------------------------------
+    # Product Colors
+    # -------------------------------
+    @action(detail=True, methods=["get", "post", "delete"], url_path="colors")
+    def manage_colors(self, request, pk=None):
+        product = self.get_object()
+
+        if request.method == "GET":
+            colors = product.colors.all()
+            return Response({
+                "status": "success",
+                "data": ColorSerializer(colors, many=True).data
+            })
+
+        if request.method == "POST":
+            name = request.data.get("name")
+            hex_code = request.data.get("hex_code")
+            if not name:
+                return Response({"error": "Color name is required"}, status=status.HTTP_400_BAD_REQUEST)
+            color = Color.objects.create(product=product, name=name, hex_code=hex_code)
+            return Response({
+                "status": "success",
+                "data": ColorSerializer(color).data
+            }, status=status.HTTP_201_CREATED)
+
+        if request.method == "DELETE":
+            color_id = request.data.get("color_id")
+            try:
+                color = Color.objects.get(id=color_id, product=product)
+                color.delete()
+                return Response({"status": "success"})
+            except Color.DoesNotExist:
+                return Response({"error": "Color not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    # -------------------------------
+    # Product Sizes
+    # -------------------------------
+    @action(detail=True, methods=["get", "post", "put", "delete"], url_path="sizes")
+    def manage_sizes(self, request, pk=None):
+        product = self.get_object()
+
+        if request.method == "GET":
+            sizes = product.sizes.all()
+            return Response({
+                "status": "success",
+                "data": SizesSerializer(sizes, many=True).data
+            })
+
+        if request.method == "POST":
+            size_id = request.data.get("size_id")
+            try:
+                size = Sizes.objects.get(id=size_id)
+                product.sizes.add(size)
+                return Response({"status": "success"})
+            except Sizes.DoesNotExist:
+                return Response({"error": "Size not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.method == "PUT":
+            size_ids = request.data.get("sizes", [])
+            if not isinstance(size_ids, list):
+                size_ids = [size_ids]
+            valid_sizes = Sizes.objects.filter(id__in=size_ids)
+            product.sizes.set(valid_sizes)
+            return Response({
+                "status": "success",
+                "data": SizesSerializer(product.sizes, many=True).data
+            })
+
+        if request.method == "DELETE":
+            size_id = request.data.get("size_id")
+            try:
+                size = Sizes.objects.get(id=size_id)
+                product.sizes.remove(size)
+                return Response({"status": "success"})
+            except Sizes.DoesNotExist:
+                return Response({"error": "Size not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    # -------------------------------
+    # Product Media
+    # -------------------------------
+    @action(detail=True, methods=["get", "post", "delete"], url_path="media")
+    def manage_media(self, request, pk=None):
+        product = self.get_object()
+
+        if request.method == "GET":
+            media = product.media.all()
+            return Response({
+                "status": "success",
+                "data": MediaAssetSerializer(media, many=True).data
+            })
+
+        if request.method == "POST":
+            images = request.FILES.getlist("media[]")
+            if len(images) > 6:
+                return Response({"error": "Max 6 images per upload"}, status=status.HTTP_400_BAD_REQUEST)
+
+            new_assets = []
+            for img in images:
+                asset = MediaAsset.objects.create(
+                    file=img,
+                    media_type=MediaAsset.MediaType.IMAGE,
+                )
+                product.media.add(asset)
+                new_assets.append(asset)
+
+            return Response({
+                "status": "success",
+                "data": MediaAssetSerializer(new_assets, many=True).data
+            })
+
+        if request.method == "DELETE":
+            media_id = request.data.get("media_id")
+            try:
+                asset = MediaAsset.objects.get(id=media_id)
+                product.media.remove(asset)
+                return Response({"status": "success"})
+            except MediaAsset.DoesNotExist:
+                return Response({"error": "Media not found"}, status=status.HTTP_404_NOT_FOUND)
+
 
 class DesignerOrderViewSet(DesignerBaseViewSet):
 
@@ -620,5 +747,51 @@ class DesignerReturnRequestViewSet(DesignerBaseViewSet):
             "data": serializer.data
         })
 
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = NotificationSerializer
+
+    def get_queryset(self):
+        return Notification.objects.filter(user=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "status": "success",
+            "data": serializer.data,
+        })
+
+    @action(detail=False, methods=["post"], url_path="mark-all-read")
+    def mark_all_read(self, request):
+        queryset = self.get_queryset().filter(is_read=False)
+        count = queryset.count()
+        queryset.update(is_read=True, read_at=timezone.now())
+        return Response({
+            "status": "success",
+            "message": f"{count} notification(s) marked as read",
+            "count": count,
+        })
+
+    @action(detail=True, methods=["post"], url_path="mark-read")
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = True
+        notification.read_at = timezone.now()
+        notification.save()
+        serializer = self.get_serializer(notification)
+        return Response({
+            "status": "success",
+            "data": serializer.data,
+        })
+
+    @action(detail=False, methods=["get"], url_path="unread-count")
+    def unread_count(self, request):
+        count = self.get_queryset().filter(is_read=False).count()
+        return Response({
+            "status": "success",
+            "count": count,
+        })
 
 

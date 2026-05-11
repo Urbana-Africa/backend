@@ -8,6 +8,7 @@ from .views import (
     DesignerProfileViewSet,
     DesignerDashboardViewSet,
     DesignerReturnRequestViewSet,
+    NotificationViewSet,
 )
 
 router = DefaultRouter(trailing_slash=False)
@@ -21,6 +22,7 @@ router.register(r"orders", DesignerOrderViewSet, basename="designer-orders")
 router.register(r"profile", DesignerProfileViewSet, basename="designer-profile")
 router.register(r"dashboard", DesignerDashboardViewSet, basename="designer-dashboard")
 router.register(r"returns", DesignerReturnRequestViewSet, basename="designer-returns")
+router.register(r"notifications", NotificationViewSet, basename="designer-notifications")
 
 
 urlpatterns = router.urls

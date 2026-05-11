@@ -941,3 +941,142 @@ class SeedDummyDataView(APIView):
             "designer": designer.brand_name,
             "created_products": created_products
         })
+
+
+# --------------------------------------------------
+# Support Tickets
+# --------------------------------------------------
+from .models import SupportTicket
+from .serializers import SupportTicketSerializer
+
+
+class SupportTicketCreateView(APIView):
+    """
+    POST /core/support/tickets
+    Create a new support ticket. If the user is authenticated, the ticket is
+    linked to their account. Guest users must supply guest_name and guest_email.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = SupportTicketSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+
+        if not serializer.is_valid():
+            return Response(
+                {"status": "error", "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ticket = serializer.save(
+            user=request.user if request.user.is_authenticated else None
+        )
+
+        # ── Determine submitter details for email ──
+        submitter_name = (
+            request.user.get_full_name() or request.user.username
+            if request.user.is_authenticated
+            else ticket.guest_name
+        )
+        submitter_email = (
+            request.user.email
+            if request.user.is_authenticated
+            else ticket.guest_email
+        )
+
+        # ── Email to support team ──
+        support_subject = f"[{ticket.reference}] New Support Ticket – {ticket.get_category_display()}"
+        support_body = f"""
+        <h2>New Support Ticket Received</h2>
+        <table cellpadding="6" style="border-collapse:collapse;">
+          <tr><td><strong>Reference</strong></td><td>{ticket.reference}</td></tr>
+          <tr><td><strong>From</strong></td><td>{submitter_name} ({submitter_email})</td></tr>
+          <tr><td><strong>Category</strong></td><td>{ticket.get_category_display()}</td></tr>
+          <tr><td><strong>Priority</strong></td><td>{ticket.get_priority_display()}</td></tr>
+          <tr><td><strong>Subject</strong></td><td>{ticket.subject}</td></tr>
+          <tr><td><strong>Description</strong></td><td>{ticket.description}</td></tr>
+        </table>
+        <br>
+        <p>Please respond via the admin panel.</p>
+        """
+
+        # ── Confirmation email to designer/submitter ──
+        designer_subject = f"We received your request – {ticket.reference}"
+        designer_body = f"""
+        <p>Hi {submitter_name},</p>
+        <p>Thank you for reaching out to Urbana Support. We have received your ticket and our team will respond within <strong>24–48 hours</strong>.</p>
+        <br>
+        <table cellpadding="6" style="border-collapse:collapse;background:#faf7f4;border-radius:8px;">
+          <tr><td><strong>Ticket Reference</strong></td><td>{ticket.reference}</td></tr>
+          <tr><td><strong>Subject</strong></td><td>{ticket.subject}</td></tr>
+          <tr><td><strong>Category</strong></td><td>{ticket.get_category_display()}</td></tr>
+          <tr><td><strong>Priority</strong></td><td>{ticket.get_priority_display()}</td></tr>
+        </table>
+        <br>
+        <p>You can track the status of your ticket by logging into your designer dashboard and visiting <strong>Help &amp; Support → My Tickets</strong>.</p>
+        <br>
+        <p>Warm regards,<br><strong>Urbana Support Team</strong></p>
+        """
+
+        def send_emails():
+            resend_sendmail(support_subject, ["supporturbanaafrica@gmail.com"], support_body)
+            if submitter_email:
+                resend_sendmail(designer_subject, [submitter_email], designer_body)
+
+        threading.Thread(target=send_emails).start()
+
+        return Response(
+            {
+                "status": "success",
+                "message": "Your support ticket has been submitted. Check your email for confirmation.",
+                "ticket": SupportTicketSerializer(ticket).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SupportTicketListView(APIView):
+    """
+    GET /core/support/tickets
+    Returns all tickets submitted by the logged-in designer.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        tickets = SupportTicket.objects.filter(user=request.user)
+
+        # Optional status filter
+        status_filter = request.GET.get("status")
+        if status_filter:
+            tickets = tickets.filter(status=status_filter)
+
+        serializer = SupportTicketSerializer(tickets, many=True)
+        return Response(
+            {"status": "success", "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
+
+class SupportTicketDetailView(APIView):
+    """
+    GET /core/support/tickets/<id>
+    Returns a single ticket belonging to the logged-in designer.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, ticket_id):
+        try:
+            ticket = SupportTicket.objects.get(id=ticket_id, user=request.user)
+        except SupportTicket.DoesNotExist:
+            return Response(
+                {"status": "error", "message": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        serializer = SupportTicketSerializer(ticket)
+        return Response(
+            {"status": "success", "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+

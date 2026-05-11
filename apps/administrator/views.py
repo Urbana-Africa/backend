@@ -96,6 +96,15 @@ class AdminProductViewSet(AdminBaseViewSet):
         product.is_admin_published = False
         product.save()
 
+        # Notify designer
+        Notification.objects.create(
+            user=product.user,
+            title="Product unpublished",
+            message=f"Your product '{product.name}' has been unpublished by admin. Reason: {', '.join(reasons)}",
+            notification_type=Notification.Type.PRODUCT,
+            link=f"/products/edit/{product.id}",
+        )
+
         serializer = self.get_serializer(product)
         return Response({
             "status": "success",
@@ -257,6 +266,25 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
             args=(subject, [customer.user.email], message),
         ).start()
 
+        # Notify designer
+        designer_user = instance.order_item.product.user
+        if action_type == "approve":
+            Notification.objects.create(
+                user=designer_user,
+                title="Return request approved",
+                message=f"Return request #{instance.return_id} for {instance.order_item.product.name} has been approved by admin.",
+                notification_type=Notification.Type.ORDER,
+                link=f"/returns/{instance.order_item.id}",
+            )
+        elif action_type == "reject":
+            Notification.objects.create(
+                user=designer_user,
+                title="Return request rejected",
+                message=f"Return request #{instance.return_id} for {instance.order_item.product.name} was rejected by admin. Reason: {reason}",
+                notification_type=Notification.Type.ORDER,
+                link=f"/returns/{instance.order_item.id}",
+            )
+
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -400,6 +428,22 @@ class AdminDesignerViewSet(AdminBaseViewSet):
             designer.is_verified = True
             
         designer.save()
+
+        # In-app notification
+        status_messages = {
+            Designer.Status.APPROVED: ("Profile approved", "Your designer profile has been approved. You can now start selling.", "/dashboard"),
+            Designer.Status.REJECTED: ("Profile update required", "Your profile needs some refinements before approval.", "/profile-status"),
+            Designer.Status.BLOCKED: ("Account restricted", "Your account has been restricted. Contact support for assistance.", "/help"),
+        }
+        if new_status in status_messages:
+            title, msg, link = status_messages[new_status]
+            Notification.objects.create(
+                user=designer.user,
+                title=title,
+                message=msg,
+                notification_type=Notification.Type.PROFILE,
+                link=link,
+            )
 
         # Send email notification
         try:

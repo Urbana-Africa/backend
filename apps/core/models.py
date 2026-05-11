@@ -236,3 +236,78 @@ class ContactMessage(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.email}"
+
+
+# ---------------------------
+# Support Tickets
+# ---------------------------
+class SupportTicket(BaseModel):
+    class Category(models.TextChoices):
+        PAYOUT = "payout", "Payout & Wallet"
+        PRODUCT = "product", "Products & Listings"
+        ORDER = "order", "Orders & Returns"
+        SHIPPING = "shipping", "Shipping & Delivery"
+        ACCOUNT = "account", "Account & Profile"
+        TECHNICAL = "technical", "Technical Issue"
+        OTHER = "other", "Other"
+
+    class Priority(models.TextChoices):
+        LOW = "low", "Low"
+        MEDIUM = "medium", "Medium"
+        HIGH = "high", "High"
+        URGENT = "urgent", "Urgent"
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        IN_PROGRESS = "in_progress", "In Progress"
+        WAITING = "waiting", "Waiting on Designer"
+        RESOLVED = "resolved", "Resolved"
+        CLOSED = "closed", "Closed"
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="support_tickets",
+    )
+    # Allow unauthenticated guests to submit tickets too
+    guest_name = models.CharField(max_length=150, blank=True, null=True)
+    guest_email = models.EmailField(blank=True, null=True)
+
+    subject = models.CharField(max_length=255)
+    description = models.TextField()
+    category = models.CharField(
+        max_length=20, choices=Category.choices, default=Category.OTHER
+    )
+    priority = models.CharField(
+        max_length=10, choices=Priority.choices, default=Priority.MEDIUM
+    )
+    status = models.CharField(
+        max_length=15, choices=Status.choices, default=Status.OPEN
+    )
+
+    # Optional admin reply
+    admin_reply = models.TextField(blank=True, null=True)
+    resolved_at = models.DateTimeField(blank=True, null=True)
+
+    # Ticket reference number (short, human-readable)
+    reference = models.CharField(max_length=10, unique=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            import random
+            import string
+            self.reference = "TKT-" + "".join(
+                random.choices(string.digits, k=6)
+            )
+        if self.status == self.Status.RESOLVED and not self.resolved_at:
+            from django.utils import timezone
+            self.resolved_at = timezone.now()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"[{self.reference}] {self.subject}"
+
+    class Meta:
+        ordering = ["-created_at"]

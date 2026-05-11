@@ -28,6 +28,9 @@ from .views import (
     ReviewCreateView,
     ReviewListView,
     SeedDummyDataView,
+    SupportTicketCreateView,
+    SupportTicketListView,
+    SupportTicketDetailView,
 )
 
 # -------------------------------
@@ -90,6 +93,10 @@ urlpatterns += [
     # path("<slug:slug>", DesignerDetailView.as_view(), name="designer-detail"),
 
     # ⚙ User Settings
+    # 🎫 Support Tickets
+    path("support/tickets", SupportTicketListView.as_view(), name="support-ticket-list"),
+    path("support/tickets/create", SupportTicketCreateView.as_view(), name="support-ticket-create"),
+    path("support/tickets/<str:ticket_id>", SupportTicketDetailView.as_view(), name="support-ticket-detail"),
 ]
 
 # -------------------------------

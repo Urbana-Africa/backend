@@ -4,7 +4,12 @@ from rest_framework import serializers
 
 from apps.authentication.serializers import UserSerializer
 from apps.designers.models import Designer
-from .models import Brand, ContactMessage, Country, Currency, MediaAsset, Category, Product, Review, ShippingMethod, Sizes, UserSettings, SupportTicket
+from .models import (
+    Brand, ContactMessage, Country, Currency, MediaAsset, Category, Product,
+    Review, ShippingMethod, Sizes, UserSettings, SupportTicket, SmartCollection,
+    ProductView, DesignerDailyAnalytics, LoyaltyPoints, LoyaltyBalance,
+    SizeRecommendation, UserLookbook,
+)
 
 
 class CountrySerializer(serializers.ModelSerializer):
@@ -77,6 +82,7 @@ class BrandSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     media = MediaAssetSerializer(many=True, read_only=True)
     colors = ColorSerializer(many=True, read_only=True)
+    country_of_origin = CountrySerializer(read_only=True)
 
     class Meta:
         model = Product
@@ -99,6 +105,17 @@ class ProductSerializer(serializers.ModelSerializer):
             "is_published",
             "featured",
             "media",
+            "is_sustainable",
+            "sustainability_notes",
+            "availability_type",
+            "print_type",
+            "occasion",
+            "country_of_origin",
+            "lead_time_days",
+            "rental_price_per_day",
+            "popularity_score",
+            "fit_stats",
+            "size_chart_image",
         )
     
     def create(self, validated_data):
@@ -234,3 +251,64 @@ class SupportTicketSerializer(serializers.ModelSerializer):
             if not attrs.get("guest_email"):
                 raise serializers.ValidationError({"guest_email": "Email is required."})
         return attrs
+
+
+class SmartCollectionSerializer(serializers.ModelSerializer):
+    products = ProductSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SmartCollection
+        fields = [
+            "id", "title", "slug", "subtitle", "description",
+            "collection_type", "products", "cover_image",
+            "is_active", "display_order", "created_at",
+        ]
+
+
+class ProductViewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductView
+        fields = ["id", "product", "designer", "session_id", "event_type", "source", "metadata", "created_at"]
+
+
+class DesignerDailyAnalyticsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DesignerDailyAnalytics
+        fields = [
+            "id", "designer", "date", "page_views", "unique_visitors",
+            "add_to_cart_events", "purchase_events", "revenue", "updated_at",
+        ]
+
+
+class LoyaltyPointsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoyaltyPoints
+        fields = ["id", "user", "points", "transaction_type", "description", "order", "created_at"]
+
+
+class LoyaltyBalanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoyaltyBalance
+        fields = ["user", "total_points", "lifetime_earned", "lifetime_redeemed", "tier", "updated_at"]
+
+
+class SizeRecommendationSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+
+    class Meta:
+        model = SizeRecommendation
+        fields = [
+            "id", "user", "product", "product_name",
+            "recommended_size", "confidence_score", "body_measurements", "created_at",
+        ]
+
+
+class UserLookbookSerializer(serializers.ModelSerializer):
+    products = ProductSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = UserLookbook
+        fields = [
+            "id", "user", "name", "description", "products",
+            "cover_image", "is_public", "created_at", "updated_at",
+        ]

@@ -31,6 +31,14 @@ from .views import (
     SupportTicketCreateView,
     SupportTicketListView,
     SupportTicketDetailView,
+    SmartCollectionListView,
+    SmartCollectionDetailView,
+    TrackEventsView,
+    DesignerAnalyticsView,
+    LoyaltyBalanceView,
+    LoyaltyHistoryView,
+    SizeRecommendationViewSet,
+    UserLookbookViewSet,
 )
 
 # -------------------------------
@@ -38,6 +46,8 @@ from .views import (
 # -------------------------------
 router = DefaultRouter(trailing_slash=False)
 router.register(r"media", MediaAssetViewSet, basename="media")  # /media/<id>
+router.register(r"size-recommendations", SizeRecommendationViewSet, basename="size-recommendations")
+router.register(r"lookbooks", UserLookbookViewSet, basename="lookbooks")
 
 # -------------------------------
 # URL Patterns
@@ -97,6 +107,18 @@ urlpatterns += [
     path("support/tickets", SupportTicketListView.as_view(), name="support-ticket-list"),
     path("support/tickets/create", SupportTicketCreateView.as_view(), name="support-ticket-create"),
     path("support/tickets/<str:ticket_id>", SupportTicketDetailView.as_view(), name="support-ticket-detail"),
+
+    # 🧠 Smart Collections
+    path("smart-collections", SmartCollectionListView.as_view(), name="smart-collections"),
+    path("smart-collections/<slug:slug>", SmartCollectionDetailView.as_view(), name="smart-collection-detail"),
+
+    # 📊 Tracking & Analytics
+    path("track", TrackEventsView.as_view(), name="track-events"),
+    path("designers/analytics", DesignerAnalyticsView.as_view(), name="designer-analytics"),
+
+    # 🎁 Loyalty
+    path("loyalty/balance", LoyaltyBalanceView.as_view(), name="loyalty-balance"),
+    path("loyalty/history", LoyaltyHistoryView.as_view(), name="loyalty-history"),
 ]
 
 # -------------------------------

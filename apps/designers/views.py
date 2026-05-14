@@ -536,6 +536,29 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
             profile.slug = slugify(profile.brand_name)
             profile.save(update_fields=['slug'])
 
+        # Notify designer on first submission
+        if created:
+            # In-app notification
+            Notification.objects.create(
+                user=request.user,
+                title="Profile submitted for review",
+                message="Your designer profile has been submitted and is under review by our curation team. We'll notify you once it's been reviewed.",
+                notification_type=Notification.Type.PROFILE,
+                link="/profile-status",
+            )
+
+            # Email confirmation
+            try:
+                subject = "Urbana Studio: Profile Submitted for Review"
+                context = {"designer": profile}
+                message = render_to_string("administrator/status_update.html", context)
+                threading.Thread(
+                    target=resend_sendmail,
+                    args=(subject, [request.user.email], message),
+                ).start()
+            except Exception as e:
+                print(f"Error sending profile submission email: {str(e)}")
+
         return Response({
             "status": "success",
             "message": "Profile setup completed" if created else "Profile updated",

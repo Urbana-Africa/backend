@@ -236,6 +236,11 @@ class DesignerSerializer(serializers.ModelSerializer):
             'slug',
             'created_at',
             'status_updated_at',
+            'tagline',
+            'social_media_links',
+            'is_sustainable',
+            'sustainability_certifications',
+            'featured_collection',
         ]
         read_only_fields = [
             'id',
@@ -246,6 +251,7 @@ class DesignerSerializer(serializers.ModelSerializer):
             'created_at',
             'status_updated_at',
             'lookbook_files',     # prevent accidental write via this field
+            'featured_collection',
         ]
 
     def get_full_name(self, obj):

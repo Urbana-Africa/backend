@@ -5,7 +5,7 @@ from apps.authentication.serializers import UserSerializer
 from apps.core.models import (
     Product, Category, Brand, Currency, Sizes,
     MediaAsset, Review, ShippingMethod,
-    Country
+    Country, SmartCollection
 )
 from apps.core.serializers import ColorSerializer, MediaAssetSerializer, SizesSerializer
 from apps.designers.models import (
@@ -227,6 +227,15 @@ class AdminDesignerProductSerializer(AdminBaseSerializer):
 class AdminCollectionSerializer(AdminBaseSerializer):
     class Meta(AdminBaseSerializer.Meta):
         model = Collection
+
+
+class AdminSmartCollectionSerializer(AdminBaseSerializer):
+    class Meta(AdminBaseSerializer.Meta):
+        model = SmartCollection
+        fields = [
+            "id", "name", "slug", "collection_type", "description",
+            "is_active", "sort_order", "criteria", "products", "created_at", "updated_at"
+        ]
 
 
 class AdminDesignerAnalyticsSerializer(AdminBaseSerializer):

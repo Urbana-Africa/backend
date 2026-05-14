@@ -39,6 +39,21 @@ class Designer(BaseModel):
     lookbook_files = models.ManyToManyField(MediaAsset)
     is_verified = models.BooleanField(default=False)
 
+    tagline = models.CharField(max_length=255, blank=True, help_text="Short brand tagline")
+    social_media_links = models.JSONField(
+        default=dict, blank=True,
+        help_text='{"facebook": "url", "twitter": "url", "tiktok": "url"}'
+    )
+    is_sustainable = models.BooleanField(default=False)
+    sustainability_certifications = models.JSONField(
+        default=list, blank=True,
+        help_text='List of certifications e.g. ["GOTS", "Fair Trade"]'
+    )
+    featured_collection = models.ForeignKey(
+        "Collection", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="featured_for_designer"
+    )
+
     # ✅ Single lifecycle field
     status = models.CharField(
         max_length=20,

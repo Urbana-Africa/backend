@@ -434,6 +434,7 @@ class AdminDesignerViewSet(AdminBaseViewSet):
             Designer.Status.APPROVED: ("Profile approved", "Your designer profile has been approved. You can now start selling.", "/dashboard"),
             Designer.Status.REJECTED: ("Profile update required", "Your profile needs some refinements before approval.", "/profile-status"),
             Designer.Status.BLOCKED: ("Account restricted", "Your account has been restricted. Contact support for assistance.", "/help"),
+            Designer.Status.PENDING: ("Profile under review", "Your designer profile is now under review by our curation team.", "/profile-status"),
         }
         if new_status in status_messages:
             title, msg, link = status_messages[new_status]
@@ -474,6 +475,15 @@ class AdminDesignerProductViewSet(AdminBaseViewSet):
 class AdminCollectionViewSet(AdminBaseViewSet):
     queryset = Collection.objects.select_related("designer")
     serializer_class = AdminCollectionSerializer
+
+
+class AdminSmartCollectionViewSet(AdminBaseViewSet):
+    queryset = SmartCollection.objects.prefetch_related("products")
+    serializer_class = AdminSmartCollectionSerializer
+    filterset_fields = ["collection_type", "is_active"]
+    search_fields = ["name", "description"]
+    ordering_fields = ["sort_order", "created_at"]
+    ordering = ["sort_order", "-created_at"]
 
 
 class AdminDesignerAnalyticsViewSet(AdminBaseViewSet):

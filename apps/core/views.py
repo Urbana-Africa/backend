@@ -1,6 +1,7 @@
 import threading
 from django.core.paginator import Paginator
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import models
 from django.db.models import Avg, Prefetch
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -10,10 +11,17 @@ from apps.designers.models import DesignerStory
 from apps.designers.serializers import StorySerializer
 from apps.utils.email_sender import resend_sendmail
 from django.db.models.functions import Lower
-from .models import Country, Currency, Category, MediaAsset, Product, Review, Sizes, UserSettings
+from .models import (
+    Country, Currency, Category, MediaAsset, Product, Review, Sizes,
+    UserSettings, SmartCollection, ProductView, DesignerDailyAnalytics,
+    LoyaltyPoints, LoyaltyBalance, SizeRecommendation, UserLookbook,
+)
 from .serializers import (
     ContactMessageSerializer, CountrySerializer, CurrencySerializer, MediaAssetSerializer,
-    CategorySerializer, ProductSerializer, ReviewSerializer, SizesSerializer, UserSettingsSerializer
+    CategorySerializer, ProductSerializer, ReviewSerializer, SizesSerializer, UserSettingsSerializer,
+    SmartCollectionSerializer, ProductViewSerializer, DesignerDailyAnalyticsSerializer,
+    LoyaltyPointsSerializer, LoyaltyBalanceSerializer,
+    SizeRecommendationSerializer, UserLookbookSerializer,
 )
 from django.db.models import Q
 from django.core.exceptions import ObjectDoesNotExist
@@ -144,18 +152,32 @@ class DesignerListView(APIView):
         search = request.GET.get('search')
         designer_id = request.GET.get('id')
         ordering = request.GET.get('ordering', 'user__username')
+
         if designer_id:
-            designer = Designer.objects.get(slug=designer_id)
+            try:
+                designer = Designer.objects.prefetch_related('lookbook_files').get(
+                    slug=designer_id, status=Designer.Status.APPROVED
+                )
+            except Designer.DoesNotExist:
+                return Response({
+                    "status": "error",
+                    "message": "Designer not found.",
+                    "data": None
+                }, status=status.HTTP_404_NOT_FOUND)
+
             serializer = DesignerSerializer(designer)
             return Response({
                 "status":"success",
                 "message": "Designer retrieved successfully.",
                 "data": serializer.data
             }, status=status.HTTP_200_OK)
-        designers = Designer.objects.all()
-        print(designers)
+
+        designers = Designer.objects.filter(status=Designer.Status.APPROVED).prefetch_related('lookbook_files')
         if search:
-            designers = designers.filter(user__username__icontains=search)
+            designers = designers.filter(
+                Q(user__username__icontains=search) |
+                Q(brand_name__icontains=search)
+            )
         designers = designers.order_by(ordering)
         serializer = DesignerSerializer(designers, many=True)
         return Response({
@@ -447,9 +469,11 @@ class ProductListView(APIView):
                 "category",
                 "subcategory",
                 "brand",
+                "country_of_origin",
             )
             .prefetch_related(
                 "media",
+                "sizes",
                 "user__designer_profile",
             )
         )
@@ -553,6 +577,29 @@ class ProductListView(APIView):
         featured = request.GET.get("featured")
         if featured == "true":
             queryset = queryset.filter(featured=True)
+
+        # -----------------------
+        # PRD V1 FILTERS
+        # -----------------------
+        availability = request.GET.get("availability")
+        if availability:
+            queryset = queryset.filter(availability_type=availability)
+
+        print_type = request.GET.get("print_type")
+        if print_type:
+            queryset = queryset.filter(print_type=print_type)
+
+        occasion = request.GET.get("occasion")
+        if occasion:
+            queryset = queryset.filter(occasion=occasion)
+
+        country_origin = request.GET.get("country_origin")
+        if country_origin:
+            queryset = queryset.filter(country_of_origin__code__iexact=country_origin)
+
+        sustainable = request.GET.get("sustainable")
+        if sustainable == "true":
+            queryset = queryset.filter(is_sustainable=True)
 
         # -----------------------
         # PAGINATION (Infinite Scroll)
@@ -745,7 +792,7 @@ class ContactMessageView(APIView):
             )
 
         contact = serializer.save(
-            # user=request.user if request.user.is_authenticated else None
+            user=request.user if request.user.is_authenticated else None
         )
 
         # -----------------------
@@ -789,18 +836,28 @@ class SearchSuggestions(APIView):
         query = request.GET.get("q", "").strip()
 
         if not query:
-            return Response([])
+            return Response({"data": []})
 
-        names = (
+        products = (
             Product.objects
-            .filter(name__icontains=query)
-            .annotate(lower_name=Lower("name"))
-            .order_by("lower_name")
-            .values_list("name", flat=True)
+            .filter(name__icontains=query, is_published=True, is_admin_published=True, is_active=True)
+            .prefetch_related("media")
+            .order_by("name")
             .distinct()[:6]
         )
 
-        return Response({'data':list(names)})
+        data = []
+        for product in products:
+            first_image = product.media.filter(media_type="image").first()
+            data.append({
+                "id": product.id,
+                "name": product.name,
+                "slug": product.slug,
+                "price": str(product.price),
+                "thumbnail": first_image.file.url if first_image else None,
+            })
+
+        return Response({"data": data})
 
 
 
@@ -1079,4 +1136,190 @@ class SupportTicketDetailView(APIView):
             {"status": "success", "data": serializer.data},
             status=status.HTTP_200_OK,
         )
+
+
+# -------------------------------
+# Smart Collections (Phase 2)
+# -------------------------------
+class SmartCollectionListView(APIView):
+    """List active smart collections."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        collections = SmartCollection.objects.filter(is_active=True).prefetch_related("products")
+        serializer = SmartCollectionSerializer(collections, many=True)
+        return Response({"status": "success", "data": serializer.data})
+
+
+class SmartCollectionDetailView(APIView):
+    """Get a single smart collection by slug."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        try:
+            collection = SmartCollection.objects.prefetch_related("products").get(slug=slug, is_active=True)
+        except SmartCollection.DoesNotExist:
+            return Response({"status": "error", "message": "Collection not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = SmartCollectionSerializer(collection)
+        return Response({"status": "success", "data": serializer.data})
+
+
+# -------------------------------
+# Event Tracking (Phase 2)
+# -------------------------------
+class TrackEventsView(APIView):
+    """POST /core/track — batch event ingestion from frontend."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        events = request.data if isinstance(request.data, list) else [request.data]
+        created = 0
+        for ev in events:
+            product_id = ev.get("metadata", {}).get("product_id") or ev.get("product_id")
+            designer_id = ev.get("metadata", {}).get("designer_id") or ev.get("designer_id")
+            source = ev.get("metadata", {}).get("source", "organic")
+            event_type = ev.get("event_type", "product_view")
+            session_id = ev.get("session_id", "")
+
+            if not product_id:
+                continue
+
+            product = Product.objects.filter(id=product_id).first()
+            if not product:
+                continue
+
+            designer = None
+            if designer_id:
+                try:
+                    designer = Designer.objects.get(id=designer_id)
+                except Designer.DoesNotExist:
+                    pass
+
+            ProductView.objects.create(
+                product=product,
+                designer=designer,
+                session_id=session_id,
+                event_type=event_type,
+                source=source,
+                metadata=ev.get("metadata", {}),
+            )
+            created += 1
+
+        return Response({"status": "success", "tracked": created}, status=status.HTTP_201_CREATED)
+
+
+# -------------------------------
+# Designer Analytics (Phase 2)
+# -------------------------------
+class DesignerAnalyticsView(APIView):
+    """GET /designers/analytics — return aggregated stats for logged-in designer."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            designer = Designer.objects.get(user=request.user)
+        except Designer.DoesNotExist:
+            return Response({"status": "error", "message": "Designer profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Time ranges
+        from django.utils import timezone
+        from datetime import timedelta
+        today = timezone.now().date()
+        last_7 = today - timedelta(days=6)
+        last_30 = today - timedelta(days=29)
+
+        # Aggregate from raw events
+        views_7d = ProductView.objects.filter(designer=designer, created_at__date__gte=last_7).count()
+        views_30d = ProductView.objects.filter(designer=designer, created_at__date__gte=last_30).count()
+
+        # Unique sessions in last 7 days
+        unique_7d = (
+            ProductView.objects.filter(designer=designer, created_at__date__gte=last_7)
+            .values("session_id")
+            .distinct()
+            .count()
+        )
+
+        # Top products by views (last 30d)
+        top_products = (
+            ProductView.objects.filter(designer=designer, created_at__date__gte=last_30)
+            .values("product__name")
+            .annotate(views=models.Count("id"))
+            .order_by("-views")[:5]
+        )
+
+        # Daily breakdown (last 7 days)
+        daily = (
+            ProductView.objects.filter(designer=designer, created_at__date__gte=last_7)
+            .values("created_at__date")
+            .annotate(views=models.Count("id"))
+            .order_by("created_at__date")
+        )
+
+        return Response({
+            "status": "success",
+            "data": {
+                "designer_id": str(designer.id),
+                "views_last_7d": views_7d,
+                "views_last_30d": views_30d,
+                "unique_visitors_7d": unique_7d,
+                "top_products": list(top_products),
+                "daily_views": [
+                    {"date": str(d["created_at__date"]), "views": d["views"]} for d in daily
+                ],
+            },
+        })
+
+
+# -------------------------------
+# Loyalty Points (Phase 2)
+# -------------------------------
+class LoyaltyBalanceView(APIView):
+    """GET /core/loyalty/balance — current user loyalty balance."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        balance, _ = LoyaltyBalance.objects.get_or_create(user=request.user)
+        serializer = LoyaltyBalanceSerializer(balance)
+        return Response({"status": "success", "data": serializer.data})
+
+
+class LoyaltyHistoryView(APIView):
+    """GET /core/loyalty/history — transaction history."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        transactions = LoyaltyPoints.objects.filter(user=request.user)[:50]
+        serializer = LoyaltyPointsSerializer(transactions, many=True)
+        return Response({"status": "success", "data": serializer.data})
+
+
+# -------------------------------
+# Size Recommendation (Phase 2)
+# -------------------------------
+class SizeRecommendationViewSet(ModelViewSet):
+    """CRUD /core/size-recommendations — user-specific size recommendations."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = SizeRecommendationSerializer
+
+    def get_queryset(self):
+        return SizeRecommendation.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+# -------------------------------
+# User Lookbook (Phase 2)
+# -------------------------------
+class UserLookbookViewSet(ModelViewSet):
+    """CRUD /core/lookbooks — user-curated lookbooks."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserLookbookSerializer
+
+    def get_queryset(self):
+        return UserLookbook.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 

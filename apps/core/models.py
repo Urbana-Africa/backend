@@ -161,13 +161,84 @@ class Product(BaseModel):
     media = models.ManyToManyField(MediaAsset, blank=True, related_name='products')
     featured = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
-    stock = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     is_sustainable = models.BooleanField(default=False)  # for sustainable tab
-    
+    sustainability_notes = models.TextField(blank=True, null=True)
+
     # Popularity metric for trending tab
     popularity_score = models.PositiveIntegerField(default=0)
-    
+
+    # ---------------------------
+    # PRD V1 Fields
+    # ---------------------------
+    class AvailabilityType(models.TextChoices):
+        READY_TO_SHIP = "ready_to_ship", "Ready to Ship"
+        MADE_TO_ORDER = "made_to_order", "Made to Order"
+        PRE_ORDER = "pre_order", "Pre-Order"
+        RENTABLE = "rentable", "Rentable"
+
+    class PrintType(models.TextChoices):
+        ANKARA = "ankara", "Ankara"
+        ADIRE = "adire", "Adire"
+        KENTE = "kente", "Kente"
+        BOGOLAN = "bogolan", "Bogolan"
+        OTHER = "other", "Other"
+
+    class Occasion(models.TextChoices):
+        WEDDING = "wedding", "Wedding"
+        WORK = "work", "Work"
+        CASUAL = "casual", "Casual"
+        PARTY = "party", "Party"
+        TRADITIONAL = "traditional", "Traditional"
+        OTHER = "other", "Other"
+
+    availability_type = models.CharField(
+        max_length=20,
+        choices=AvailabilityType.choices,
+        default=AvailabilityType.READY_TO_SHIP,
+    )
+    print_type = models.CharField(
+        max_length=20,
+        choices=PrintType.choices,
+        default=PrintType.OTHER,
+        blank=True,
+    )
+    occasion = models.CharField(
+        max_length=20,
+        choices=Occasion.choices,
+        default=Occasion.OTHER,
+        blank=True,
+    )
+    country_of_origin = models.ForeignKey(
+        Country,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="products",
+    )
+    lead_time_days = models.PositiveIntegerField(
+        default=0,
+        help_text="Lead time in days for Made-to-Order or Pre-Order items",
+    )
+    rental_price_per_day = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Daily rental price for rentable items",
+    )
+    fit_stats = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Aggregated fit feedback e.g. {"true_to_size": 87, "too_tight": 5, "too_loose": 8}',
+    )
+    size_chart_image = models.ImageField(
+        upload_to="product_size_charts/",
+        blank=True,
+        null=True,
+        help_text="Upload a size chart image for this product",
+    )
+
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.name + str(round(random()*9999999)))
@@ -194,6 +265,16 @@ class Review(BaseModel):
     customer = models.ForeignKey('customers.Customer', related_name='reviews', on_delete=models.CASCADE)
     rating = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)], default=5)
     comment = models.TextField(blank=True, null=True)
+    fit_feedback = models.CharField(
+        max_length=50, blank=True,
+        choices=[
+            ("perfect_fit", "Perfect fit"),
+            ("true_to_size", "True to size"),
+            ("too_tight", "Too tight"),
+            ("too_loose", "Too loose"),
+            ("runs_large", "Runs large"),
+        ]
+    )
     is_approved = models.BooleanField(default=False)
 
     def __str__(self):
@@ -311,3 +392,180 @@ class SupportTicket(BaseModel):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+# ---------------------------
+# Smart Collections (PRD Phase 2)
+# ---------------------------
+class SmartCollection(BaseModel):
+    class CollectionType(models.TextChoices):
+        CURATED = "curated", "Curated"
+        TRENDING = "trending", "Trending"
+        SEASONAL = "seasonal", "Seasonal"
+        OCCASION = "occasion", "Occasion"
+        PRINT = "print", "Print Style"
+
+    title = models.CharField(max_length=200)
+    slug = models.SlugField(unique=True, blank=True)
+    subtitle = models.CharField(max_length=300, blank=True)
+    description = models.TextField(blank=True)
+    collection_type = models.CharField(
+        max_length=20, choices=CollectionType.choices, default=CollectionType.CURATED
+    )
+    products = models.ManyToManyField(Product, blank=True, related_name="smart_collections")
+    cover_image = models.ImageField(upload_to="smart_collections/", blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=0)
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.title)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.title
+
+    class Meta:
+        ordering = ["display_order", "-created_at"]
+
+
+# ---------------------------
+# Product View Tracking (PRD Phase 2)
+# ---------------------------
+class ProductView(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="view_events")
+    designer = models.ForeignKey(
+        "designers.Designer",
+        on_delete=models.CASCADE,
+        related_name="product_view_events",
+        null=True,
+        blank=True,
+    )
+    session_id = models.CharField(max_length=100, blank=True, db_index=True)
+    event_type = models.CharField(max_length=50, default="product_view")
+    source = models.CharField(max_length=50, blank=True, default="organic")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["designer", "created_at"]),
+            models.Index(fields=["product", "created_at"]),
+        ]
+
+
+# ---------------------------
+# Designer Daily Analytics (PRD Phase 2)
+# ---------------------------
+class DesignerDailyAnalytics(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    designer = models.ForeignKey(
+        "designers.Designer",
+        on_delete=models.CASCADE,
+        related_name="daily_analytics",
+    )
+    date = models.DateField(db_index=True)
+    page_views = models.PositiveIntegerField(default=0)
+    unique_visitors = models.PositiveIntegerField(default=0)
+    add_to_cart_events = models.PositiveIntegerField(default=0)
+    purchase_events = models.PositiveIntegerField(default=0)
+    revenue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("designer", "date")
+        ordering = ["-date"]
+
+
+# ---------------------------
+# Loyalty & Rewards (PRD Phase 2)
+# ---------------------------
+class LoyaltyPoints(models.Model):
+    class TransactionType(models.TextChoices):
+        EARN = "earn", "Earn"
+        REDEEM = "redeem", "Redeem"
+        EXPIRE = "expire", "Expire"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="loyalty_transactions")
+    points = models.IntegerField()
+    transaction_type = models.CharField(max_length=10, choices=TransactionType.choices)
+    description = models.CharField(max_length=255, blank=True)
+    order = models.ForeignKey(
+        "customers.Order",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="loyalty_entries",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class LoyaltyBalance(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="loyalty_balance")
+    total_points = models.IntegerField(default=0)
+    lifetime_earned = models.IntegerField(default=0)
+    lifetime_redeemed = models.IntegerField(default=0)
+    tier = models.CharField(
+        max_length=20,
+        choices=[
+            ("bronze", "Bronze"),
+            ("silver", "Silver"),
+            ("gold", "Gold"),
+        ],
+        default="bronze",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} — {self.total_points} pts ({self.tier})"
+
+
+# ---------------------------
+# Size Recommendation (PRD Phase 2)
+# ---------------------------
+class SizeRecommendation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="size_recommendations")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="size_recommendations")
+    recommended_size = models.CharField(max_length=50, help_text="Recommended size name")
+    confidence_score = models.PositiveSmallIntegerField(
+        default=0, validators=[MinValueValidator(0)], help_text="0-100 confidence %"
+    )
+    body_measurements = models.JSONField(
+        default=dict, blank=True, help_text='{"chest": 96, "waist": 82, "hips": 100}'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ["user", "product"]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.email} → {self.product.name} : {self.recommended_size}"
+
+
+# ---------------------------
+# User Lookbook (PRD Phase 2)
+# ---------------------------
+class UserLookbook(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="lookbooks")
+    name = models.CharField(max_length=200, help_text="Lookbook title")
+    description = models.TextField(blank=True)
+    products = models.ManyToManyField(Product, blank=True, related_name="lookbooks")
+    cover_image = models.ImageField(upload_to="lookbooks/", blank=True, null=True)
+    is_public = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.email} — {self.name}"

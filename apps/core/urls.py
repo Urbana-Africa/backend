@@ -24,6 +24,7 @@ from .views import (
     TrendingProducts,
     UserSettingsView,
     CategoryListView,
+    BrandListView,
     ProductListView,
     ReviewCreateView,
     ReviewListView,
@@ -72,6 +73,7 @@ urlpatterns += [
 
     # 🏷 Categories
     path("categories", CategoryListView.as_view(), name="core-categories"),
+    path("brands", BrandListView.as_view(), name="core-brands"),
     
     # 🧪 Seeding
     path("seed-dummy-data", SeedDummyDataView.as_view(), name="seed-dummy-data"),

@@ -38,6 +38,7 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('set-csrf', authviews.SetCSRFCookie.as_view(), name='set-csrf'),
     re_path('verify/'+ r'social/(?P<backend>[^/]+)/$',authviews.VerifySocialLogin,name='verify_social'),
+    path('google/one-tap', authviews.GoogleOneTapLogin, name='google-one-tap'),
 
 ]
 

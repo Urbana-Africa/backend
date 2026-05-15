@@ -450,6 +450,15 @@ class CategoryListView(APIView):
         return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
 
 
+class BrandListView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        brands = Brand.objects.all()
+        serializer = BrandSerializer(brands, many=True)
+        return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
+
+
 # ---------------------------
 # Products
 # ---------------------------

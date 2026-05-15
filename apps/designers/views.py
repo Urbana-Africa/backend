@@ -642,7 +642,57 @@ class DesignerDashboardViewSet(DesignerBaseViewSet):
 
         return Response(payload)
     
-# ---------------- Return Requests ----------------
+    @action(detail=False, methods=['get'], url_path='analytics')
+    def analytics(self, request):
+        """Designer analytics (views + top products). View tracking is not yet
+        implemented, so view counts return 0; sales-based top products are
+        derived from orders."""
+        now = timezone.now()
+        last_7 = now - timedelta(days=7)
+        last_30 = now - timedelta(days=30)
+
+        base_items = OrderItem.objects.filter(
+            product__user=request.user,
+            status__in=["processing", "shipped", "delivered"],
+        )
+        recent_items = base_items.filter(created_at__gte=last_30)
+
+        # Top products by units sold (used as a proxy for "top products")
+        top_products_qs = (
+            recent_items
+            .values("product__name")
+            .annotate(units=Sum("quantity"))
+            .order_by("-units")[:10]
+        )
+
+        top_products = [
+            {"product__name": p["product__name"], "views": int(p["units"])}
+            for p in top_products_qs
+        ]
+
+        # Daily views placeholder (last 7 days, all zeros)
+        daily_views = [
+            {
+                "date": (now - timedelta(days=i)).strftime("%Y-%m-%d"),
+                "views": 0,
+            }
+            for i in range(6, -1, -1)
+        ]
+
+        payload = {
+            "status": "success",
+            "data": {
+                "views_last_7d": 0,
+                "views_last_30d": 0,
+                "unique_visitors_7d": 0,
+                "top_products": top_products,
+                "daily_views": daily_views,
+            },
+        }
+
+        return Response(payload)
+
+
 class DesignerReturnRequestViewSet(DesignerBaseViewSet):
 
     serializer_class = ReturnRequestSerializer

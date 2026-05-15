@@ -20,6 +20,8 @@ import string
 from django.utils.decorators import method_decorator
 from social_django.utils import psa
 from django.conf import settings
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 
 
 def getUserData(request):
@@ -879,4 +881,81 @@ def VerifySocialLogin(request, backend):
                     }
             },
             status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def GoogleOneTapLogin(request):
+    """
+    POST /auth/google/one-tap
+    Receives a Google ID token (JWT credential) from the frontend One Tap UI,
+    verifies it with Google, and creates/logs in the user.
+    """
+    credential = request.data.get("credential")
+    if not credential:
+        return Response(
+            {"status": "error", "message": "Missing credential."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        # Verify the Google ID token
+        idinfo = google_id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            settings.GOOGLE_CLIENT_ID,
+            clock_skew_in_seconds=10,
+        )
+
+        # Extract user info
+        email = idinfo.get("email")
+        first_name = idinfo.get("given_name", "")
+        last_name = idinfo.get("family_name", "")
+        picture = idinfo.get("picture", "")
+
+        if not email:
+            return Response(
+                {"status": "error", "message": "Email not provided by Google."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get or create user
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                "first_name": first_name,
+                "last_name": last_name,
+                "is_active": True,
+            },
+        )
+
+        # Update name fields if they were empty
+        if not user.first_name and first_name:
+            user.first_name = first_name
+        if not user.last_name and last_name:
+            user.last_name = last_name
+        user.save()
+
+        token = get_tokens_for_user(user)
+
+        return Response(
+            {
+                "status": "success",
+                "token": token,
+                "user": UserSerializer(user, many=False).data,
+                "is_new_user": created,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except ValueError as e:
+        return Response(
+            {"status": "error", "message": f"Invalid Google credential: {str(e)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as e:
+        return Response(
+            {"status": "error", "message": f"Google login failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

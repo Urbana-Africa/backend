@@ -98,6 +98,25 @@ LOGIN_URL = "/auth/login"
 APPEND_SLASH = False
 
 # =====================================================
+# Social Auth / Google One Tap
+# =====================================================
+AUTHENTICATION_BACKENDS = (
+    "social_core.backends.google.GoogleOAuth2",
+    "django.contrib.auth.backends.ModelBackend",
+)
+
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = config("GOOGLE_CLIENT_ID", default="")
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = config("GOOGLE_CLIENT_SECRET", default="")
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+]
+
+# Google One Tap audience (same as client ID)
+GOOGLE_CLIENT_ID = SOCIAL_AUTH_GOOGLE_OAUTH2_KEY
+
+# =====================================================
 # Templates
 # =====================================================
 

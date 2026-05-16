@@ -238,6 +238,12 @@ class Product(BaseModel):
         null=True,
         help_text="Upload a size chart image for this product",
     )
+    fit_me_image = models.ImageField(
+        upload_to="product_fitme_images/",
+        blank=True,
+        null=True,
+        help_text="PNG image with transparent background for AI virtual try-on",
+    )
 
     def save(self, *args, **kwargs):
         if not self.slug:

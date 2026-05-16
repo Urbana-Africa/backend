@@ -83,6 +83,7 @@ class ProductSerializer(serializers.ModelSerializer):
     media = MediaAssetSerializer(many=True, read_only=True)
     colors = ColorSerializer(many=True, read_only=True)
     country_of_origin = CountrySerializer(read_only=True)
+    fit_me_image = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Product
@@ -116,16 +117,26 @@ class ProductSerializer(serializers.ModelSerializer):
             "popularity_score",
             "fit_stats",
             "size_chart_image",
+            "fit_me_image",
         )
     
     def create(self, validated_data):
         request = self.context.get("request")
         # ManyToMany fields must be set after creation
         sizes = validated_data.pop("sizes", None)
+        fit_me_image = validated_data.pop("fit_me_image", None)
         product = Product.objects.create(**validated_data)
 
         if sizes:
             product.sizes.set(sizes)
+
+        # Handle fit_me_image upload
+        if fit_me_image:
+            product.fit_me_image = fit_me_image
+            product.save(update_fields=["fit_me_image"])
+        elif "fit_me_image" in request.FILES:
+            product.fit_me_image = request.FILES["fit_me_image"]
+            product.save(update_fields=["fit_me_image"])
 
         # Handle multiple uploaded images
         images = request.FILES.getlist("media[]")
@@ -145,12 +156,29 @@ class ProductSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         request = self.context.get("request")
         sizes = validated_data.pop("sizes", None)
+        fit_me_image = validated_data.pop("fit_me_image", None)
+
+        # Detect explicit null from JSON payload for clearing
+        raw_data = request.data if request else {}
+        fit_me_sent = "fit_me_image" in raw_data
 
         # Update basic scalar fields via DRF's default logic
         instance = super().update(instance, validated_data)
 
         if sizes is not None:
             instance.sizes.set(sizes)
+
+        # Handle fit_me_image upload or clearing
+        if fit_me_image:
+            instance.fit_me_image = fit_me_image
+            instance.save(update_fields=["fit_me_image"])
+        elif "fit_me_image" in request.FILES:
+            instance.fit_me_image = request.FILES["fit_me_image"]
+            instance.save(update_fields=["fit_me_image"])
+        elif fit_me_sent and not fit_me_image:
+            # Explicit null sent — clear the field
+            instance.fit_me_image = None
+            instance.save(update_fields=["fit_me_image"])
 
         # Handle new uploaded images on update
         images = request.FILES.getlist("media[]")

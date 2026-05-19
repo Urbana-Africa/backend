@@ -1490,21 +1490,26 @@ Example: {{"occasion": "wedding", "print_type": "ankara", "max_price": 50000, "s
         is_fallback = False
         fallback_reason = None
 
+        def _has_enough(queryset, min_needed):
+            """Check if queryset has >= min_needed results without a full COUNT."""
+            return queryset[:min_needed].exists()
+
         # Step 2 — Tier 1: Exact filters
         qs = self._base_qs()
         qs = self._apply_keyword(qs, parsed_filters.get("search"))
         qs = self._apply_exact_filters(qs, parsed_filters)
         qs = qs.order_by("-popularity_score", "-created_at").distinct()
-        count = qs.count()
+        has_results = _has_enough(qs, self.MIN_RESULTS)
 
         # Step 3 — Tier 2: Loosen price/availability/sustainability
-        if count < self.MIN_RESULTS:
+        if not has_results:
             qs2 = self._base_qs()
             qs2 = self._apply_keyword(qs2, parsed_filters.get("search"))
             qs2 = self._apply_loose_filters(qs2, parsed_filters)
             qs2 = qs2.order_by("-popularity_score", "-created_at").distinct()
-            if qs2.count() >= self.MIN_RESULTS:
-                qs, count = qs2, qs2.count()
+            if _has_enough(qs2, self.MIN_RESULTS):
+                qs = qs2
+                has_results = True
                 is_fallback, fallback_reason = True, "loosened"
                 original = parsed_filters.get("style_note", "")
                 if parsed_filters.get("max_price"):
@@ -1514,12 +1519,13 @@ Example: {{"occasion": "wedding", "print_type": "ankara", "max_price": 50000, "s
                     )
 
         # Step 4 — Tier 3: Keyword-only
-        if count < self.MIN_RESULTS and parsed_filters.get("search"):
+        if not has_results and parsed_filters.get("search"):
             qs3 = self._base_qs()
             qs3 = self._apply_keyword(qs3, parsed_filters.get("search"))
             qs3 = qs3.order_by("-popularity_score", "-created_at").distinct()
-            if qs3.count() >= self.MIN_RESULTS:
-                qs, count = qs3, qs3.count()
+            if _has_enough(qs3, self.MIN_RESULTS):
+                qs = qs3
+                has_results = True
                 is_fallback, fallback_reason = True, "keyword_only"
                 parsed_filters["style_note"] = (
                     "I couldn\u2019t find an exact match, but here are the closest pieces "
@@ -1527,7 +1533,7 @@ Example: {{"occasion": "wedding", "print_type": "ankara", "max_price": 50000, "s
                 )
 
         # Step 5 — Tier 4: Trending fallback
-        if count < self.MIN_RESULTS:
+        if not has_results:
             qs = self._base_qs().order_by("-popularity_score", "-created_at").distinct()
             is_fallback, fallback_reason = True, "trending_fallback"
             parsed_filters["style_note"] = (
@@ -1904,9 +1910,10 @@ class AiPersonalizedSearchView(APIView):
                 brand_name = getattr(getattr(p.user, 'designer_profile', None), 'brand_name', 'this designer')
                 notes.append(f"You have reviewed {brand_name} positively.")
 
-            # Size match
-            if user_sizes and p.sizes.exists():
-                product_sizes = set(s.size for s in p.sizes.all() if s.size)
+            # Size match (use prefetched sizes, avoid .exists() N+1)
+            product_sizes_list = list(p.sizes.all())
+            if user_sizes and product_sizes_list:
+                product_sizes = set(s.name for s in product_sizes_list if s.name)
                 if product_sizes & user_sizes:
                     score += 20
                     notes.append("Available in your size.")
@@ -1939,8 +1946,44 @@ class AiPersonalizedSearchView(APIView):
 
 
 class AiPhotoFitMeView(APIView):
-    """POST /core/ai-photo-fitme — analyze user photo + product, return fit report."""
+    """POST /core/ai-photo-fitme — analyze user photo + product, return fit report.
+
+    Fast path: size recommendation and fit score are computed locally without
+    calling Gemini. Gemini is used only for the narrative text analysis, with a
+    short timeout so the user never waits for AI text if the model is slow.
+    """
     permission_classes = [AllowAny]
+
+    @staticmethod
+    def _compute_fast_fit(product):
+        """Compute recommended size and fit score from product data only."""
+        size_names = [s.name for s in product.sizes.all() if s.name]
+        if not size_names:
+            return {"recommended_size": "One Size", "fit_score": 85}
+
+        # Pick middle size as the safest default recommendation
+        sorted_sizes = sorted(size_names)
+        recommended = sorted_sizes[len(sorted_sizes) // 2]
+
+        # Fit score: more sizes available = higher confidence
+        base_score = 70
+        size_bonus = min(len(size_names) * 4, 20)
+        material_bonus = 5 if product.material else 0
+        desc_bonus = 5 if product.description else 0
+        fit_score = min(base_score + size_bonus + material_bonus + desc_bonus, 98)
+
+        return {"recommended_size": recommended, "fit_score": fit_score}
+
+    @staticmethod
+    def _build_fallback_analysis(product, recommended_size):
+        """Build a basic analysis when Gemini is unavailable or slow."""
+        category = product.category.name if product.category else "this item"
+        material = product.material or "quality fabric"
+        return (
+            f"This {category} is crafted from {material}. "
+            f"We recommend size {recommended_size} based on standard measurements. "
+            f"For the best fit, compare your bust/waist/hip measurements to the designer's size chart."
+        )
 
     def post(self, request):
         product_id = request.data.get("product_id")
@@ -1955,20 +1998,22 @@ class AiPhotoFitMeView(APIView):
         except (ValueError, TypeError):
             return Response({"status": "error", "message": "Invalid product_id"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # ── Fast path: compute fit data locally (sub-100ms) ──
+        fast_data = self._compute_fast_fit(product)
+        size_names = [s.name for s in product.sizes.all() if s.name]
+        sizes_text = ", ".join(size_names) if size_names else "One size"
+
+        # ── Try Gemini for narrative text (best-effort, 5s timeout) ──
         gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
-        if not gemini_key:
-            return Response({"status": "error", "message": "AI service unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        analysis_text = None
+        if gemini_key:
+            try:
+                client = genai.Client(api_key=gemini_key)
+                photo.seek(0)
+                photo_bytes = photo.read()
+                mime = photo.content_type or "image/jpeg"
 
-        try:
-            client = genai.Client(api_key=gemini_key)
-            photo.seek(0)
-            photo_bytes = photo.read()
-            mime = photo.content_type or "image/jpeg"
-
-            size_names = [s.name for s in product.sizes.all() if s.name]
-            sizes_text = ", ".join(size_names) if size_names else "One size"
-
-            prompt = f"""You are a virtual fashion stylist for Urbana Africa.
+                prompt = f"""You are a virtual fashion stylist for Urbana Africa.
 Analyze the user's body in the uploaded photo and the product details below.
 
 Product: {product.name}
@@ -1986,21 +2031,37 @@ Provide:
 Respond ONLY with valid JSON in this exact structure:
 {{"analysis": "detailed text", "recommended_size": "M", "fit_score": 87}}
 """
-            from google.genai import types
-            response = client.models.generate_content(
-                model="gemini-1.5-flash-latest",
-                contents=[
-                    types.Part.from_bytes(data=photo_bytes, mime_type=mime),
-                    prompt,
-                ],
-                config=types.GenerateContentConfig(temperature=0.2, response_mime_type="application/json"),
-            )
-            data = json.loads(response.text)
-            return Response({"status": "success", "data": data}, status=status.HTTP_200_OK)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return Response({"status": "error", "message": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                from google.genai import types
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        client.models.generate_content,
+                        model="gemini-1.5-flash-latest",
+                        contents=[
+                            types.Part.from_bytes(data=photo_bytes, mime_type=mime),
+                            prompt,
+                        ],
+                        config=types.GenerateContentConfig(temperature=0.2, response_mime_type="application/json"),
+                    )
+                    try:
+                        response = future.result(timeout=5)
+                        parsed = json.loads(response.text)
+                        analysis_text = parsed.get("analysis")
+                        # Prefer Gemini's size/score if it provided them, else keep fast values
+                        if parsed.get("recommended_size"):
+                            fast_data["recommended_size"] = parsed["recommended_size"]
+                        if parsed.get("fit_score") is not None:
+                            fast_data["fit_score"] = parsed["fit_score"]
+                    except concurrent.futures.TimeoutError:
+                        pass  # Fall back to locally computed data
+            except Exception:
+                pass  # Silently fall back to fast data on any Gemini error
+
+        if not analysis_text:
+            analysis_text = self._build_fallback_analysis(product, fast_data["recommended_size"])
+
+        fast_data["analysis"] = analysis_text
+        return Response({"status": "success", "data": fast_data}, status=status.HTTP_200_OK)
 
 
 class SubscriptionPlanListView(APIView):

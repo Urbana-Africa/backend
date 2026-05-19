@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Welcome to Urbana Studio</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1B1C1A; line-height: 1.6; margin: 0; padding: 0; background-color: #FBF9F5; }
+        .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        .header { background-color: #1B1C1A; padding: 40px; text-align: center; color: #ffffff; }
+        .content { padding: 40px; }
+        .logo { font-size: 24px; font-weight: 900; letter-spacing: -1px; text-transform: uppercase; }
+        .logo span { color: #EC6D13; font-weight: 300; }
+        .hero-badge { display: inline-block; padding: 8px 16px; border-radius: 50px; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; background-color: #EC6D13; color: #ffffff; margin-bottom: 20px; }
+        h1 { font-size: 28px; font-weight: 900; margin-bottom: 20px; letter-spacing: -0.5px; }
+        p { margin-bottom: 20px; font-size: 14px; color: #4B5563; }
+        .highlight-box { background-color: #faf7f4; padding: 24px; border-radius: 12px; border: 1px solid #e3dbd3; margin: 24px 0; }
+        .highlight-box h3 { margin: 0 0 12px 0; font-size: 14px; color: #1B1C1A; text-transform: uppercase; letter-spacing: 1px; }
+        .highlight-box ul { margin: 0; padding-left: 20px; font-size: 13px; color: #4B5563; }
+        .highlight-box li { margin-bottom: 8px; }
+        .button { display: inline-block; padding: 14px 28px; background-color: #1B1C1A; color: #ffffff; text-decoration: none; border-radius: 50px; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+        .footer { padding: 30px 40px; background-color: #f9fafb; text-align: center; font-size: 11px; color: #9ca3af; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">URBANA<span>STUDIO</span></div>
+        </div>
+        <div class="content">
+            <div class="hero-badge">Welcome Aboard</div>
+
+            <h1>Hello, {{ designer_name }}</h1>
+
+            <p>Your designer profile on <strong>Urbana Studio</strong> has been updated and is looking great. You are now one step closer to showcasing your craft to a global audience that celebrates African design.</p>
+
+            <div class="highlight-box">
+                <h3>What happens next?</h3>
+                <ul>
+                    <li>Our curation team will review your profile and collections.</li>
+                    <li>Once approved, your products will go live on the marketplace.</li>
+                    <li>You will receive notifications for orders, returns, and payouts.</li>
+                    <li>Use your Studio Dashboard to manage products, track sales, and withdraw earnings.</li>
+                </ul>
+            </div>
+
+            <p>While you wait, make sure your lookbooks are polished, your sizing is accurate, and your product photos meet our <a href="https://designer.urbanaafrica.com/help" style="color: #EC6D13;">photo guidelines</a>.</p>
+
+            <a href="https://designer.urbanaafrica.com/dashboard" class="button">Open Studio Dashboard</a>
+        </div>
+        <div class="footer">
+            &copy; 2026 Urbana Council. All rights reserved.<br>
+            Curation for the Modern African Artisan.
+        </div>
+    </div>
+</body>
+</html>

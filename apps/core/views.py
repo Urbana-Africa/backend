@@ -1,8 +1,11 @@
+import json
 import threading
+from django.conf import settings
 from django.core.paginator import Paginator
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
-from django.db.models import Avg, Prefetch
+from django.db.models import Avg, Prefetch, Sum
+from google import genai
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -15,6 +18,7 @@ from .models import (
     Country, Currency, Category, MediaAsset, Product, Review, Sizes,
     UserSettings, SmartCollection, ProductView, DesignerDailyAnalytics,
     LoyaltyPoints, LoyaltyBalance, SizeRecommendation, UserLookbook,
+    SubscriptionPlan, UserSubscription,
 )
 from .serializers import (
     ContactMessageSerializer, CountrySerializer, CurrencySerializer, MediaAssetSerializer,
@@ -22,9 +26,12 @@ from .serializers import (
     SmartCollectionSerializer, ProductViewSerializer, DesignerDailyAnalyticsSerializer,
     LoyaltyPointsSerializer, LoyaltyBalanceSerializer,
     SizeRecommendationSerializer, UserLookbookSerializer,
+    SubscriptionPlanSerializer, UserSubscriptionSerializer,
 )
-from django.db.models import Q
+from django.db.models import Q, Count, F, Window
 from django.core.exceptions import ObjectDoesNotExist
+from django.utils import timezone
+from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -1332,3 +1339,688 @@ class UserLookbookViewSet(ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Search & Suggestions
+# ─────────────────────────────────────────────────────────────────────────────
+from google import genai
+from django.conf import settings
+import json
+import random
+
+
+class AiSearchView(APIView):
+    """
+    POST /core/ai-search
+    Accepts a natural language query, uses Gemini 1.5 Flash to parse it into
+    structured filters, queries the database and returns matching products.
+
+    Fallback tiers (applied when results < MIN_RESULTS):
+      1. Exact Gemini filters
+      2. Drop price / availability / sustainability constraints
+      3. Keyword-only match
+      4. Trending products
+    """
+    permission_classes = [AllowAny]
+    MIN_RESULTS = 4
+
+    # ── DB helpers ────────────────────────────────────────────────────────
+
+    def _base_qs(self):
+        return (
+            Product.objects
+            .filter(is_published=True, is_admin_published=True, is_active=True)
+            .exclude(media=False)
+            .select_related("user", "currency", "category", "subcategory", "brand", "country_of_origin")
+            .prefetch_related("media", "sizes", "user__designer_profile")
+        )
+
+    def _apply_keyword(self, qs, term):
+        if not term:
+            return qs
+        return qs.filter(
+            Q(name__icontains=term) |
+            Q(brand__name__icontains=term) |
+            Q(category__name__icontains=term) |
+            Q(subcategory__name__icontains=term) |
+            Q(description__icontains=term) |
+            Q(user__designer_profile__brand_name__icontains=term)
+        )
+
+    def _apply_exact_filters(self, qs, f):
+        if f.get("occasion"):
+            qs = qs.filter(occasion=f["occasion"])
+        if f.get("print_type"):
+            qs = qs.filter(print_type=f["print_type"])
+        if f.get("availability_type"):
+            qs = qs.filter(availability_type=f["availability_type"])
+        if f.get("is_sustainable") is True:
+            qs = qs.filter(is_sustainable=True)
+        if f.get("min_price"):
+            qs = qs.filter(price__gte=f["min_price"])
+        if f.get("max_price"):
+            qs = qs.filter(price__lte=f["max_price"])
+        return qs
+
+    def _apply_loose_filters(self, qs, f):
+        """Style/occasion/print only — drop price, availability, sustainability."""
+        if f.get("occasion"):
+            qs = qs.filter(occasion=f["occasion"])
+        if f.get("print_type"):
+            qs = qs.filter(print_type=f["print_type"])
+        return qs
+
+    # ── Gemini ────────────────────────────────────────────────────────────
+
+    def _call_gemini(self, message, gemini_key, user_context=""):
+        system_prompt = f"""You are a fashion assistant for Urbana Africa, a pan-African fashion marketplace.
+Extract structured search parameters from the user's natural language query.
+{user_context}
+Available product fields:
+- occasion: "wedding" | "work" | "casual" | "party" | "traditional" | "other"
+- print_type: "ankara" | "adire" | "kente" | "bogolan" | "other"
+- availability_type: "ready_to_ship" | "made_to_order" | "pre_order" | "rentable"
+- is_sustainable: true | false
+- min_price: number in NGN (only if user explicitly mentions a minimum price)
+- max_price: number in NGN (only if user mentions a budget or maximum)
+- search: 1-3 keywords describing the clothing type (e.g. "dress", "agbada", "jumpsuit", "headpiece")
+- style_note: A warm, friendly 1-2 sentence summary of what you understood and what to expect.
+
+Rules:
+- Only set fields clearly implied by the query — do not guess.
+- If price is vague ("affordable", "cheap"), do NOT set min_price/max_price.
+- style_note must always be present and feel personal, not robotic.
+- If the user mentions gender (male/female) in their query, respect it. Otherwise use the user profile context provided above.
+
+Respond ONLY with valid JSON. No markdown, no extra text.
+Example: {{"occasion": "wedding", "print_type": "ankara", "max_price": 50000, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under ₦50,000 — here’s what our designers have for you."}}"""
+
+        client = genai.Client(api_key=gemini_key)
+        response = client.models.generate_content(
+            model="gemini-1.5-flash-latest",
+            contents=message,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.1,
+                response_mime_type="application/json",
+            ),
+        )
+        return json.loads(response.text)
+
+    # ── Main handler ──────────────────────────────────────────────────────
+
+    def post(self, request):
+        message = request.data.get("message", "").strip() or request.data.get("query", "").strip()
+        if not message:
+            return Response(
+                {"status": "error", "message": "Message or query is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
+        if not gemini_key:
+            return Response(
+                {"status": "error", "message": "AI service is currently unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # Step 1 — Build user context
+        user = request.user if request.user.is_authenticated else None
+        user_context = ""
+        if user:
+            parts = []
+            if getattr(user, 'gender', ''):
+                parts.append(f"gender: {user.gender}")
+            if getattr(user, 'height', ''):
+                parts.append(f"height: {user.height}")
+            if getattr(user, 'size', ''):
+                parts.append(f"typical size: {user.size}")
+            if parts:
+                user_context = f"User profile context (use if query doesn't contradict): {', '.join(parts)}.\n"
+
+        # Step 2 — Parse with Gemini
+        try:
+            parsed_filters = self._call_gemini(message, gemini_key, user_context)
+        except Exception:
+            parsed_filters = {
+                "search": message,
+                "style_note": "Here\u2019s what I found based on your description.",
+            }
+
+        limit = int(request.GET.get("limit", 20))
+        is_fallback = False
+        fallback_reason = None
+
+        # Step 2 — Tier 1: Exact filters
+        qs = self._base_qs()
+        qs = self._apply_keyword(qs, parsed_filters.get("search"))
+        qs = self._apply_exact_filters(qs, parsed_filters)
+        qs = qs.order_by("-popularity_score", "-created_at").distinct()
+        count = qs.count()
+
+        # Step 3 — Tier 2: Loosen price/availability/sustainability
+        if count < self.MIN_RESULTS:
+            qs2 = self._base_qs()
+            qs2 = self._apply_keyword(qs2, parsed_filters.get("search"))
+            qs2 = self._apply_loose_filters(qs2, parsed_filters)
+            qs2 = qs2.order_by("-popularity_score", "-created_at").distinct()
+            if qs2.count() >= self.MIN_RESULTS:
+                qs, count = qs2, qs2.count()
+                is_fallback, fallback_reason = True, "loosened"
+                original = parsed_filters.get("style_note", "")
+                if parsed_filters.get("max_price"):
+                    parsed_filters["style_note"] = (
+                        f"{original} I couldn\u2019t find enough pieces within that exact budget, "
+                        f"so I\u2019ve broadened the results \u2014 prices may vary."
+                    )
+
+        # Step 4 — Tier 3: Keyword-only
+        if count < self.MIN_RESULTS and parsed_filters.get("search"):
+            qs3 = self._base_qs()
+            qs3 = self._apply_keyword(qs3, parsed_filters.get("search"))
+            qs3 = qs3.order_by("-popularity_score", "-created_at").distinct()
+            if qs3.count() >= self.MIN_RESULTS:
+                qs, count = qs3, qs3.count()
+                is_fallback, fallback_reason = True, "keyword_only"
+                parsed_filters["style_note"] = (
+                    "I couldn\u2019t find an exact match, but here are the closest pieces "
+                    "our designers have to offer \u2014 styled with your vibe in mind."
+                )
+
+        # Step 5 — Tier 4: Trending fallback
+        if count < self.MIN_RESULTS:
+            qs = self._base_qs().order_by("-popularity_score", "-created_at").distinct()
+            is_fallback, fallback_reason = True, "trending_fallback"
+            parsed_filters["style_note"] = (
+                "I couldn\u2019t find pieces that exactly match your description right now \u2014 "
+                "but here are the most popular looks our community is loving this season."
+            )
+
+        paginator = Paginator(qs, limit)
+        page_obj = paginator.get_page(1)
+        serializer = ProductSerializer(page_obj, many=True)
+
+        return Response(
+            {
+                "status": "success",
+                "style_note": parsed_filters.get("style_note", "Here are the pieces I found for you."),
+                "parsed_filters": parsed_filters,
+                "is_fallback": is_fallback,
+                "fallback_reason": fallback_reason,
+                "data": serializer.data,
+                "pagination": {
+                    "current_page": 1,
+                    "total_pages": paginator.num_pages,
+                    "total_items": paginator.count,
+                    "has_next": page_obj.has_next(),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AiSuggestionsView(APIView):
+    """
+    GET /core/ai-suggestions
+    Returns 5 search prompt suggestions curated from real products in the DB
+    by parsing them through Gemini.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
+        if not gemini_key:
+            return Response(
+                {"status": "error", "message": "AI service is unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # Pull up to 20 distinct products that have occasion/print_type
+        products = (
+            Product.objects
+            .filter(is_published=True, is_admin_published=True, is_active=True)
+            .exclude(occasion="other")
+            .exclude(print_type="other")
+            .select_related("category")
+            .values("name", "occasion", "print_type", "category__name", "price")
+            .order_by("-popularity_score", "-created_at")[:20]
+        )
+
+        products_list = list(products)
+        random.shuffle(products_list)
+        sample = products_list[:10]  # Take 10 to give Gemini variety
+
+        # Format DB sample for Gemini
+        context_items = []
+        for p in sample:
+            price = p.get("price")
+            context_items.append(
+                f"- {p.get('name')} (Type: {p.get('category__name')}, Print: {p.get('print_type')}, Occasion: {p.get('occasion')}, Price: NGN {price})"
+            )
+        context_text = "\n".join(context_items)
+
+        system_prompt = f"""You are a creative fashion assistant for Urbana Africa.
+Your task is to generate 5 inspiring, natural-sounding search prompts that a user could use in our AI Search, BASED EXCLUSIVELY on the actual products in our catalog.
+
+Here is a sample of our current inventory:
+{context_text}
+
+Rules for generating prompts:
+- Each prompt must be a natural sentence fragment someone would type (e.g., "A bold Ankara dress for a wedding under NGN 50000").
+- The prompts must map back to the products provided in the inventory sample above.
+- Make them diverse (mix up occasions, prints, prices, clothing types).
+- Keep them under 15 words each.
+
+Respond ONLY with a valid JSON array of 5 strings. No markdown formatting, no extra text.
+Example: ["Show me elegant Adire outfits for work", "Ankara wedding guest dress under 40000 NGN"]"""
+
+        try:
+            client = genai.Client(api_key=gemini_key)
+            response = client.models.generate_content(
+                model="gemini-1.5-flash-latest",
+                contents="Generate 5 search prompt suggestions.",
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.7,
+                    response_mime_type="application/json",
+                ),
+            )
+            suggestions = json.loads(response.text)
+            if not isinstance(suggestions, list):
+                raise ValueError("Expected a list")
+            suggestions = suggestions[:5]
+        except Exception:
+            # Absolute fallback
+            suggestions = [
+                "Show me Ankara dresses for a wedding",
+                "Casual Adire tops for the weekend",
+                "Sustainable workwear outfits",
+                "Kente styles for a traditional ceremony",
+            ]
+
+        return Response(
+            {"status": "success", "data": suggestions[:5]}, status=status.HTTP_200_OK
+        )
+
+
+class AiOutfitBuilderView(APIView):
+    """
+    POST /core/ai-outfit-builder
+    Accepts a product ID or natural-language request and returns a curated
+    outfit (primary item + complementary pieces) using actual DB relationships.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        product_id = request.data.get("product_id")
+        query = request.data.get("query", "").strip().lower()
+        user = request.user if request.user.is_authenticated else None
+
+        # 1. Resolve primary product
+        primary = None
+        if product_id:
+            try:
+                primary = Product.objects.select_related("user__designer_profile", "category").get(id=product_id)
+            except Product.DoesNotExist:
+                return Response({"status": "error", "message": "Product not found."}, status=status.HTTP_404_NOT_FOUND)
+        elif query:
+            # Quick keyword search for primary
+            primary = Product.objects.filter(
+                Q(name__icontains=query) | Q(description__icontains=query)
+            ).select_related("user__designer_profile", "category").annotate(
+                avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
+            ).order_by("-avg_rating").first()
+            if not primary:
+                return Response({"status": "error", "message": "No matching product found."}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            return Response({"status": "error", "message": "Provide product_id or query."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Find complementary categories
+        complement_map = {
+            "dress": ["shoes", "bag", "jewelry"],
+            "top": ["bottom", "shoes", "bag"],
+            "bottom": ["top", "shoes", "bag"],
+            "shoes": ["dress", "bottom", "bag"],
+            "bag": ["dress", "top", "bottom"],
+            "jewelry": ["dress", "top"],
+            "blazer": ["bottom", "shoes", "bag"],
+            "skirt": ["top", "shoes", "bag"],
+        }
+        cat_name = (primary.category.name if primary.category else "").lower()
+        target_complements = complement_map.get(cat_name, ["shoes", "bag", "jewelry"])
+
+        # 3. Fetch complementary products
+        complements = []
+        for comp_cat in target_complements:
+            qs = Product.objects.filter(
+                category__name__icontains=comp_cat
+            ).exclude(id=primary.id).annotate(
+                avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
+            )
+            # Prioritize same designer, then by popularity/rating
+            same_designer = qs.filter(user=primary.user).order_by("-avg_rating").first()
+            if same_designer:
+                complements.append(same_designer)
+            else:
+                top = qs.order_by("-popularity_score", "-avg_rating").first()
+                if top:
+                    complements.append(top)
+
+        # 4. De-duplicate and limit
+        seen = {primary.id}
+        unique_complements = []
+        for p in complements:
+            if p.id not in seen:
+                seen.add(p.id)
+                unique_complements.append(p)
+                if len(unique_complements) >= 3:
+                    break
+
+        # 5. Personalize if user is authenticated
+        personalization_note = ""
+        if user:
+            lookbook_ids = UserLookbook.objects.filter(user=user).values_list("product_id", flat=True)
+            review_designers = Review.objects.filter(customer__user=user).values_list("product__user", flat=True)
+            if primary.user.id in review_designers:
+                personalization_note = "You have loved this designer's work before."
+
+        return Response({
+            "status": "success",
+            "data": {
+                "primary": ProductSerializer(primary, context={"request": request}).data,
+                "outfit": ProductSerializer(unique_complements, many=True, context={"request": request}).data,
+                "style_note": personalization_note or f"Complete your look with these {', '.join(target_complements[:3])} picks.",
+                "total_price": str(sum([p.price for p in unique_complements]) + primary.price),
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class AiTrendingView(APIView):
+    """
+    GET /core/ai-trending
+    Returns live trending data and AI-generated prompts based on actual DB activity.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        since = timezone.now() - timedelta(days=7)
+
+        # Top trending categories by views
+        trending_cats = ProductView.objects.filter(
+            created_at__gte=since
+        ).values("product__category__name").annotate(
+            view_count=Count("id")
+        ).order_by("-view_count")[:5]
+
+        # Top trending designers by analytics
+        trending_designers = DesignerDailyAnalytics.objects.filter(
+            date__gte=since.date()
+        ).values("designer__brand_name").annotate(
+            total_views=Sum("page_views")
+        ).order_by("-total_views")[:5]
+
+        # Best-selling products (highest views in last 7 days)
+        hot_products = Product.objects.filter(
+            view_events__created_at__gte=since
+        ).annotate(
+            recent_views=Count("view_events")
+        ).order_by("-recent_views")[:6]
+
+        # AI-generated prompts based on trending data
+        gemini_key = getattr(settings, "GEMINI_API_KEY", None)
+        suggestions = []
+        if gemini_key:
+            try:
+                cat_context = ", ".join([c["product__category__name"] for c in trending_cats if c["product__category__name"]])
+                designer_context = ", ".join([d["designer__brand_name"] for d in trending_designers if d["designer__brand_name"]])
+                system_prompt = f"""You are a creative fashion assistant for Urbana Africa.
+Generate 5 inspiring, natural-sounding search prompts based on current trends:
+Trending categories: {cat_context}
+Trending designers: {designer_context}
+Respond ONLY with a valid JSON array of 5 strings.""" 
+                client = genai.Client(api_key=gemini_key)
+                response = client.models.generate_content(
+                    model="gemini-1.5-flash-latest",
+                    contents="Generate trending search prompts.",
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=0.9,
+                    ),
+                )
+                raw = response.text.strip()
+                if raw.startswith("["):
+                    suggestions = json.loads(raw)
+                elif "```" in raw:
+                    suggestions = json.loads(raw.split("```")[1].strip("json").strip())
+            except Exception:
+                suggestions = []
+
+        if not suggestions:
+            suggestions = [
+                f"Trending now: {c['product__category__name']}" for c in trending_cats[:3]
+            ] + [
+                f"Shop {d['designer__brand_name']}" for d in trending_designers[:2]
+            ]
+
+        return Response({
+            "status": "success",
+            "data": {
+                "trending_categories": list(trending_cats),
+                "trending_designers": list(trending_designers),
+                "hot_products": ProductSerializer(hot_products, many=True, context={"request": request}).data,
+                "suggestions": suggestions[:5],
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class AiSmartCollectionView(APIView):
+    """
+    POST /core/ai-smart-collection
+    Auto-generates a SmartCollection from a user query + matched products.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        query = request.data.get("query", "").strip()
+        product_ids = request.data.get("product_ids", [])
+        if not query and not product_ids:
+            return Response({"status": "error", "message": "Provide query or product_ids."}, status=status.HTTP_400_BAD_REQUEST)
+
+        products = []
+        if product_ids:
+            products = list(Product.objects.filter(id__in=product_ids))
+        else:
+            products = list(Product.objects.filter(
+                Q(name__icontains=query) |
+                Q(description__icontains=query) |
+                Q(category__name__icontains=query)
+            )[:20])
+
+        if not products:
+            return Response({"status": "error", "message": "No products matched."}, status=status.HTTP_404_NOT_FOUND)
+
+        collection = SmartCollection.objects.create(
+            user=request.user,
+            name=f"AI: {query.title() or 'Curated Picks'}",
+            description=f"Auto-generated collection for '{query}'",
+            auto_generated=True,
+            query=query,
+        )
+        collection.products.set(products)
+
+        return Response({
+            "status": "success",
+            "data": {
+                "collection": SmartCollectionSerializer(collection, context={"request": request}).data,
+                "matched_count": len(products),
+            }
+        }, status=status.HTTP_201_CREATED)
+
+
+class AiPersonalizedSearchView(APIView):
+    """
+    POST /core/ai-personalized-search
+    Enhanced AI search that factors in user's lookbook, reviews, and size recommendations.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        query = request.data.get("query", "").strip()
+        if not query:
+            return Response({"status": "error", "message": "Query is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+
+        # 1. Gather user context
+        lookbook_ids = set(UserLookbook.objects.filter(user=user).values_list("product_id", flat=True))
+        review_designers = set(Review.objects.filter(customer__user=user).values_list("product__user", flat=True))
+        size_recs = SizeRecommendation.objects.filter(user=user).first()
+        user_sizes = set()
+        if size_recs:
+            user_sizes = set(filter(None, [size_recs.top_size, size_recs.bottom_size, size_recs.shoe_size]))
+
+        # 2. Base search
+        base_qs = Product.objects.filter(
+            Q(name__icontains=query) |
+            Q(description__icontains=query) |
+            Q(category__name__icontains=query)
+        ).select_related("user__designer_profile", "category").prefetch_related("sizes").annotate(
+            avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
+        )
+
+        # 3. Score and annotate each product
+        scored = []
+        for p in base_qs[:50]:
+            score = 0
+            notes = []
+
+            # Lookbook affinity
+            if p.id in lookbook_ids:
+                score += 30
+                notes.append("You saved a similar item.")
+
+            # Designer affinity
+            if p.user and p.user.id in review_designers:
+                score += 25
+                brand_name = getattr(getattr(p.user, 'designer_profile', None), 'brand_name', 'this designer')
+                notes.append(f"You have reviewed {brand_name} positively.")
+
+            # Size match
+            if user_sizes and p.sizes.exists():
+                product_sizes = set(s.size for s in p.sizes.all() if s.size)
+                if product_sizes & user_sizes:
+                    score += 20
+                    notes.append("Available in your size.")
+
+            # Popularity
+            score += min(p.popularity_score / 100, 15)
+            score += p.avg_rating * 2 if p.avg_rating else 0
+
+            scored.append({
+                "product": p,
+                "score": score,
+                "notes": notes,
+            })
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+
+        # 4. Build response
+        results = []
+        for item in scored[:12]:
+            ser = ProductSerializer(item["product"], context={"request": request}).data
+            ser["ai_score"] = item["score"]
+            ser["ai_notes"] = item["notes"]
+            results.append(ser)
+
+        return Response({
+            "status": "success",
+            "data": results,
+            "personalized": bool(lookbook_ids or review_designers or user_sizes),
+        }, status=status.HTTP_200_OK)
+
+
+class AiPhotoFitMeView(APIView):
+    """POST /core/ai-photo-fitme — analyze user photo + product, return fit report."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        product_id = request.data.get("product_id")
+        photo = request.FILES.get("user_photo")
+        if not photo or not product_id:
+            return Response({"status": "error", "message": "Photo and product_id required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            product = Product.objects.prefetch_related("sizes").get(id=product_id)
+        except Product.DoesNotExist:
+            return Response({"status": "error", "message": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+        except (ValueError, TypeError):
+            return Response({"status": "error", "message": "Invalid product_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
+        if not gemini_key:
+            return Response({"status": "error", "message": "AI service unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        try:
+            client = genai.Client(api_key=gemini_key)
+            photo.seek(0)
+            photo_bytes = photo.read()
+            mime = photo.content_type or "image/jpeg"
+
+            size_names = [s.name for s in product.sizes.all() if s.name]
+            sizes_text = ", ".join(size_names) if size_names else "One size"
+
+            prompt = f"""You are a virtual fashion stylist for Urbana Africa.
+Analyze the user's body in the uploaded photo and the product details below.
+
+Product: {product.name}
+Category: {product.category.name if product.category else 'N/A'}
+Price: ₦{product.price}
+Sizes available: {sizes_text}
+Material: {product.material or 'N/A'}
+Description: {product.description or 'N/A'}
+
+Provide:
+1. A detailed fit analysis (body type assessment, how the product would fit, style advice, color matching notes)
+2. Recommended size from the available sizes
+3. A fit confidence score (0-100)
+
+Respond ONLY with valid JSON in this exact structure:
+{{"analysis": "detailed text", "recommended_size": "M", "fit_score": 87}}
+"""
+            from google.genai import types
+            response = client.models.generate_content(
+                model="gemini-1.5-flash-latest",
+                contents=[
+                    types.Part.from_bytes(data=photo_bytes, mime_type=mime),
+                    prompt,
+                ],
+                config=types.GenerateContentConfig(temperature=0.2, response_mime_type="application/json"),
+            )
+            data = json.loads(response.text)
+            return Response({"status": "success", "data": data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({"status": "error", "message": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class SubscriptionPlanListView(APIView):
+    """GET /core/subscription-plans — list all active plans."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        plans = SubscriptionPlan.objects.filter(is_active=True)
+        serializer = SubscriptionPlanSerializer(plans, many=True)
+        return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
+
+
+class UserSubscriptionView(APIView):
+    """GET /core/my-subscription — current user's subscription."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            sub = request.user.subscription
+            serializer = UserSubscriptionSerializer(sub)
+            return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
+        except UserSubscription.DoesNotExist:
+            return Response({"status": "success", "data": None}, status=status.HTTP_200_OK)

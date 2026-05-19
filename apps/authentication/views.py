@@ -1,6 +1,7 @@
 from random import random
 import threading
 from django.http import JsonResponse
+from django.template.loader import render_to_string
 from rest_framework.views import APIView,status
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -10,7 +11,7 @@ from apps.utils.email_sender import resend_sendmail
 from .serializers import *
 from rest_framework import status
 from django.contrib.auth import logout
-from rest_framework.permissions import IsAuthenticated,AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.core.exceptions import ObjectDoesNotExist
 from django.contrib.auth.hashers import check_password,make_password
@@ -571,14 +572,52 @@ class AllUserView(APIView):
     permission_classes = ()
     # permission_classes = ([IsAuthenticated])
 
-    def get(self,request):
+    def get(self, request):
+        from django.db.models import Q
+        from django.core.paginator import Paginator
 
-        user = User.objects.all()
-        user = UserSerializer(user,many = True )
-        if len(user.data) > 0:
-            return Response(user.data,status=status.HTTP_200_OK)
+        queryset = User.objects.all().order_by('-date_joined')
 
-        return Response({'no_user':True},status=status.HTTP_400_BAD_REQUEST)
+        search = request.query_params.get('search', '').strip()
+        role = request.query_params.get('role', 'all')
+        page = int(request.query_params.get('page', 1))
+        limit = int(request.query_params.get('limit', 10))
+
+        if search:
+            queryset = queryset.filter(
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search) |
+                Q(email__icontains=search) |
+                Q(username__icontains=search)
+            )
+
+        if role != 'all':
+            if role == 'designer':
+                queryset = queryset.filter(
+                    Q(designer_profile__isnull=False) | Q(user_type='designer')
+                )
+            elif role == 'customer':
+                queryset = queryset.filter(
+                    designer_profile__isnull=True, user_type='customer'
+                )
+            else:
+                queryset = queryset.filter(user_type=role)
+
+        paginator = Paginator(queryset, limit)
+        page_obj = paginator.get_page(page)
+
+        serializer = UserSerializer(page_obj.object_list, many=True)
+
+        return Response({
+            'results': serializer.data,
+            'pagination': {
+                'current_page': page_obj.number,
+                'total_pages': paginator.num_pages,
+                'total_items': paginator.count,
+                'has_next': page_obj.has_next(),
+                'has_previous': page_obj.has_previous(),
+            }
+        }, status=status.HTTP_200_OK)
 
 
 class Home(APIView):
@@ -640,6 +679,74 @@ class DeleteAllUsersView(APIView):
         except Exception as e:
             return Response({'message':e},status=status.HTTP_400_BAD_REQUEST)
  
+
+
+class AdminUserActionView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        user_id = request.data.get("user_id")
+        action = request.data.get("action")
+
+        if not user_id or not action:
+            return Response(
+                {"status": "error", "message": "user_id and action are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {"status": "error", "message": "User not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if action == "toggle_active":
+            user.is_active = not user.is_active
+            user.save()
+            return Response(
+                {
+                    "status": "success",
+                    "message": f"User {'activated' if user.is_active else 'suspended'}.",
+                    "is_active": user.is_active,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        elif action == "verify":
+            user.is_verified = True
+            user.save()
+            return Response(
+                {"status": "success", "message": "User verified.", "is_verified": True},
+                status=status.HTTP_200_OK,
+            )
+
+        elif action == "change_role":
+            new_role = request.data.get("role")
+            if new_role not in dict(User.USER_TYPE_CHOICES):
+                return Response(
+                    {"status": "error", "message": f"Invalid role: {new_role}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user.user_type = new_role
+            user.save()
+            return Response(
+                {"status": "success", "message": f"Role changed to {new_role}.", "role": new_role},
+                status=status.HTTP_200_OK,
+            )
+
+        elif action == "delete":
+            user.delete()
+            return Response(
+                {"status": "success", "message": "User deleted."},
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(
+            {"status": "error", "message": f"Unknown action: {action}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 class UserView(APIView):
@@ -743,12 +850,22 @@ class EditUserView(APIView):
 
     def put(self, request):
         try:
-            first_name = str(request.data['first_name'])
-            last_name = str(request.data['last_name'])
             user = request.user
-            user.first_name = first_name
-            user.last_name = last_name
-            user.phone_number =  str(request.data['phone_number'])
+            data = request.data
+            if 'first_name' in data:
+                user.first_name = str(data['first_name'])
+            if 'last_name' in data:
+                user.last_name = str(data['last_name'])
+            if 'phone_number' in data:
+                user.phone_number = str(data['phone_number'])
+            if 'gender' in data:
+                user.gender = str(data['gender']).lower()
+            if 'height' in data:
+                user.height = str(data['height'])
+            if 'size' in data:
+                user.size = str(data['size'])
+            if 'date_of_birth' in data:
+                user.date_of_birth = data['date_of_birth'] or None
             user.save()
             return Response({'user': getUserData(request), 'status': 'success'}, status=status.HTTP_202_ACCEPTED)
         except Exception as e:
@@ -809,6 +926,25 @@ class Signup(APIView):
             
             serialized_data = UserSerializer(user)
             send_verification_email(user)
+
+            # Send welcome email to customers
+            if user_type == 'customer':
+                try:
+                    context = {
+                        "first_name": user.first_name or "there",
+                    }
+                    message = render_to_string("administrator/customer_welcome.html", context)
+                    threading.Thread(
+                        target=resend_sendmail,
+                        args=(
+                            "Welcome to Urbana — You Are In",
+                            [user.email],
+                            message,
+                        ),
+                    ).start()
+                except Exception as e:
+                    print(f"Error sending customer welcome email: {str(e)}")
+
             data = {'status':'success','data':serialized_data.data}
             return Response(data,status=status.HTTP_202_ACCEPTED)
         else:

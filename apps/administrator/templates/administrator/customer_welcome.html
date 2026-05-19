@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Welcome to Urbana</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1B1C1A; line-height: 1.6; margin: 0; padding: 0; background-color: #FBF9F5; }
+        .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        .header { background-color: #1B1C1A; padding: 40px; text-align: center; color: #ffffff; }
+        .content { padding: 40px; }
+        .logo { font-size: 24px; font-weight: 900; letter-spacing: -1px; text-transform: uppercase; }
+        .logo span { color: #EC6D13; font-weight: 300; }
+        .hero-badge { display: inline-block; padding: 8px 16px; border-radius: 50px; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; background-color: #EC6D13; color: #ffffff; margin-bottom: 20px; }
+        h1 { font-size: 28px; font-weight: 900; margin-bottom: 20px; letter-spacing: -0.5px; }
+        p { margin-bottom: 20px; font-size: 14px; color: #4B5563; }
+        .perks { display: flex; gap: 16px; flex-wrap: wrap; margin: 24px 0; }
+        .perk { flex: 1; min-width: 140px; background-color: #faf7f4; padding: 20px; border-radius: 12px; border: 1px solid #e3dbd3; text-align: center; }
+        .perk-icon { font-size: 24px; margin-bottom: 8px; }
+        .perk-title { font-size: 12px; font-weight: bold; color: #1B1C1A; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .perk-desc { font-size: 12px; color: #6B7280; }
+        .button { display: inline-block; padding: 14px 28px; background-color: #1B1C1A; color: #ffffff; text-decoration: none; border-radius: 50px; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+        .footer { padding: 30px 40px; background-color: #f9fafb; text-align: center; font-size: 11px; color: #9ca3af; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">URBANA<span>AFRICA</span></div>
+        </div>
+        <div class="content">
+            <div class="hero-badge">You Are In</div>
+
+            <h1>Welcome, {{ first_name }}</h1>
+
+            <p>Thank you for joining <strong>Urbana</strong> — the curated marketplace where modern African fashion meets the world. You are now part of a community that celebrates craftsmanship, culture, and conscious style.</p>
+
+            <div class="perks">
+                <div class="perk">
+                    <div class="perk-icon">&#128722;</div>
+                    <div class="perk-title">Shop Curated</div>
+                    <div class="perk-desc">Discover pieces from Africa&apos;s finest designers.</div>
+                </div>
+                <div class="perk">
+                    <div class="perk-icon">&#128220;</div>
+                    <div class="perk-title">Save Wishlists</div>
+                    <div class="perk-desc">Bookmark your favourites for later.</div>
+                </div>
+                <div class="perk">
+                    <div class="perk-icon">&#128663;</div>
+                    <div class="perk-title">Track Orders</div>
+                    <div class="perk-desc">Follow every step to your doorstep.</div>
+                </div>
+            </div>
+
+            <p>Your account is ready. Explore new arrivals, build your wardrobe, and experience fashion with meaning.</p>
+
+            <a href="https://urbanaafrica.com" class="button">Start Shopping</a>
+        </div>
+        <div class="footer">
+            &copy; 2026 Urbana Council. All rights reserved.<br>
+            Curation for the Modern African Artisan.
+        </div>
+    </div>
+</body>
+</html>

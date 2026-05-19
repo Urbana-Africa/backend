@@ -19,6 +19,7 @@ urlpatterns = [
     path('user/delete/all', authviews.DeleteAllUsersView.as_view(),name='delete_all_user'),
     path('user/delete', authviews.DeleteUserView.as_view(),name='delete_user'),
     path('user/edit', authviews.EditUserView.as_view(),name='edit_user'),
+    path('user/action', authviews.AdminUserActionView.as_view(),name='admin_user_action'),
     path("login", authviews.LoginView.as_view(), name="login"),
     path("check-email", authviews.CheckEmail.as_view(), name="checkemail"),
     path("email/set", authviews.SetEmail.as_view(), name="setemail"),

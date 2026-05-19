@@ -40,12 +40,21 @@ from .views import (
     LoyaltyHistoryView,
     SizeRecommendationViewSet,
     UserLookbookViewSet,
+    AiSearchView,
+    AiSuggestionsView,
+    AiOutfitBuilderView,
+    AiTrendingView,
+    AiSmartCollectionView,
+    AiPersonalizedSearchView,
+    AiPhotoFitMeView,
+    SubscriptionPlanListView,
+    UserSubscriptionView,
 )
 
 # -------------------------------
 # DRF Router
 # -------------------------------
-router = DefaultRouter(trailing_slash=False)
+router = DefaultRouter()
 router.register(r"media", MediaAssetViewSet, basename="media")  # /media/<id>
 router.register(r"size-recommendations", SizeRecommendationViewSet, basename="size-recommendations")
 router.register(r"lookbooks", UserLookbookViewSet, basename="lookbooks")
@@ -109,12 +118,24 @@ urlpatterns += [
     path("support/tickets", SupportTicketListView.as_view(), name="support-ticket-list"),
     path("support/tickets/create", SupportTicketCreateView.as_view(), name="support-ticket-create"),
     path("support/tickets/<str:ticket_id>", SupportTicketDetailView.as_view(), name="support-ticket-detail"),
-
     # 🧠 Smart Collections
     path("smart-collections", SmartCollectionListView.as_view(), name="smart-collections"),
     path("smart-collections/<slug:slug>", SmartCollectionDetailView.as_view(), name="smart-collection-detail"),
 
-    # 📊 Tracking & Analytics
+    # 🤖 AI Search
+    path("ai-search", AiSearchView.as_view(), name="core-ai-search"),
+    path("ai-suggestions", AiSuggestionsView.as_view(), name="core-ai-suggestions"),
+    path("ai-outfit-builder", AiOutfitBuilderView.as_view(), name="core-ai-outfit-builder"),
+    path("ai-trending", AiTrendingView.as_view(), name="core-ai-trending"),
+    path("ai-smart-collection", AiSmartCollectionView.as_view(), name="core-ai-smart-collection"),
+    path("ai-personalized-search", AiPersonalizedSearchView.as_view(), name="core-ai-personalized-search"),
+    path("ai-photo-fitme", AiPhotoFitMeView.as_view(), name="core-ai-photo-fitme"),
+
+    # � Subscriptions
+    path("subscription-plans", SubscriptionPlanListView.as_view(), name="core-subscription-plans"),
+    path("my-subscription", UserSubscriptionView.as_view(), name="core-my-subscription"),
+
+    # �📊 Tracking & Analytics
     path("track", TrackEventsView.as_view(), name="track-events"),
     path("designers/analytics", DesignerAnalyticsView.as_view(), name="designer-analytics"),
 

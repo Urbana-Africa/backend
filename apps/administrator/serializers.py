@@ -38,10 +38,40 @@ class AdminBaseSerializer(serializers.ModelSerializer):
 # =====================================================
 
 class AdminCustomerSerializer(AdminBaseSerializer):
-    user_email = serializers.EmailField(source="user.email", read_only=True)
+    first_name = serializers.CharField(source="user.first_name", read_only=True)
+    last_name = serializers.CharField(source="user.last_name", read_only=True)
+    email = serializers.EmailField(source="user.email", read_only=True)
+    avatar = serializers.SerializerMethodField()
+    country = serializers.SerializerMethodField()
+    order_count = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
 
     class Meta(AdminBaseSerializer.Meta):
         model = Customer
+        fields = [
+            "id", "first_name", "last_name", "email", "phone", "avatar",
+            "country", "order_count", "status", "created_at",
+        ]
+
+    def get_avatar(self, obj):
+        if obj.avatar:
+            return obj.avatar.url
+        if obj.user.profile_picture:
+            return obj.user.profile_picture.url
+        return None
+
+    def get_country(self, obj):
+        default = obj.addresses.filter(is_default=True).first()
+        if default:
+            return default.country
+        first = obj.addresses.first()
+        return first.country if first else None
+
+    def get_order_count(self, obj):
+        return obj.orders.count()
+
+    def get_status(self, obj):
+        return "active" if obj.user.is_active else "inactive"
 
 
 class AdminAddressSerializer(AdminBaseSerializer):

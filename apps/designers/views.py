@@ -212,7 +212,7 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
         """
         POST /designer-products/ → Create new product
         """
-        serializer = self.get_serializer(data=request.data,partial=True)
+        serializer = self.get_serializer(data=request.data)
 
         if serializer.is_valid():
             product = serializer.save(user=request.user)
@@ -558,6 +558,23 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
                 ).start()
             except Exception as e:
                 print(f"Error sending profile submission email: {str(e)}")
+
+        # Send welcome email on every profile update
+        try:
+            context = {
+                "designer_name": profile.brand_name or request.user.first_name or "Designer",
+            }
+            message = render_to_string("administrator/designer_welcome.html", context)
+            threading.Thread(
+                target=resend_sendmail,
+                args=(
+                    "Welcome to Urbana Studio",
+                    [request.user.email],
+                    message,
+                ),
+            ).start()
+        except Exception as e:
+            print(f"Error sending designer welcome email: {str(e)}")
 
         return Response({
             "status": "success",

@@ -96,7 +96,7 @@ class AdminProductViewSet(AdminBaseViewSet):
         product.is_admin_published = False
         product.save()
 
-        # Notify designer
+        # In-app notification
         Notification.objects.create(
             user=product.user,
             title="Product unpublished",
@@ -104,6 +104,71 @@ class AdminProductViewSet(AdminBaseViewSet):
             notification_type=Notification.Type.PRODUCT,
             link=f"/products/edit/{product.id}",
         )
+
+        # Email notification
+        try:
+            context = {
+                "designer_name": product.user.first_name or product.user.email,
+                "product_name": product.name,
+                "product_sku": product.sku,
+                "is_published": False,
+                "reasons": reasons,
+                "comment": comment,
+            }
+            message = render_to_string("administrator/product_status_update.html", context)
+            threading.Thread(
+                target=resend_sendmail,
+                args=(
+                    f"Urbana — Product Unpublished: {product.name}",
+                    [product.user.email],
+                    message,
+                ),
+            ).start()
+        except Exception as e:
+            print(f"Error sending product unpublish email: {str(e)}")
+
+        serializer = self.get_serializer(product)
+        return Response({
+            "status": "success",
+            "data": serializer.data
+        })
+
+    @action(detail=True, methods=["patch"], url_path="publish")
+    def publish(self, request, pk=None):
+        product = self.get_object()
+        product.is_admin_published = True
+        product.save()
+
+        # In-app notification
+        Notification.objects.create(
+            user=product.user,
+            title="Product published",
+            message=f"Your product '{product.name}' is now live on Urbana.",
+            notification_type=Notification.Type.PRODUCT,
+            link=f"/products/edit/{product.id}",
+        )
+
+        # Email notification
+        try:
+            context = {
+                "designer_name": product.user.first_name or product.user.email,
+                "product_name": product.name,
+                "product_sku": product.sku,
+                "is_published": True,
+                "reasons": None,
+                "comment": "",
+            }
+            message = render_to_string("administrator/product_status_update.html", context)
+            threading.Thread(
+                target=resend_sendmail,
+                args=(
+                    f"Urbana — Product Live: {product.name}",
+                    [product.user.email],
+                    message,
+                ),
+            ).start()
+        except Exception as e:
+            print(f"Error sending product publish email: {str(e)}")
 
         serializer = self.get_serializer(product)
         return Response({
@@ -172,6 +237,56 @@ class AdminOrderItemViewSet(AdminBaseViewSet):
 class AdminOrderTrackingViewSet(AdminBaseViewSet):
     queryset = OrderTracking.objects.select_related("order")
     serializer_class = AdminOrderTrackingSerializer
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        order = instance.order
+        if order and order.customer and order.customer.user and order.customer.user.email:
+            try:
+                context = {
+                    "customer_name": order.customer.user.first_name or order.customer.user.email,
+                    "order_id": order.order_id,
+                    "status": instance.status,
+                    "tracking_number": instance.tracking_number or "",
+                    "carrier": instance.carrier or "",
+                    "estimated_delivery": str(instance.estimated_delivery) if instance.estimated_delivery else "",
+                }
+                message = render_to_string("administrator/shipping_update.html", context)
+                threading.Thread(
+                    target=resend_sendmail,
+                    args=(
+                        f"Urbana — Shipping Update for Order {order.order_id}",
+                        [order.customer.user.email],
+                        message,
+                    ),
+                ).start()
+            except Exception as e:
+                print(f"Error sending shipping update email: {str(e)}")
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        order = instance.order
+        if order and order.customer and order.customer.user and order.customer.user.email:
+            try:
+                context = {
+                    "customer_name": order.customer.user.first_name or order.customer.user.email,
+                    "order_id": order.order_id,
+                    "status": instance.status,
+                    "tracking_number": instance.tracking_number or "",
+                    "carrier": instance.carrier or "",
+                    "estimated_delivery": str(instance.estimated_delivery) if instance.estimated_delivery else "",
+                }
+                message = render_to_string("administrator/shipping_update.html", context)
+                threading.Thread(
+                    target=resend_sendmail,
+                    args=(
+                        f"Urbana — Shipping Update for Order {order.order_id}",
+                        [order.customer.user.email],
+                        message,
+                    ),
+                ).start()
+            except Exception as e:
+                print(f"Error sending shipping update email: {str(e)}")
 
 # =====================================================
 # RETURN MANAGEMENT
@@ -552,3 +667,87 @@ class AdminUploadProductMediaView(APIView):
                 {"status": "error", "message": "Invalid data."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+# =====================================================
+# SUPPORT TICKETS
+# =====================================================
+from apps.core.serializers import SupportTicketSerializer, TicketMessageSerializer
+
+
+class AdminTicketViewSet(AdminBaseViewSet):
+    queryset = SupportTicket.objects.select_related("user").prefetch_related("messages")
+    serializer_class = SupportTicketSerializer
+    filterset_fields = ["status", "category", "priority"]
+    search_fields = ["subject", "description", "reference"]
+    ordering_fields = ["created_at", "updated_at", "priority"]
+    ordering = ["-created_at"]
+
+    @action(detail=True, methods=["post"], url_path="reply")
+    def reply(self, request, pk=None):
+        ticket = self.get_object()
+        body = request.data.get("body", "").strip()
+        if not body:
+            return Response(
+                {"status": "error", "message": "Reply body is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        msg = TicketMessage.objects.create(
+            ticket=ticket,
+            sender=request.user,
+            body=body,
+            is_internal=request.data.get("is_internal", False),
+        )
+
+        # Update ticket status if it was open
+        if ticket.status == SupportTicket.Status.OPEN:
+            ticket.status = SupportTicket.Status.IN_PROGRESS
+            ticket.save(update_fields=["status"])
+
+        # Email ticket owner about new reply
+        if ticket.user and ticket.user.email:
+            try:
+                context = {
+                    "user_name": ticket.user.first_name or ticket.user.email,
+                    "ticket_reference": ticket.reference,
+                    "sender_name": request.user.get_full_name() or request.user.email,
+                    "reply_body": msg.body,
+                }
+                message = render_to_string("administrator/ticket_reply.html", context)
+                threading.Thread(
+                    target=resend_sendmail,
+                    args=(
+                        f"Urbana — New Reply on Ticket {ticket.reference}",
+                        [ticket.user.email],
+                        message,
+                    ),
+                ).start()
+            except Exception as e:
+                print(f"Error sending ticket reply email: {str(e)}")
+
+        return Response(
+            {
+                "status": "success",
+                "message": "Reply sent.",
+                "data": TicketMessageSerializer(msg).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="status")
+    def update_status(self, request, pk=None):
+        ticket = self.get_object()
+        new_status = request.data.get("status")
+        valid_statuses = [c[0] for c in SupportTicket.Status.choices]
+        if new_status not in valid_statuses:
+            return Response(
+                {"status": "error", "message": f"Invalid status. Choose from {valid_statuses}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ticket.status = new_status
+        ticket.save()
+        return Response(
+            {"status": "success", "message": "Status updated.", "data": SupportTicketSerializer(ticket).data},
+            status=status.HTTP_200_OK,
+        )

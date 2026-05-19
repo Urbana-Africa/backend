@@ -1,7 +1,10 @@
+import threading
 from random import random
+from django.template.loader import render_to_string
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
+from apps.utils.email_sender import resend_sendmail
 
 from apps.core.serializers import ShippingMethodSerializer
 from apps.designers.models import DesignerOrder, Notification
@@ -116,6 +119,26 @@ class CheckoutView(APIView):
                     link=f"/orders/{order_item.id}",
                 )
 
+                # Email designer about new order
+                try:
+                    ctx = {
+                        "designer_name": order_item.product.user.first_name or order_item.product.user.email,
+                        "product_name": item.product.name,
+                        "quantity": item.quantity,
+                        "order_id": order.order_id,
+                    }
+                    msg = render_to_string("administrator/order_confirmation.html", ctx)
+                    threading.Thread(
+                        target=resend_sendmail,
+                        args=(
+                            f"Urbana — New Order: {item.product.name}",
+                            [order_item.product.user.email],
+                            msg,
+                        ),
+                    ).start()
+                except Exception as e:
+                    print(f"Error sending designer order email: {str(e)}")
+
                 # Low stock alert
                 if item.product.stock <= 5 and item.product.stock >= 0:
                     Notification.objects.create(
@@ -138,6 +161,28 @@ class CheckoutView(APIView):
                 current_status='Pending',
                 estimated_delivery=estimated_delivery
             )
+
+            # Email customer order confirmation
+            try:
+                ctx = {
+                    "customer_name": request.user.first_name or request.user.email,
+                    "order_id": order.order_id,
+                    "total": str(total_amount),
+                    "currency_symbol": "",
+                    "item_count": str(cart_items.count()),
+                    "status": "Pending Payment",
+                }
+                msg = render_to_string("administrator/order_confirmation.html", ctx)
+                threading.Thread(
+                    target=resend_sendmail,
+                    args=(
+                        f"Urbana — Order Confirmed: {order.order_id}",
+                        [request.user.email],
+                        msg,
+                    ),
+                ).start()
+            except Exception as e:
+                print(f"Error sending customer order confirmation email: {str(e)}")
 
             return Response({
                 "status": "success",

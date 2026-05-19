@@ -1,6 +1,7 @@
 # core/models.py
 from random import random
 from django.db import models
+from django.conf import settings
 from django.utils import timezone
 from django.utils.text import slugify
 from django.core.validators import MinValueValidator
@@ -257,8 +258,8 @@ class Product(BaseModel):
 
 
 class Color(models.Model):
-    product = models.ForeignKey(Product, null= True, default=None, related_name='colors', on_delete=models.CASCADE)
-    name = models.CharField(max_length=50, unique=True)
+    product = models.ForeignKey(Product, null=True, default=None, related_name='colors', on_delete=models.CASCADE)
+    name = models.CharField(max_length=50)
     hex_code = models.CharField(max_length=7, blank=True, null=True)  # optional
 
     def __str__(self):
@@ -400,6 +401,27 @@ class SupportTicket(BaseModel):
         ordering = ["-created_at"]
 
 
+class TicketMessage(models.Model):
+    ticket = models.ForeignKey(
+        SupportTicket, on_delete=models.CASCADE, related_name="messages"
+    )
+    sender = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="ticket_messages"
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_internal = models.BooleanField(
+        default=False,
+        help_text="Internal notes only visible to staff",
+    )
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"[{self.ticket.reference}] {self.sender} at {self.created_at}"
+
+
 # ---------------------------
 # Smart Collections (PRD Phase 2)
 # ---------------------------
@@ -422,6 +444,8 @@ class SmartCollection(BaseModel):
     cover_image = models.ImageField(upload_to="smart_collections/", blank=True, null=True)
     is_active = models.BooleanField(default=True)
     display_order = models.PositiveIntegerField(default=0)
+    auto_generated = models.BooleanField(default=False, help_text="True if created by AI mode")
+    query = models.CharField(max_length=300, blank=True, help_text="Query string used to generate this collection")
 
     def save(self, *args, **kwargs):
         if not self.slug:
@@ -575,3 +599,94 @@ class UserLookbook(models.Model):
 
     def __str__(self):
         return f"{self.user.email} — {self.name}"
+
+
+# ---------------------------
+# AI Semantic Search (Vector Embeddings)
+# ---------------------------
+class ProductEmbedding(models.Model):
+    """
+    Stores pre-computed text embeddings for products to enable
+    semantic / vector similarity search in the AI mode.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.OneToOneField(
+        "core.Product",
+        on_delete=models.CASCADE,
+        related_name="embedding",
+    )
+    embedding = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Vector embedding (list of floats) for semantic search",
+    )
+    embedding_text = models.TextField(
+        blank=True,
+        help_text="Concatenated text used to generate the embedding",
+    )
+    dimensions = models.PositiveSmallIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Embedding({self.product.name}, {self.dimensions}d)"
+
+
+class SubscriptionPlan(models.Model):
+    class Tier(models.TextChoices):
+        FREE = "free", "Free"
+        STYLE_SEEKER = "style_seeker", "Style Seeker"
+        STYLE_ICON = "style_icon", "Style Icon"
+
+    name = models.CharField(max_length=50)
+    slug = models.SlugField(unique=True)
+    tier = models.CharField(max_length=20, choices=Tier.choices, default=Tier.FREE)
+    price_monthly = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    price_yearly = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    currency = models.ForeignKey(Currency, on_delete=models.SET_NULL, null=True, blank=True)
+    ai_calls_daily = models.PositiveIntegerField(default=10, help_text="Daily AI search/chat limit")
+    has_ai_outfit_builder = models.BooleanField(default=False)
+    has_ai_personalized_search = models.BooleanField(default=False)
+    has_ai_fitme = models.BooleanField(default=False)
+    has_gift_concierge = models.BooleanField(default=False)
+    has_event_styling = models.BooleanField(default=False)
+    has_priority_support = models.BooleanField(default=False)
+    description = models.TextField(blank=True)
+    features = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["price_monthly"]
+
+    def __str__(self):
+        return self.name
+
+
+class UserSubscription(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        CANCELLED = "cancelled", "Cancelled"
+        EXPIRED = "expired", "Expired"
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="subscription",
+    )
+    plan = models.ForeignKey(SubscriptionPlan, on_delete=models.SET_NULL, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    billing_cycle = models.CharField(max_length=10, choices=[("monthly", "Monthly"), ("yearly", "Yearly")], default="monthly")
+    started_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    ai_calls_used_today = models.PositiveIntegerField(default=0)
+    ai_calls_reset_at = models.DateField(auto_now_add=True)
+    auto_renew = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+
+    def __str__(self):
+        return f"{self.user.email} — {self.plan.name if self.plan else 'None'}"

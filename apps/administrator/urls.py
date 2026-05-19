@@ -55,6 +55,7 @@ router.register(r"designer-orders", AdminDesignerOrderViewSet, basename="admin-d
 router.register(r"designer-shipments", AdminShipmentTrackingViewSet, basename="admin-designer-shipments")
 router.register(r"inventory-alerts", AdminInventoryAlertViewSet, basename="admin-inventory-alerts")
 router.register(r"promotions", AdminPromotionViewSet, basename="admin-promotions")
+router.register(r"tickets", AdminTicketViewSet, basename="admin-tickets")
 
 urlpatterns = router.urls + [
     # Algorithm Admin Endpoints

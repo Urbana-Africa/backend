@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Urbana — New Reply on Your Ticket</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1B1C1A; line-height: 1.6; margin: 0; padding: 0; background-color: #FBF9F5; }
+        .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        .header { background-color: #1B1C1A; padding: 40px; text-align: center; color: #ffffff; }
+        .content { padding: 40px; }
+        .logo { font-size: 24px; font-weight: 900; letter-spacing: -1px; text-transform: uppercase; }
+        .logo span { color: #EC6D13; font-weight: 300; }
+        .hero-badge { display: inline-block; padding: 8px 16px; border-radius: 50px; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; background-color: #EC6D13; color: #ffffff; margin-bottom: 20px; }
+        h1 { font-size: 28px; font-weight: 900; margin-bottom: 20px; letter-spacing: -0.5px; }
+        p { margin-bottom: 20px; font-size: 14px; color: #4B5563; }
+        .reply-box { background-color: #faf7f4; padding: 24px; border-radius: 12px; border: 1px solid #e3dbd3; margin: 24px 0; }
+        .reply-box h3 { margin: 0 0 12px 0; font-size: 14px; color: #1B1C1A; text-transform: uppercase; letter-spacing: 1px; }
+        .reply-box p { margin: 0; font-size: 13px; white-space: pre-wrap; }
+        .button { display: inline-block; padding: 14px 28px; background-color: #1B1C1A; color: #ffffff; text-decoration: none; border-radius: 50px; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+        .footer { padding: 30px 40px; background-color: #f9fafb; text-align: center; font-size: 11px; color: #9ca3af; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">URBANA<span>SUPPORT</span></div>
+        </div>
+        <div class="content">
+            <div class="hero-badge">New Reply</div>
+            <h1>Hello, {{ user_name }}</h1>
+            <p>There is a new reply on your support ticket <strong>{{ ticket_reference }}</strong>.</p>
+            <div class="reply-box">
+                <h3>From: {{ sender_name }}</h3>
+                <p>{{ reply_body }}</p>
+            </div>
+            <p>You can view the full conversation and reply directly from your account.</p>
+            <a href="https://urbanaafrica.com/help" class="button">View Ticket</a>
+        </div>
+        <div class="footer">
+            &copy; 2026 Urbana Council. All rights reserved.<br>
+            Curation for the Modern African Artisan.
+        </div>
+    </div>
+</body>
+</html>

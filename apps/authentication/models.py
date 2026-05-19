@@ -55,6 +55,8 @@ class User(AbstractUser, PermissionsMixin):
     password = models.CharField(_("password"), max_length=128,blank=True)
     username = models.CharField(max_length=200,default='',blank=True)
     gender = models.CharField(max_length=200,default='',blank=True)
+    height = models.CharField(max_length=50, default='', blank=True)
+    size = models.CharField(max_length=50, default='', blank=True)
     date_of_birth = models.DateField(default=None,null=True)
     profile = models.JSONField(default=dict, blank=True, null= True)
     date_time_added = models.DateTimeField(auto_now=True,null=True,)

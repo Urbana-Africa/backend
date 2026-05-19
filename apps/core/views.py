@@ -1724,7 +1724,7 @@ class AiOutfitBuilderView(APIView):
         # 5. Personalize if user is authenticated
         personalization_note = ""
         if user:
-            lookbook_ids = UserLookbook.objects.filter(user=user).values_list("product_id", flat=True)
+            lookbook_ids = Product.objects.filter(lookbooks__user=user).values_list("id", flat=True)
             review_designers = Review.objects.filter(customer__user=user).values_list("product__user", flat=True)
             if primary.user.id in review_designers:
                 personalization_note = "You have loved this designer's work before."
@@ -1877,7 +1877,7 @@ class AiPersonalizedSearchView(APIView):
         user = request.user
 
         # 1. Gather user context
-        lookbook_ids = set(UserLookbook.objects.filter(user=user).values_list("product_id", flat=True))
+        lookbook_ids = set(Product.objects.filter(lookbooks__user=user).values_list("id", flat=True))
         review_designers = set(Review.objects.filter(customer__user=user).values_list("product__user", flat=True))
         size_recs = SizeRecommendation.objects.filter(user=user).first()
         user_sizes = set()

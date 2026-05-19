@@ -243,7 +243,12 @@ class Product(BaseModel):
         upload_to="product_fitme_images/",
         blank=True,
         null=True,
-        help_text="PNG image with transparent background for AI virtual try-on",
+        help_text=(
+            "PNG with alpha transparency (transparent background) for AI FitMe. "
+            "Best results: front-facing garment, unworn, clean edges, "
+            "portrait orientation for dresses/tops, landscape for accessories. "
+            "Minimum 512px on short edge."
+        ),
     )
 
     def save(self, *args, **kwargs):

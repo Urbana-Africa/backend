@@ -29,7 +29,7 @@ class AccountDetail(models.Model):
     country = models.CharField(max_length=5, blank=True, default="NG")
     account_type = models.CharField(
         max_length=20,
-        choices=[("flutterwave", "Flutterwave"), ("stripe", "Stripe")],
+        choices=[("flutterwave", "Flutterwave"), ("stripe", "Stripe"), ("paystack", "Paystack")],
         default="flutterwave",
     )
     recipient_code = models.CharField(default='', blank=True, max_length=200)
@@ -121,7 +121,7 @@ class PaymentAttempt(models.Model):
     reference = models.CharField(max_length=100, unique=True, blank=True)
     processor = models.CharField(max_length=20, choices=PROCESSORS, blank=True, default='')
     processor_payment_id = models.CharField(max_length=200, blank=True, default='')
-    currency = models.CharField(max_length=10, default='NGN', blank=True)
+    currency = models.CharField(max_length=10, default='USD', blank=True)
     status = models.CharField(max_length=50, choices=PAYMENT_STATUS, default='pending')
     is_successful = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -150,7 +150,7 @@ class Payment(models.Model):
     reference = models.CharField(max_length=100, unique=True, blank=True)
     processor = models.CharField(max_length=20, choices=PROCESSORS, blank=True, default='')
     processor_payment_id = models.CharField(max_length=200, blank=True, default='')  # Processor’s internal ID
-    currency = models.CharField(max_length=10, default='NGN', blank=True)
+    currency = models.CharField(max_length=10, default='USD', blank=True)
     status = models.CharField(max_length=50, choices=PAYMENT_STATUS, default='pending')
     is_paid = models.BooleanField(default=False)
     approved = models.BooleanField(default=False)
@@ -438,7 +438,7 @@ WITHDRAWAL_STATUS = (
 class Wallet(models.Model):
     id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="wallet")
-    currency = models.CharField(max_length=10, default="NGN")
+    currency = models.CharField(max_length=10, default="USD")
     is_locked = models.BooleanField(default= False)
     available_balance = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     pending_balance = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -522,16 +522,16 @@ class Withdrawal(models.Model):
 
     amount = models.DecimalField(max_digits=14, decimal_places=2) # USD debit amount
     payout_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
-    payout_currency = models.CharField(max_length=10, default="NGN")
+    payout_currency = models.CharField(max_length=10, default="USD")
 
     status = models.CharField(max_length=50, choices=WITHDRAWAL_STATUS, default="pending")
     reference = models.CharField(max_length=120, unique=True)
 
-    flutterwave_transfer_id = models.CharField(max_length=200, blank=True)
+    flutterwave_transfer_id = models.CharField(max_length=200, blank=True)  # Also stores Stripe Transfer IDs for USD payouts
 
     bank_name = models.CharField(max_length=100)
     bank_code = models.CharField(max_length=50)
-    account_number = models.CharField(max_length=20)
+    account_number = models.CharField(max_length=100)  # Also stores Stripe acct_... IDs
     account_name = models.CharField(max_length=200)
     failure_reason = models.TextField(blank=True, null=True)
     

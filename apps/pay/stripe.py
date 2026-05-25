@@ -1,21 +1,9 @@
-import stripe
-
-
-def StripeMakePayment(amount,currency,package):
-    session = stripe.checkout.Session.create(
-    line_items=[{
-      'price_data': {
-        'currency': 'usd',
-        'product_data': {
-          'name': 'T-shirt',
-        },
-        'unit_amount': 2000,
-      },
-      'quantity': 1,
-    }],
-    mode='payment',
-    success_url='http://localhost:4242/success',
-    cancel_url='http://localhost:4242/cancel',
-  )
-
-    return session.url, 303
+"""
+DEPRECATED: This module previously contained a standalone Stripe checkout session helper.
+The active Stripe integration lives in:
+  - apps.pay.initialize.InitializeStripePayment (creates PaymentIntent)
+  - apps.pay.confirm.StripeConfirmView (confirms payment server-side)
+  - apps.pay.webhooks.StripeWebhookView (handles payment_intent.succeeded events)
+  - apps.pay.services.withdrawals._fire_stripe_transfer (designer payouts)
+Do not use StripeMakePayment — it was a stub with hardcoded values.
+"""

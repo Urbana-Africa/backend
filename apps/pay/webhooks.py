@@ -39,33 +39,91 @@ def handle_successful_payment(reference, processor_name=None, data=None):
     """
     Handles all successful payment confirmations across processors.
     Updates payment, creates/updates PaymentAttempt, and links invoices.
+    'reference' may be a Payment.reference OR a PaymentAttempt.reference.
     """
+    # ── 1. Resolve Payment ──────────────────────────────────────────
+    payment = None
+    attempt = None
+
+    # Try as Payment reference first
     try:
         payment = Payment.objects.get(reference=reference)
     except Payment.DoesNotExist:
+        pass
+
+    # Fallback: look up by PaymentAttempt reference
+    if not payment:
+        attempt = PaymentAttempt.objects.filter(reference=reference).first()
+        if attempt:
+            # Find linked invoice and derive payment
+            invoice = Invoice.objects.filter(payment_attempts=attempt).first()
+            if invoice and invoice.payment:
+                payment = invoice.payment
+            else:
+                # Create Payment from invoice data if possible
+                if invoice:
+                    payment, _ = Payment.objects.get_or_create(
+                        reference=invoice.id,
+                        defaults={
+                            "user": invoice.user,
+                            "amount": invoice.amount,
+                            "processor": processor_name or attempt.processor,
+                            "status": "success",
+                            "is_paid": True,
+                            "date_time_paid": datetime.now(),
+                        },
+                    )
+                else:
+                    # No invoice linked — try to find via metadata
+                    metadata = (data or {}).get("metadata", {})
+                    invoice_id = metadata.get("invoice_id")
+                    if invoice_id:
+                        invoice = Invoice.objects.filter(id=invoice_id).first()
+                        if invoice:
+                            payment, _ = Payment.objects.get_or_create(
+                                reference=invoice.id,
+                                defaults={
+                                    "user": invoice.user,
+                                    "amount": invoice.amount,
+                                    "processor": processor_name or attempt.processor,
+                                    "status": "success",
+                                    "is_paid": True,
+                                    "date_time_paid": datetime.now(),
+                                },
+                            )
+
+    if not payment:
         logger.warning(f"[{processor_name}] Payment with reference {reference} not found.")
         return
 
+    # ── 2. Update Payment ─────────────────────────────────────────────
     payment.status = "success"
     payment.processor = processor_name or payment.processor
     payment.is_paid = True
     payment.date_time_paid = datetime.now()
     payment.save(update_fields=["status", "processor", "is_paid", "date_time_paid"])
-    logger.info(f"[{processor_name}] Payment {reference} marked successful.")
+    logger.info(f"[{processor_name}] Payment {payment.reference} marked successful.")
 
-    # --- PaymentAttempt ---
-    attempt, created = PaymentAttempt.objects.get_or_create(
-        reference=reference,
-        defaults={
-            "user": payment.user,
-            "processor": processor_name or payment.processor,
-            "amount": payment.amount,
-            "currency": payment.currency,
-            "status": "success",
-            "is_successful": True,
-        },
-    )
-    if not created:
+    # ── 3. Update PaymentAttempt ────────────────────────────────────
+    if not attempt:
+        attempt, created = PaymentAttempt.objects.get_or_create(
+            reference=reference,
+            defaults={
+                "user": payment.user,
+                "processor": processor_name or payment.processor,
+                "amount": payment.amount,
+                "currency": payment.currency,
+                "status": "success",
+                "is_successful": True,
+            },
+        )
+        if not created:
+            attempt.status = "success"
+            attempt.is_successful = True
+            attempt.processor = processor_name or attempt.processor
+            attempt.updated_at = datetime.now()
+            attempt.save(update_fields=["status", "is_successful", "processor", "updated_at"])
+    else:
         attempt.status = "success"
         attempt.is_successful = True
         attempt.processor = processor_name or attempt.processor
@@ -73,8 +131,14 @@ def handle_successful_payment(reference, processor_name=None, data=None):
         attempt.save(update_fields=["status", "is_successful", "processor", "updated_at"])
     logger.info(f"[{processor_name}] PaymentAttempt updated/created for {reference}.")
 
-    # --- Link to Invoice(s) ---
+    # ── 4. Link to Invoice(s) ───────────────────────────────────────
     linked_invoices = Invoice.objects.filter(payment=payment)
+    if not linked_invoices.exists() and attempt:
+        linked_invoices = Invoice.objects.filter(payment_attempts=attempt)
+        for invoice in linked_invoices:
+            invoice.payment = payment
+            invoice.save(update_fields=["payment"])
+
     for invoice in linked_invoices:
         invoice.payment_attempts.add(attempt)
         invoice.is_active = True

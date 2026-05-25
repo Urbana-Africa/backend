@@ -92,7 +92,7 @@ class InitializeFlutterwavePayment(BaseInitializeInvoicePayment):
         email = request.user.email
         invoice_id = request.data.get("reference")  # invoice.id
         amount = request.data.get("amount")
-        currency = request.data.get("currency", "NGN")
+        currency = request.data.get("currency", "USD")
 
         invoice, error = self.validate_invoice(invoice_id, amount)
         if error:

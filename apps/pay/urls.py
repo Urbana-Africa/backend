@@ -1,6 +1,6 @@
 from django.urls import path
 
-from apps.pay.confirm import FlutterwaveConfirmView, PaystackConfirmView
+from apps.pay.confirm import FlutterwaveConfirmView, PaystackConfirmView, StripeConfirmView
 from apps.pay.initialize import InitializeFlutterwavePayment, InitializePaystackPayment, InitializeStripePayment
 from apps.pay.webhooks import FlutterwaveWebhookView, PaystackWebhookView, StripeWebhookView
 from . import views as payviews
@@ -10,6 +10,7 @@ from .views import (
     FlutterWaveVerifyAccountNumber,
     FlutterwaveBanksView,
     InitiatePayoutView,
+    PaystackVerifyAccountView,
     WithdrawalStatusView,
     WithdrawalListView,
     CustomerWalletSummaryView,
@@ -57,15 +58,17 @@ urlpatterns = [
     path("cancel-payment/<str:pay_id>", payviews.CancelPayment.as_view(), name="cancel_payment"),
 
     # ─── Payment gateway ─────────────────────────────────────────────────────
-    path("confirm/flutterwave", FlutterwaveConfirmView.as_view()),
-    path("confirm/paystack", PaystackConfirmView.as_view()),
-    path("init/flutterwave", InitializeFlutterwavePayment.as_view()),
-    path("init/paystack", InitializePaystackPayment.as_view()),
-    path("init/stripe", InitializeStripePayment.as_view()),
+    path("confirm/flutterwave/", FlutterwaveConfirmView.as_view()),
+    path("confirm/paystack/", PaystackConfirmView.as_view()),
+    path("confirm/stripe/", StripeConfirmView.as_view()),
+    path("init/flutterwave/", InitializeFlutterwavePayment.as_view()),
+    path("init/paystack/", InitializePaystackPayment.as_view()),
+    path("init/stripe/", InitializeStripePayment.as_view()),
 
     # ─── Bank account / bank list ─────────────────────────────────────────────
     path("account", AccountDetailView.as_view(), name="account-detail"),
     path("banks", FlutterwaveBanksView.as_view()),
     path("fw/verify-account", FlutterWaveVerifyAccountNumber.as_view()),
+    path("ps/verify-account", PaystackVerifyAccountView.as_view()),
     path("seed-sales", payviews.SeedSalesView.as_view(), name="seed_sales"),
 ]

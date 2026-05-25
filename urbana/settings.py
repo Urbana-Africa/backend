@@ -354,4 +354,5 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY", default="")
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
+STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="")
 SHIPPO_API_KEY = config("SHIPPO_API_KEY", default="")

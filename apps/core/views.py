@@ -1420,8 +1420,8 @@ Available product fields:
 - print_type: "ankara" | "adire" | "kente" | "bogolan" | "other"
 - availability_type: "ready_to_ship" | "made_to_order" | "pre_order" | "rentable"
 - is_sustainable: true | false
-- min_price: number in NGN (only if user explicitly mentions a minimum price)
-- max_price: number in NGN (only if user mentions a budget or maximum)
+- min_price: number in USD (only if user explicitly mentions a minimum price)
+- max_price: number in USD (only if user mentions a budget or maximum)
 - search: 1-3 keywords describing the clothing type (e.g. "dress", "agbada", "jumpsuit", "headpiece")
 - style_note: A warm, friendly 1-2 sentence summary of what you understood and what to expect.
 
@@ -1600,7 +1600,7 @@ class AiSuggestionsView(APIView):
         for p in sample:
             price = p.get("price")
             context_items.append(
-                f"- {p.get('name')} (Type: {p.get('category__name')}, Print: {p.get('print_type')}, Occasion: {p.get('occasion')}, Price: NGN {price})"
+                f"- {p.get('name')} (Type: {p.get('category__name')}, Print: {p.get('print_type')}, Occasion: {p.get('occasion')}, Price: USD {price})"
             )
         context_text = "\n".join(context_items)
 
@@ -1611,13 +1611,13 @@ Here is a sample of our current inventory:
 {context_text}
 
 Rules for generating prompts:
-- Each prompt must be a natural sentence fragment someone would type (e.g., "A bold Ankara dress for a wedding under NGN 50000").
+- Each prompt must be a natural sentence fragment someone would type (e.g., "A bold Ankara dress for a wedding under USD 500").
 - The prompts must map back to the products provided in the inventory sample above.
 - Make them diverse (mix up occasions, prints, prices, clothing types).
 - Keep them under 15 words each.
 
 Respond ONLY with a valid JSON array of 5 strings. No markdown formatting, no extra text.
-Example: ["Show me elegant Adire outfits for work", "Ankara wedding guest dress under 40000 NGN"]"""
+Example: ["Show me elegant Adire outfits for work", "Ankara wedding guest dress under 400 USD"]"""
 
         try:
             client = genai.Client(api_key=gemini_key)

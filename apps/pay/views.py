@@ -739,12 +739,13 @@ class InitiatePayoutView(APIView):
                 user=request.user,
                 amount=amount, # USD debit amount
                 payout_amount=request.data.get("payout_amount", 0),
-                payout_currency=request.data.get("payout_currency", "NGN"),
+                payout_currency=request.data.get("payout_currency", "USD"),
                 bank_code=account_detail.bank_code,
                 account_number=account_detail.account_number,
                 bank_name=account_detail.bank_name,
                 account_name=account_detail.account_name,
                 client_reference=request.data.get("client_reference"),
+                account_type=account_detail.account_type,
             )
             return Response({
                 "status": "success",
@@ -813,7 +814,7 @@ class CustomerWalletSummaryView(APIView):
     def get(self, request):
         wallet, _ = Wallet.objects.get_or_create(
             user=request.user,
-            defaults={"currency": "NGN"}
+            defaults={"currency": "USD"}
         )
         recent = WalletTransaction.objects.filter(wallet=wallet).order_by("-created_at")[:15]
         total_refunds = WalletTransaction.objects.filter(
@@ -1065,6 +1066,11 @@ class AccountDetailView(APIView):
                 if account_type == "stripe":
                     # For Stripe, the connected account ID is stored in account_number.
                     # We don't need a Flutterwave recipient.
+                    account_detail.recipient_code = ""
+                    account_detail.save(update_fields=["recipient_code", "updated_at"])
+                elif account_type == "paystack":
+                    # For Paystack, the recipient is created dynamically during withdrawal.
+                    # Clear any old Flutterwave recipient code.
                     account_detail.recipient_code = ""
                     account_detail.save(update_fields=["recipient_code", "updated_at"])
                 else:
@@ -1336,6 +1342,53 @@ class FlutterWaveVerifyAccountNumber(APIView):
                 'status':'error',
                 'message':f'error occured at {e}'
             })
+
+class PaystackVerifyAccountView(APIView):
+    """
+    GET /pay/ps/verify-account
+    Verifies a Nigerian bank account using Paystack API.
+    """
+    def get(self, request):
+        try:
+            bank_code = request.GET.get("bank_code")
+            account_number = request.GET.get("account_number")
+
+            if not bank_code or not account_number:
+                return Response(
+                    {"status": "error", "message": "bank_code and account_number are required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            ps_keys = get_paystack_keys()
+            headers = {
+                "Authorization": f"Bearer {ps_keys['secret_key']}",
+                "Content-Type": "application/json",
+            }
+            url = "https://api.paystack.co/bank/resolve"
+            params = {
+                "account_number": account_number,
+                "bank_code": bank_code,
+            }
+
+            response = requests.get(url, headers=headers, params=params, timeout=15)
+            data = response.json()
+
+            if data.get("status"):
+                return Response({
+                    "status": "success",
+                    "data": data["data"],
+                })
+            else:
+                return Response(
+                    {"status": "error", "message": data.get("message", "Verification failed")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        except Exception as e:
+            return Response(
+                {"status": "error", "message": f"Error: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
 
 class SeedSalesView(APIView):
     """

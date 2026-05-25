@@ -53,7 +53,7 @@ class UserSettings(BaseModel):
 
     # App
     language = models.CharField(max_length=10, default="en-US")
-    currency = models.CharField(max_length=5, default="NGN")
+    currency = models.CharField(max_length=5, default="USD")
 
     # Notifications
     email_notifications = models.BooleanField(default=True)

@@ -162,28 +162,6 @@ class CheckoutView(APIView):
                 estimated_delivery=estimated_delivery
             )
 
-            # Email customer order confirmation
-            try:
-                ctx = {
-                    "customer_name": request.user.first_name or request.user.email,
-                    "order_id": order.order_id,
-                    "total": str(total_amount),
-                    "currency_symbol": "",
-                    "item_count": str(cart_items.count()),
-                    "status": "Pending Payment",
-                }
-                msg = render_to_string("administrator/order_confirmation.html", ctx)
-                threading.Thread(
-                    target=resend_sendmail,
-                    args=(
-                        f"Urbana — Order Confirmed: {order.order_id}",
-                        [request.user.email],
-                        msg,
-                    ),
-                ).start()
-            except Exception as e:
-                print(f"Error sending customer order confirmation email: {str(e)}")
-
             return Response({
                 "status": "success",
                 "message": "Order placed successfully. Proceed to payment.",

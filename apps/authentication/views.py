@@ -945,6 +945,24 @@ class Signup(APIView):
                 except Exception as e:
                     print(f"Error sending customer welcome email: {str(e)}")
 
+            # Send welcome email to designers
+            if user_type == 'designer':
+                try:
+                    context = {
+                        "designer_name": user.first_name or "Designer",
+                    }
+                    message = render_to_string("administrator/designer_welcome.html", context)
+                    threading.Thread(
+                        target=resend_sendmail,
+                        args=(
+                            "Welcome to Urbana Studio",
+                            [user.email],
+                            message,
+                        ),
+                    ).start()
+                except Exception as e:
+                    print(f"Error sending designer welcome email: {str(e)}")
+
             data = {'status':'success','data':serialized_data.data}
             return Response(data,status=status.HTTP_202_ACCEPTED)
         else:

@@ -86,6 +86,7 @@ class ProductSerializer(serializers.ModelSerializer):
     country_of_origin = CountrySerializer(read_only=True)
     fit_me_image = serializers.ImageField(required=False, allow_null=True)
     avg_rating = serializers.SerializerMethodField(read_only=True)
+    currency_code = serializers.SerializerMethodField(read_only=True)
     colors_input = serializers.ListField(
         child=serializers.DictField(),
         write_only=True,
@@ -101,6 +102,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "price",
             "discount",
             "currency",
+            "currency_code",
             "category",
             "subcategory",
             "brand",
@@ -128,6 +130,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "avg_rating",
             "colors_input",
         )
+
+    def get_currency_code(self, obj):
+        return obj.currency.code if obj.currency else "USD"
 
     def get_avg_rating(self, obj):
         avg = obj.reviews.filter(is_approved=True).aggregate(

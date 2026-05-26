@@ -1173,7 +1173,7 @@ def create_fw_transfer_recipient(
     bank_code: str,
     bank_name: str,
     country: str = "NG",
-    currency: str = "NGN",
+    currency: str = "USD",
     email: Optional[str] = None,
     type_override: Optional[str] = None,
     # New: pass the AccountDetail instance so we can read/update recipient_code

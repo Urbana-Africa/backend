@@ -58,12 +58,12 @@ urlpatterns = [
     path("cancel-payment/<str:pay_id>", payviews.CancelPayment.as_view(), name="cancel_payment"),
 
     # ─── Payment gateway ─────────────────────────────────────────────────────
-    path("confirm/flutterwave/", FlutterwaveConfirmView.as_view()),
-    path("confirm/paystack/", PaystackConfirmView.as_view()),
-    path("confirm/stripe/", StripeConfirmView.as_view()),
-    path("init/flutterwave/", InitializeFlutterwavePayment.as_view()),
-    path("init/paystack/", InitializePaystackPayment.as_view()),
-    path("init/stripe/", InitializeStripePayment.as_view()),
+    path("confirm/flutterwave", FlutterwaveConfirmView.as_view()),
+    path("confirm/paystack", PaystackConfirmView.as_view()),
+    path("confirm/stripe", StripeConfirmView.as_view()),
+    path("init/flutterwave", InitializeFlutterwavePayment.as_view()),
+    path("init/paystack", InitializePaystackPayment.as_view()),
+    path("init/stripe", InitializeStripePayment.as_view()),
 
     # ─── Bank account / bank list ─────────────────────────────────────────────
     path("account", AccountDetailView.as_view(), name="account-detail"),

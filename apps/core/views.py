@@ -754,11 +754,80 @@ class ReviewCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        from apps.customers.models import OrderItem
+        from django.db.models import Q
+
+        product_id = request.data.get("product")
+        if not product_id:
+            return Response({"status": "error", "errors": {"product": "Product is required"}}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify the user has actually purchased this product
+        has_purchased = OrderItem.objects.filter(
+            product__id=product_id,
+            order__customer__user=request.user,
+        ).filter(
+            Q(order__invoice__payment__is_paid=True) |
+            Q(order__invoice__payment__status="success")
+        ).exists()
+
+        if not has_purchased:
+            return Response(
+                {"status": "error", "message": "You can only review products you have purchased."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Prevent duplicate reviews
+        already_reviewed = Review.objects.filter(
+            product__id=product_id,
+            customer__user=request.user
+        ).exists()
+
+        if already_reviewed:
+            return Response(
+                {"status": "error", "message": "You have already reviewed this product."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = ReviewSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(customer=request.user.customer)  # assuming user has related Customer
+            serializer.save(customer=request.user.customer)
             return Response({"status": "success", "review": serializer.data}, status=status.HTTP_201_CREATED)
         return Response({"status": "error", "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CanReviewView(APIView):
+    """
+    GET /core/can-review?product_id=<id>
+    Returns whether the authenticated user can review a given product.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.customers.models import OrderItem
+        from django.db.models import Q
+
+        product_id = request.GET.get("product_id")
+        if not product_id:
+            return Response({"can_review": False}, status=status.HTTP_400_BAD_REQUEST)
+
+        has_purchased = OrderItem.objects.filter(
+            product__id=product_id,
+            order__customer__user=request.user,
+        ).filter(
+            Q(order__invoice__payment__is_paid=True) |
+            Q(order__invoice__payment__status="success")
+        ).exists()
+
+        already_reviewed = Review.objects.filter(
+            product__id=product_id,
+            customer__user=request.user
+        ).exists()
+
+        return Response({
+            "can_review": has_purchased and not already_reviewed,
+            "has_purchased": has_purchased,
+            "already_reviewed": already_reviewed,
+        })
 
 
 
@@ -1635,17 +1704,76 @@ Example: ["Show me elegant Adire outfits for work", "Ankara wedding guest dress 
                 raise ValueError("Expected a list")
             suggestions = suggestions[:5]
         except Exception:
-            # Absolute fallback
-            suggestions = [
-                "Show me Ankara dresses for a wedding",
-                "Casual Adire tops for the weekend",
-                "Sustainable workwear outfits",
-                "Kente styles for a traditional ceremony",
-            ]
+            # Dynamic fallback: build diverse prompts from actual DB sample
+            suggestions = self._build_dynamic_suggestions(sample)
 
         return Response(
             {"status": "success", "data": suggestions[:5]}, status=status.HTTP_200_OK
         )
+
+    def _build_dynamic_suggestions(self, products):
+        """Build AI-style suggestions from real product data when Gemini is unavailable."""
+        if not products:
+            return ["Explore our latest African fashion"]
+
+        suggestions = []
+        occasions = {}
+        prints = {}
+        categories = {}
+
+        for p in products:
+            occ = p.get("occasion", "").replace("_", " ").title()
+            prt = p.get("print_type", "").replace("_", " ").title()
+            cat = p.get("category__name", "")
+            name = p.get("name", "")
+
+            if occ and occ != "Other":
+                occasions.setdefault(occ, []).append(name)
+            if prt and prt != "Other":
+                prints.setdefault(prt, []).append(name)
+            if cat:
+                categories.setdefault(cat, []).append(name)
+
+        # Build diverse prompts from actual data
+        occasion_list = list(occasions.keys())
+        print_list = list(prints.keys())
+        cat_list = list(categories.keys())
+
+        templates = [
+            "Show me {print} {category} for a {occasion}",
+            "Elegant {print} styles for {occasion}",
+            "{occasion} {category} in {print} print",
+            "Casual {print} {category} for the weekend",
+            "Sustainable {category} outfits",
+            "Bold {print} pieces for {occasion}",
+            "Shop {print} {category} under {price}",
+            "Traditional {category} for a {occasion}",
+            "Modern {print} {category} collection",
+            "Find {category} perfect for {occasion}",
+        ]
+
+        import random
+        random.shuffle(templates)
+
+        for template in templates:
+            if len(suggestions) >= 5:
+                break
+            try:
+                suggestion = template.format(
+                    print=random.choice(print_list) if print_list else "African print",
+                    category=random.choice(cat_list) if cat_list else "outfits",
+                    occasion=random.choice(occasion_list) if occasion_list else "special occasion",
+                    price="USD " + str(random.choice([50, 100, 150, 200, 300])),
+                )
+                if suggestion not in suggestions:
+                    suggestions.append(suggestion)
+            except (IndexError, KeyError):
+                continue
+
+        if not suggestions:
+            suggestions = [f"Explore {random.choice(cat_list) if cat_list else 'our collection'}"]
+
+        return suggestions[:5]
 
 
 class AiOutfitBuilderView(APIView):

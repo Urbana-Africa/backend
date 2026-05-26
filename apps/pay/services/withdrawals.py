@@ -118,7 +118,7 @@ def _fire_flutterwave_transfer(withdrawal_id: str):
             "narration": f"Urbana payout – {withdrawal.reference}",
             "currency": withdrawal.payout_currency, # Use dynamic payout currency
             "reference": withdrawal.reference,
-            "debit_currency": "NGN", # Flutterwave debit account is NGN-based
+            "debit_currency": withdrawal.payout_currency or "USD",
         }
 
         resp = requests.post(
@@ -180,7 +180,7 @@ def _fire_paystack_transfer(withdrawal_id: str):
                     "name": withdrawal.account_name,
                     "account_number": withdrawal.account_number,
                     "bank_code": withdrawal.bank_code,
-                    "currency": withdrawal.payout_currency or "NGN",
+                    "currency": withdrawal.payout_currency or "USD",
                 },
                 timeout=30,
             )

@@ -46,42 +46,22 @@ def get_stripe_keys():
 
 
 def get_flutterwave_token():
-    
-    url = f"https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token"
+    """
+    Fetch an OAuth token from Flutterwave's IDP using the secret key.
+    """
+    url = "https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token"
     headers = {
-    "Content-Type": "application/x-www-form-urlencoded"
+        "Content-Type": "application/x-www-form-urlencoded"
     }
-    fw_keys = get_flutterwave_keys()  
+    fw_keys = get_flutterwave_keys()
 
     payload = {
-        "client_id":fw_keys['client_id'],
-        "client_secret": fw_keys['client_secret'],
+        "client_id": fw_keys.get("client_id", ""),
+        "client_secret": fw_keys.get("client_secret", ""),
         "grant_type": "client_credentials"
     }
 
-    response = requests.post(url, data=payload,headers=headers)
+    response = requests.post(url, data=payload, headers=headers)
     data = response.json()
-    print(data)
-
-    return data
-
-
-def get_flutterwave_token():
-    
-    url = f"https://idp.flutterwave.com/realms/flutterwave/protocol/openid-connect/token"
-    headers = {
-    "Content-Type": "application/x-www-form-urlencoded"
-    }
-    fw_keys = get_flutterwave_keys()  
-
-    payload = {
-        "client_id":fw_keys['client_id'],
-        "client_secret": fw_keys['client_secret'],
-        "grant_type": "client_credentials"
-    }
-
-    response = requests.post(url, data=payload,headers=headers)
-    data = response.json()
-    print(data)
 
     return data

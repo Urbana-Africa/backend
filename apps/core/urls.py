@@ -26,6 +26,7 @@ from .views import (
     CategoryListView,
     BrandListView,
     ProductListView,
+    CanReviewView,
     ReviewCreateView,
     ReviewListView,
     SeedDummyDataView,
@@ -100,6 +101,7 @@ urlpatterns += [
     # ✍ Reviews
     path("reviews", ReviewListView.as_view(), name="core-reviews"),
     path("reviews/create", ReviewCreateView.as_view(), name="core-review-create"),
+    path("can-review", CanReviewView.as_view(), name="core-can-review"),
 
     # 🖼 Storytelling Endpoints
     path("stories", StoryListView.as_view(), name="core-stories"),

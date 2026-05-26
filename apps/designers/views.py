@@ -559,22 +559,22 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
             except Exception as e:
                 print(f"Error sending profile submission email: {str(e)}")
 
-        # Send welcome email on every profile update
-        try:
-            context = {
-                "designer_name": profile.brand_name or request.user.first_name or "Designer",
-            }
-            message = render_to_string("administrator/designer_welcome.html", context)
-            threading.Thread(
-                target=resend_sendmail,
-                args=(
-                    "Welcome to Urbana Studio",
-                    [request.user.email],
-                    message,
-                ),
-            ).start()
-        except Exception as e:
-            print(f"Error sending designer welcome email: {str(e)}")
+            # Send welcome email only on first profile creation
+            try:
+                context = {
+                    "designer_name": profile.brand_name or request.user.first_name or "Designer",
+                }
+                message = render_to_string("administrator/designer_welcome.html", context)
+                threading.Thread(
+                    target=resend_sendmail,
+                    args=(
+                        "Welcome to Urbana Studio",
+                        [request.user.email],
+                        message,
+                    ),
+                ).start()
+            except Exception as e:
+                print(f"Error sending designer welcome email: {str(e)}")
 
         return Response({
             "status": "success",

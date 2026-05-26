@@ -1,3 +1,5 @@
+import requests
+from decimal import Decimal, ROUND_HALF_UP
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -5,6 +7,46 @@ from rest_framework import status
 import stripe
 from .models import Invoice, PaymentAttempt
 from .config import get_paystack_keys, get_flutterwave_keys, get_stripe_keys
+
+
+def get_exchange_rate(from_currency, to_currency):
+    """Fetch live exchange rate from open.er-api.com. Returns Decimal."""
+    if from_currency == to_currency:
+        return Decimal("1")
+    try:
+        resp = requests.get(
+            f"https://open.er-api.com/v6/latest/{from_currency}",
+            timeout=10,
+        )
+        data = resp.json()
+        rate = data.get("rates", {}).get(to_currency)
+        if rate:
+            return Decimal(str(rate))
+    except Exception:
+        pass
+    return None
+
+
+def get_invoice_currency(invoice):
+    """Derive invoice currency from linked order items. Defaults to USD."""
+    from apps.customers.models import Order
+    order = Order.objects.filter(invoice=invoice).first()
+    if order:
+        first_item = order.items.select_related("product__currency").first()
+        if first_item and first_item.product.currency:
+            return first_item.product.currency.code
+    return "USD"
+
+
+def convert_to_ngn(amount, from_currency="USD"):
+    """Convert an amount to NGN using live rates. Falls back to 1:1 if rate unavailable."""
+    if from_currency == "NGN":
+        return Decimal(str(amount))
+    rate = get_exchange_rate(from_currency, "NGN")
+    if rate is None:
+        # fallback: assume 1:1 so payment can still proceed
+        return Decimal(str(amount))
+    return (Decimal(str(amount)) * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 # ───────────────────────────────
@@ -58,7 +100,7 @@ class InitializePaystackPayment(BaseInitializeInvoicePayment):
         email = request.user.email
         invoice_id = request.data.get("reference")  # invoice.id
         amount = request.data.get("amount")
-
+        # Validate invoice in original currency
         invoice, error = self.validate_invoice(invoice_id, amount)
         if error:
             return error
@@ -69,6 +111,10 @@ class InitializePaystackPayment(BaseInitializeInvoicePayment):
         # Log attempt and use its reference instead of invoice ID
         attempt = self.log_attempt(invoice)
 
+        # Convert to NGN for Paystack (Nigerian processor)
+        invoice_currency = get_invoice_currency(invoice)
+        ngn_amount = convert_to_ngn(invoice.amount, invoice_currency)
+
         # Return data needed by Paystack modal
         return Response({
             "status": "success",
@@ -76,7 +122,7 @@ class InitializePaystackPayment(BaseInitializeInvoicePayment):
             "public_key": public_key,
             "reference": attempt.reference,  # ✅ Use PaymentAttempt reference
             "invoice_id": invoice.id,
-            "amount": int(amount),
+            "amount": int(ngn_amount),         # NGN amount as integer
             "email": email,
             "currency": "NGN",
         })
@@ -92,8 +138,7 @@ class InitializeFlutterwavePayment(BaseInitializeInvoicePayment):
         email = request.user.email
         invoice_id = request.data.get("reference")  # invoice.id
         amount = request.data.get("amount")
-        currency = request.data.get("currency", "USD")
-
+        # Validate invoice in original currency
         invoice, error = self.validate_invoice(invoice_id, amount)
         if error:
             return error
@@ -105,6 +150,10 @@ class InitializeFlutterwavePayment(BaseInitializeInvoicePayment):
         # Log attempt and use its reference
         attempt = self.log_attempt(invoice)
 
+        # Convert to NGN for Flutterwave (Nigerian processor)
+        invoice_currency = get_invoice_currency(invoice)
+        ngn_amount = convert_to_ngn(invoice.amount, invoice_currency)
+
         # Return values for Flutterwave modal
         return Response({
             "status": "success",
@@ -112,8 +161,8 @@ class InitializeFlutterwavePayment(BaseInitializeInvoicePayment):
             "public_key": public_key,
             "reference": attempt.reference,  # ✅ Use PaymentAttempt reference
             "invoice_id": invoice.id,
-            "amount": str(amount),
-            "currency": currency,
+            "amount": str(ngn_amount),
+            "currency": "NGN",
             "email": email,
             "customer_name": request.user.get_full_name(),
             "description": invoice.purpose or "Invoice Payment",

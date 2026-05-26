@@ -1,14 +1,18 @@
 import json
 import logging
+import threading
 from datetime import timedelta, datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+from django.template.loader import render_to_string
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 import stripe
 from django.conf import settings
 from .models import Payment, PaymentAttempt, Invoice, PaymentWebhookLog
+from apps.customers.models import Order
+from apps.utils.email_sender import resend_sendmail
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +151,46 @@ def handle_successful_payment(reference, processor_name=None, data=None):
         invoice.expiry_date = invoice.expiry_date or (invoice.start_date + timedelta(days=30))
         invoice.save(update_fields=["is_active", "is_expired", "start_date", "expiry_date"])
         logger.info(f"[{processor_name}] Invoice {invoice.id} activated for user {invoice.user_id}.")
+
+        # ── 5. Update Order & Send Customer Confirmation Email ───────
+        try:
+            order = Order.objects.filter(invoice=invoice).first()
+            if order and order.status == "pending":
+                order.status = "processing"
+                order.save(update_fields=["status"])
+
+                # Build order items context for email
+                items = order.items.select_related("product").all()
+                item_list = [
+                    {
+                        "name": i.product.name,
+                        "quantity": i.quantity,
+                        "price": str(i.amount),
+                    }
+                    for i in items
+                ]
+
+                ctx = {
+                    "customer_name": order.customer.user.first_name or order.customer.user.email,
+                    "order_id": order.order_id,
+                    "total": str(order.total_amount),
+                    "currency_symbol": "",
+                    "item_count": str(items.count()),
+                    "items": item_list,
+                    "status": "Processing",
+                }
+                msg = render_to_string("administrator/order_confirmation.html", ctx)
+                threading.Thread(
+                    target=resend_sendmail,
+                    args=(
+                        f"Urbana — Order Confirmed: {order.order_id}",
+                        [order.customer.user.email],
+                        msg,
+                    ),
+                ).start()
+                logger.info(f"[{processor_name}] Order confirmation email sent for {order.order_id}.")
+        except Exception as e:
+            logger.error(f"[{processor_name}] Error sending order confirmation email: {e}")
 
 
 # ---------------------------------------------------------------------

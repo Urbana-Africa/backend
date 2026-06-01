@@ -48,6 +48,8 @@ from .views import (
     AiSmartCollectionView,
     AiPersonalizedSearchView,
     AiPhotoFitMeView,
+    TryOnProvidersView,
+    AiTryOnView,
     SubscriptionPlanListView,
     UserSubscriptionView,
 )
@@ -132,6 +134,8 @@ urlpatterns += [
     path("ai-smart-collection", AiSmartCollectionView.as_view(), name="core-ai-smart-collection"),
     path("ai-personalized-search", AiPersonalizedSearchView.as_view(), name="core-ai-personalized-search"),
     path("ai-photo-fitme", AiPhotoFitMeView.as_view(), name="core-ai-photo-fitme"),
+    path("tryon-providers", TryOnProvidersView.as_view(), name="core-tryon-providers"),
+    path("ai-tryon", AiTryOnView.as_view(), name="core-ai-tryon"),
 
     # � Subscriptions
     path("subscription-plans", SubscriptionPlanListView.as_view(), name="core-subscription-plans"),

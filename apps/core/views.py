@@ -15,7 +15,7 @@ from apps.designers.serializers import StorySerializer
 from apps.utils.email_sender import resend_sendmail
 from django.db.models.functions import Lower
 from .models import (
-    Country, Currency, Category, MediaAsset, Product, Review, Sizes,
+    Brand, Country, Currency, Category, MediaAsset, Product, Review, Sizes,
     UserSettings, SmartCollection, ProductView, DesignerDailyAnalytics,
     LoyaltyPoints, LoyaltyBalance, SizeRecommendation, UserLookbook,
     SubscriptionPlan, UserSubscription,
@@ -2190,6 +2190,133 @@ Respond ONLY with valid JSON in this exact structure:
 
         fast_data["analysis"] = analysis_text
         return Response({"status": "success", "data": fast_data}, status=status.HTTP_200_OK)
+
+
+class TryOnProvidersView(APIView):
+    """GET /core/tryon-providers — list available generative try-on models.
+
+    Returns each provider with an ``enabled`` flag so the frontend can render a
+    temporary model selector. During testing only Gemini is enabled.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from .services.vton import list_providers, DEFAULT_PROVIDER
+        return Response(
+            {"status": "success", "data": list_providers(), "default": DEFAULT_PROVIDER},
+            status=status.HTTP_200_OK,
+        )
+
+
+class AiTryOnView(APIView):
+    """POST /core/ai-tryon — generative garment replacement.
+
+    Takes the user's photo + a product and returns a photorealistic image of the
+    user wearing the product's garment, using the selected VTON provider.
+    """
+    permission_classes = [AllowAny]
+
+    @staticmethod
+    def _read_garment(product):
+        """Return (bytes, mime) for the product's garment image."""
+        field = getattr(product, "fit_me_image", None)
+        if field:
+            try:
+                field.open("rb")
+                data = field.read()
+                field.close()
+                if data:
+                    return data, "image/png"
+            except Exception:
+                pass
+        media = product.media.first()
+        if media and getattr(media, "file", None):
+            try:
+                media.file.open("rb")
+                data = media.file.read()
+                media.file.close()
+                if data:
+                    return data, "image/jpeg"
+            except Exception:
+                pass
+        return None, None
+
+    def post(self, request):
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+        from .services.vton import get_provider, list_providers, VtonError
+        import uuid
+
+        product_id = request.data.get("product_id")
+        provider_key = request.data.get("provider") or "gemini"
+        photo = request.FILES.get("user_photo")
+
+        if not photo or not product_id:
+            return Response(
+                {"status": "error", "message": "Photo and product_id required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Guard: only enabled + configured providers may run.
+        providers = {p["key"]: p for p in list_providers()}
+        meta = providers.get(provider_key)
+        if not meta:
+            return Response(
+                {"status": "error", "message": "Unknown try-on model."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not meta["enabled"]:
+            return Response(
+                {"status": "error", "message": f"{meta['label']} is currently disabled."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            product = Product.objects.prefetch_related("media", "sizes").get(id=product_id)
+        except Product.DoesNotExist:
+            return Response({"status": "error", "message": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+        except (ValueError, TypeError):
+            return Response({"status": "error", "message": "Invalid product_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        garment_bytes, garment_mime = self._read_garment(product)
+        if not garment_bytes:
+            return Response(
+                {"status": "error", "message": "This product has no try-on image."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        photo.seek(0)
+        person_bytes = photo.read()
+        person_mime = photo.content_type or "image/jpeg"
+
+        provider = get_provider(provider_key)
+        try:
+            result_bytes = provider.generate(
+                person_bytes, person_mime, garment_bytes, garment_mime, product
+            )
+        except VtonError as exc:
+            return Response(
+                {"status": "error", "message": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except Exception as exc:
+            return Response(
+                {"status": "error", "message": f"Try-on failed: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Persist the generated image and return its URL.
+        name = f"ai_tryon/{uuid.uuid4().hex}.png"
+        path = default_storage.save(name, ContentFile(result_bytes))
+        url = request.build_absolute_uri(default_storage.url(path))
+
+        return Response(
+            {
+                "status": "success",
+                "data": {"image_url": url, "provider": provider_key},
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class SubscriptionPlanListView(APIView):

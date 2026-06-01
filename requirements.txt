@@ -21,7 +21,7 @@ djangorestframework_simplejwt
 drf-social-oauth2
 folium
 google-auth
-google-genai
+google-genai>=2.7.0
 huggingface-hub
 jwcrypto
 # mysqlclient

@@ -353,6 +353,10 @@ USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY", default="")
+# Virtual try-on providers (fal.ai + Replicate are disabled by default; only
+# Gemini is active during testing — see apps/core/services/vton.py)
+FAL_KEY = config("FAL_KEY", default="")
+REPLICATE_API_TOKEN = config("REPLICATE_API_TOKEN", default="")
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
 STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="")
 SHIPPO_API_KEY = config("SHIPPO_API_KEY", default="")

@@ -105,7 +105,6 @@ class ProductSerializer(serializers.ModelSerializer):
             "currency_code",
             "category",
             "subcategory",
-            "brand",
             "material",
             "colors",
             "sizes",
@@ -149,11 +148,19 @@ class ProductSerializer(serializers.ModelSerializer):
         # Require sizes and colors on create; on update they are optional if not sent
         is_create = self.instance is None
         if is_create:
-            sizes = raw.get("sizes")
+            # JSON: "sizes", FormData/MultiPart: "sizes[]"
+            sizes = raw.get("sizes") or raw.getlist("sizes[]")
+
+            # JSON: "colors_input", FormData: keys like "colors_input[0][name]"
             colors_input = raw.get("colors_input") or raw.get("colors")
+            if not colors_input:
+                colors_input = any(
+                    k.startswith("colors_input[") for k in raw.keys()
+                )
+
             if not sizes or len(sizes) == 0:
                 raise serializers.ValidationError({"sizes": "At least one size is required."})
-            if not colors_input or len(colors_input) == 0:
+            if not colors_input:
                 raise serializers.ValidationError({"colors": "At least one color is required."})
 
         return super().validate(attrs)

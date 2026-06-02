@@ -159,3 +159,94 @@ def auto_release_escrows_after_24hrs():
             "is_auto_released",
             "released_at",
         ])
+
+
+# ============================================================
+# 3. SCHEDULED EMAIL JOBS
+# ============================================================
+
+def send_delayed_designer_emails():
+    """Send 24h product-upload and 48-72h storefront reminders to designers."""
+    from apps.authentication.models import User
+    from apps.designers.models import Designer
+    from apps.core.models import Product
+    from apps.utils.notifications import (
+        send_designer_product_upload_reminder,
+        send_designer_storefront_reminder,
+    )
+
+    now = timezone.now()
+
+    # 24-hour reminder: designers with no published products
+    day_ago = now - timedelta(hours=24)
+    designers_24h = Designer.objects.filter(
+        created_at__lte=day_ago,
+        created_at__gte=day_ago - timedelta(hours=2),
+    )
+    for designer in designers_24h:
+        published = Product.objects.filter(
+            user=designer.user, is_published=True, is_admin_published=True
+        ).exists()
+        if not published:
+            try:
+                send_designer_product_upload_reminder(designer.user)
+            except Exception as e:
+                print(f"[SCHEDULED] Designer 24h reminder failed: {e}")
+
+    # 48-72 hour reminder: designers still with no products
+    two_days_ago = now - timedelta(hours=48)
+    three_days_ago = now - timedelta(hours=72)
+    designers_48h = Designer.objects.filter(
+        created_at__lte=two_days_ago,
+        created_at__gte=three_days_ago,
+    )
+    for designer in designers_48h:
+        published = Product.objects.filter(
+            user=designer.user, is_published=True, is_admin_published=True
+        ).exists()
+        if not published:
+            try:
+                send_designer_storefront_reminder(designer.user)
+            except Exception as e:
+                print(f"[SCHEDULED] Designer storefront reminder failed: {e}")
+
+
+def send_delayed_customer_emails():
+    """Send browse reminder and review-request emails to customers."""
+    from apps.authentication.models import User
+    from apps.customers.models import Customer, Order
+    from apps.utils.notifications import (
+        send_customer_browse_reminder,
+        send_customer_review_request,
+    )
+
+    now = timezone.now()
+
+    # 24-48h browse reminder: customers with no orders
+    day_ago = now - timedelta(hours=36)
+    customers_no_order = Customer.objects.filter(
+        created_at__lte=day_ago,
+        created_at__gte=day_ago - timedelta(hours=2),
+    )
+    for customer in customers_no_order:
+        has_order = Order.objects.filter(customer=customer).exists()
+        if not has_order:
+            try:
+                send_customer_browse_reminder(customer.user)
+            except Exception as e:
+                print(f"[SCHEDULED] Customer browse reminder failed: {e}")
+
+    # 2-3 days after delivery: review request
+    two_days_after = now - timedelta(days=2)
+    three_days_after = now - timedelta(days=3)
+    from apps.customers.models import OrderItem
+    delivered_items = OrderItem.objects.filter(
+        status="delivered",
+        delivered_at__lte=two_days_after,
+        delivered_at__gte=three_days_after,
+    )
+    for item in delivered_items:
+        try:
+            send_customer_review_request(item)
+        except Exception as e:
+            print(f"[SCHEDULED] Customer review request failed: {e}")

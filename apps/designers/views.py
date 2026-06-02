@@ -453,9 +453,35 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
         order_item = self.get_object()
 
         status_update = request.data.get("status")
+        old_status = order_item.designer_status
 
         order_item.designer_status = status_update
         order_item.save()
+
+        # Send emails on status transitions
+        if status_update == "shipped" and old_status != "shipped":
+            from apps.utils.notifications import (
+                send_designer_order_shipped,
+                send_customer_order_shipped,
+            )
+            try:
+                send_designer_order_shipped(order_item)
+            except Exception as e:
+                print(f"[EMAIL] Designer shipped failed: {e}")
+            try:
+                send_customer_order_shipped(order_item)
+            except Exception as e:
+                print(f"[EMAIL] Customer shipped failed: {e}")
+
+        if status_update == "delivered" and old_status != "delivered":
+            from apps.utils.notifications import send_customer_order_delivered
+            order_item.status = "delivered"
+            order_item.delivered_at = timezone.now()
+            order_item.save()
+            try:
+                send_customer_order_delivered(order_item)
+            except Exception as e:
+                print(f"[EMAIL] Customer delivered failed: {e}")
 
         return Response({
             "status": "success",

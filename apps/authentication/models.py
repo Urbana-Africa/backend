@@ -155,9 +155,15 @@ class VerificationCode(models.Model):
         default=generate_custom_id,
         editable=False,
     )
-    
-    user=models.ForeignKey(User,on_delete=models.CASCADE,default='')
-    code = models.TextField(default='',max_length=5000)
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, default='')
+    code = models.TextField(default='', max_length=5000)
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+
+    def is_expired(self):
+        if not self.created_at:
+            return True
+        return (datetime.datetime.now(utc) - self.created_at).total_seconds() > 600
 
 
 class PasswordResetCode(models.Model):
@@ -167,9 +173,15 @@ class PasswordResetCode(models.Model):
         default=generate_custom_id,
         editable=False,
     )
-    
-    user=models.ForeignKey(User,on_delete=models.CASCADE,default='')
-    code = models.TextField(default='',max_length=5000)
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, default='')
+    code = models.TextField(default='', max_length=5000)
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+
+    def is_expired(self):
+        if not self.created_at:
+            return True
+        return (datetime.datetime.now(utc) - self.created_at).total_seconds() > 600
 
 
 

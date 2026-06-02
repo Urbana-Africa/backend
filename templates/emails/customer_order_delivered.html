@@ -1,0 +1,35 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ first_name }},</p>
+
+<p>Your Urbana order has been delivered.</p>
+
+<p>We hope your piece arrived safely and that you love what the designer created.</p>
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Order number</td>
+    <td style="padding:8px 0; font-weight:600;">{{ order_number }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Designer</td>
+    <td style="padding:8px 0; font-weight:600;">{{ designer_name }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0; color:#666;">Product</td>
+    <td style="padding:8px 0; font-weight:600;">{{ product_name }}</td>
+  </tr>
+</table>
+
+<p>Thank you for choosing Urbana Africa.</p>
+
+<p>Every order helps us support African designers, grow their visibility, and make African fashion more accessible to customers around the world.</p>
+
+<p>If there is any issue with your order, please contact us as soon as possible and our support team will be happy to help.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warm regards,</p>
+<p>Urbana Africa Support</p>
+{% endblock %}

@@ -45,6 +45,7 @@ class Designer(BaseModel):
         help_text='{"facebook": "url", "twitter": "url", "tiktok": "url"}'
     )
     is_sustainable = models.BooleanField(default=False)
+    sustainability_notes = models.TextField(blank=True, help_text="Free-form notes about sustainability practices")
     sustainability_certifications = models.JSONField(
         default=list, blank=True,
         help_text='List of certifications e.g. ["GOTS", "Fair Trade"]'

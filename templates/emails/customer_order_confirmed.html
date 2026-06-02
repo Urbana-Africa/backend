@@ -1,0 +1,57 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ first_name }},</p>
+
+<p>Thank you for shopping with Urbana Africa.</p>
+
+<p>Your order has been confirmed, and the designer will begin preparing your piece.</p>
+
+<p>Please find your order details below:</p>
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Order number</td>
+    <td style="padding:8px 0; font-weight:600;">{{ order_number }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Designer</td>
+    <td style="padding:8px 0; font-weight:600;">{{ designer_name }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Product</td>
+    <td style="padding:8px 0; font-weight:600;">{{ product_name }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Size</td>
+    <td style="padding:8px 0; font-weight:600;">{{ size }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Colour</td>
+    <td style="padding:8px 0; font-weight:600;">{{ colour }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Quantity</td>
+    <td style="padding:8px 0; font-weight:600;">{{ quantity }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Total</td>
+    <td style="padding:8px 0; font-weight:600;">{{ order_total }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0; color:#666;">Estimated delivery timeline</td>
+    <td style="padding:8px 0; font-weight:600;">{{ delivery_timeline }}</td>
+  </tr>
+</table>
+
+<p>We'll keep you updated as your order moves through the next steps.</p>
+
+<p>Every purchase on Urbana helps support African designers and brings their work closer to customers around the world.</p>
+
+<p>Thank you for being part of that journey.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warm regards,</p>
+<p>Urbana Africa Support</p>
+{% endblock %}

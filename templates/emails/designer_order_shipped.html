@@ -1,0 +1,43 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ designer_name }},</p>
+
+<p>Thank you for updating your order status.</p>
+
+<p>Your Urbana order has now been marked as shipped.</p>
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Order number</td>
+    <td style="padding:8px 0; font-weight:600;">{{ order_number }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Product</td>
+    <td style="padding:8px 0; font-weight:600;">{{ product_name }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Tracking number</td>
+    <td style="padding:8px 0; font-weight:600;">{{ tracking_number }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0; color:#666;">Courier</td>
+    <td style="padding:8px 0; font-weight:600;">{{ courier_name }}</td>
+  </tr>
+</table>
+
+<p>Thank you for preparing and dispatching this order.</p>
+
+<p>Every successful fulfilment helps build customer trust, protect your brand reputation, and strengthen Urbana as a marketplace for African fashion.</p>
+
+<p>Please continue to monitor the shipment until it reaches the customer.</p>
+
+<p>If there are any delivery issues, delays, or changes, kindly let us know as soon as possible so we can support the customer experience properly.</p>
+
+<p>Thank you again for helping us deliver a beautiful Urbana experience.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warmly,</p>
+<p>Zuri<br>Vendor Success, Urbana Africa</p>
+{% endblock %}

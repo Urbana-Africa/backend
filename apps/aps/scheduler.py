@@ -9,6 +9,8 @@ from .tasks import (
     auto_release_escrows_after_24hrs,
     create_escrows_for_successful_payments,
     release_escrows_for_received_items,
+    send_delayed_customer_emails,
+    send_delayed_designer_emails,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,33 @@ def start():
         coalesce=True,
     )
 
+    # -------------------------------------------------------
+    # Designer scheduled emails
+    # -------------------------------------------------------
+    scheduler.add_job(
+        send_delayed_designer_emails,
+        trigger="interval",
+        minutes=interval_minutes,
+        id="send_delayed_designer_emails_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # -------------------------------------------------------
+    # Customer scheduled emails
+    # -------------------------------------------------------
+    scheduler.add_job(
+        send_delayed_customer_emails,
+        trigger="interval",
+        minutes=interval_minutes,
+        id="send_delayed_customer_emails_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     register_events(scheduler)
     scheduler.start()
 
-    logger.info("Escrow scheduler started successfully.")
+    logger.info("Escrow & email scheduler started successfully.")

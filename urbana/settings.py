@@ -145,6 +145,9 @@ if IS_DEVELOPMENT:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            "OPTIONS": {
+                "timeout": 20,  # seconds — helps with concurrent access / apscheduler
+            },
         }
     }
 else:
@@ -153,6 +156,9 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            "OPTIONS": {
+                "timeout": 20,
+            },
         }
     }
 # =====================================================

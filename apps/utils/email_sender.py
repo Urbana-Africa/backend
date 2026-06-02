@@ -9,13 +9,10 @@ from django.conf import settings
 
 
 
-def resend_sendmail(subject,recipient_list,message):
-
-    subject = subject
-    recipient_list = recipient_list
-    from_email = "support@accounts.urbanaafrica.com"
-    message = message
-
+def resend_sendmail(subject, recipient_list, message, from_email=None, from_name=None):
+    from_email = from_email or "hello@urbanaafrica.com"
+    if from_name:
+        from_email = f"{from_name} <{from_email}>"
 
     with get_connection(
         host=settings.RESEND_SMTP_HOST,
@@ -23,15 +20,15 @@ def resend_sendmail(subject,recipient_list,message):
         username=settings.RESEND_SMTP_USERNAME,
         password=settings.RESEND_API_KEY,
         use_tls=True,
-        ) as connection:
-            r = EmailMessage(
-                  subject=subject,
-                  body=message,
-                  to=recipient_list,
-                  from_email=from_email,
-                  connection=connection)
-            r.content_subtype = 'html'
-            r.send()
+    ) as connection:
+        r = EmailMessage(
+            subject=subject,
+            body=message,
+            to=recipient_list,
+            from_email=from_email,
+            connection=connection)
+        r.content_subtype = 'html'
+        r.send()
     print('Sent')
     return True
 

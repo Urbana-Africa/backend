@@ -119,25 +119,16 @@ class CheckoutView(APIView):
                     link=f"/orders/{order_item.id}",
                 )
 
-                # Email designer about new order
+                # Send new order emails via notification service
+                from apps.utils.notifications import send_designer_new_order, send_customer_order_confirmed
                 try:
-                    ctx = {
-                        "designer_name": order_item.product.user.first_name or order_item.product.user.email,
-                        "product_name": item.product.name,
-                        "quantity": item.quantity,
-                        "order_id": order.order_id,
-                    }
-                    msg = render_to_string("administrator/order_confirmation.html", ctx)
-                    threading.Thread(
-                        target=resend_sendmail,
-                        args=(
-                            f"Urbana — New Order: {item.product.name}",
-                            [order_item.product.user.email],
-                            msg,
-                        ),
-                    ).start()
+                    send_designer_new_order(order_item)
                 except Exception as e:
                     print(f"Error sending designer order email: {str(e)}")
+                try:
+                    send_customer_order_confirmed(order_item)
+                except Exception as e:
+                    print(f"Error sending customer order email: {str(e)}")
 
                 # Low stock alert
                 if item.product.stock <= 5 and item.product.stock >= 0:

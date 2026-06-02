@@ -1,0 +1,51 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ designer_name }},</p>
+
+<p>Great news — you have received a new order on Urbana Africa.</p>
+
+<p>A customer has purchased one of your pieces, and it is now time to prepare the order for fulfilment.</p>
+
+<p>Please review the order details below:</p>
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Order number</td>
+    <td style="padding:8px 0; font-weight:600;">{{ order_number }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Product</td>
+    <td style="padding:8px 0; font-weight:600;">{{ product_name }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Quantity</td>
+    <td style="padding:8px 0; font-weight:600;">{{ quantity }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Size</td>
+    <td style="padding:8px 0; font-weight:600;">{{ size }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Colour</td>
+    <td style="padding:8px 0; font-weight:600;">{{ colour }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0; color:#666;">Delivery timeline</td>
+    <td style="padding:8px 0; font-weight:600;">{{ delivery_timeline }}</td>
+  </tr>
+</table>
+
+<p>Please prepare the item carefully and make sure it is packaged neatly, securely, and in line with your brand standard.</p>
+
+<p>Once the order is ready for dispatch, please update the shipment status and provide the tracking details where available.</p>
+
+<p>A smooth fulfilment experience helps customers trust your brand and strengthens the overall Urbana experience.</p>
+
+<p>Congratulations on your order — I'm excited to see your brand growing on Urbana.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warmly,</p>
+<p>Zuri<br>Vendor Success, Urbana Africa</p>
+{% endblock %}

@@ -240,7 +240,9 @@ class AdminDesignerSerializer(serializers.ModelSerializer):
     email = serializers.CharField(source="user.email", read_only=True)
     first_name = serializers.CharField(source="user.first_name", read_only=True)
     last_name = serializers.CharField(source="user.last_name", read_only=True)
+    phone_number = serializers.CharField(source="user.phone_number", read_only=True)
     lookbook_files = MediaAssetSerializer(many=True, read_only=True)
+    products_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Designer
@@ -248,6 +250,9 @@ class AdminDesignerSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
+
+    def get_products_count(self, obj):
+        return obj.products.count()
 
 class AdminDesignerProductSerializer(AdminBaseSerializer):
     class Meta(AdminBaseSerializer.Meta):

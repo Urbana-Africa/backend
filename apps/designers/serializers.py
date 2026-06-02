@@ -239,6 +239,7 @@ class DesignerSerializer(serializers.ModelSerializer):
             'tagline',
             'social_media_links',
             'is_sustainable',
+            'sustainability_notes',
             'sustainability_certifications',
             'featured_collection',
         ]

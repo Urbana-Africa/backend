@@ -340,6 +340,8 @@ class SetPassword(APIView):
             user= User.objects.get(email=email)
             try:
                 verification = VerificationCode.objects.get(user=user)
+                if verification.is_expired():
+                    return Response({'status':'error','message':'Code has expired. Please request a new one.'},status=status.HTTP_400_BAD_REQUEST)
                 if check_password(verification_code,verification.code):
                     user.set_password(request.data['password'])
                     user.save()
@@ -379,6 +381,8 @@ class SetEmail(APIView):
 
         try:
             verification = VerificationCode.objects.get(user=user)
+            if verification.is_expired():
+                return Response({'status':'error','message':'Code has expired. Please request a new one.'},status=status.HTTP_400_BAD_REQUEST)
             if check_password(verification_code,verification.code):
                 user.email = email
                 user.username = email
@@ -428,6 +432,8 @@ class VerifyCode(APIView):
             user= User.objects.get(email=email)
             try:
                 code = VerificationCode.objects.get(user=user)
+                if code.is_expired():
+                    return Response({'status':'error','message':'Code has expired. Please request a new one.'},status=status.HTTP_400_BAD_REQUEST)
                 if check_password(verification_code,code.code):
                     return Response({'status':'success'},status=status.HTTP_202_ACCEPTED)
 
@@ -501,7 +507,8 @@ def send_verification_email(user:User):
     code.save()
     print(code_digits)
     message = """<p>Hi there!,<br> <br>
-    <b>Use """ + code_digits + """ as your activation code</b></p>"""
+    <b>Use """ + code_digits + """ as your activation code.</b><br>
+    This code will expire in 10 minutes.</p>"""
     subject = 'urbana   - Account creation'
     threading.Thread(target=resend_sendmail,args=(subject, [user.email], message,)).start()
     return True
@@ -540,14 +547,16 @@ class VerifyEmail(APIView):
             user= User.objects.get(email=email)
             try:
                 code = VerificationCode.objects.get(user=user)
+                if code.is_expired():
+                    return Response({'status':'error','message':'Code has expired. Please request a new one.'},status=status.HTTP_400_BAD_REQUEST)
                 if check_password(verification_code,code.code):
                     data = {'status':'success'}
                     user.is_active = True
                     user.save()
-                    code.delete()       
-                    data['data'] = UserSerializer(user,many=False).data                    
-                    data['status'] = 'success'          
-                    
+                    code.delete()
+                    data['data'] = UserSerializer(user,many=False).data
+                    data['status'] = 'success'
+
                     # Create appropriate profile
                     if user.user_type == 'designer':
                         Designer.objects.get_or_create(user=user)
@@ -927,41 +936,14 @@ class Signup(APIView):
             serialized_data = UserSerializer(user)
             send_verification_email(user)
 
-            # Send welcome email to customers
-            if user_type == 'customer':
-                try:
-                    context = {
-                        "first_name": user.first_name or "there",
-                    }
-                    message = render_to_string("administrator/customer_welcome.html", context)
-                    threading.Thread(
-                        target=resend_sendmail,
-                        args=(
-                            "Welcome to Urbana — You Are In",
-                            [user.email],
-                            message,
-                        ),
-                    ).start()
-                except Exception as e:
-                    print(f"Error sending customer welcome email: {str(e)}")
+            # Send welcome emails via notification service
+            from apps.utils.notifications import send_customer_welcome_email, send_designer_welcome_email
 
-            # Send welcome email to designers
+            if user_type == 'customer':
+                send_customer_welcome_email(user)
+
             if user_type == 'designer':
-                try:
-                    context = {
-                        "designer_name": user.first_name or "Designer",
-                    }
-                    message = render_to_string("administrator/designer_welcome.html", context)
-                    threading.Thread(
-                        target=resend_sendmail,
-                        args=(
-                            "Welcome to Urbana Studio",
-                            [user.email],
-                            message,
-                        ),
-                    ).start()
-                except Exception as e:
-                    print(f"Error sending designer welcome email: {str(e)}")
+                send_designer_welcome_email(user)
 
             data = {'status':'success','data':serialized_data.data}
             return Response(data,status=status.HTTP_202_ACCEPTED)

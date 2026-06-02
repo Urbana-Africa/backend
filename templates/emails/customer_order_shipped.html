@@ -1,0 +1,43 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ first_name }},</p>
+
+<p>Good news — your Urbana order is on its way.</p>
+
+<p>Your piece has been carefully prepared and shipped by the designer.</p>
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Order number</td>
+    <td style="padding:8px 0; font-weight:600;">{{ order_number }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Designer</td>
+    <td style="padding:8px 0; font-weight:600;">{{ designer_name }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Product</td>
+    <td style="padding:8px 0; font-weight:600;">{{ product_name }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Courier</td>
+    <td style="padding:8px 0; font-weight:600;">{{ courier_name }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0; color:#666;">Tracking number</td>
+    <td style="padding:8px 0; font-weight:600;">{{ tracking_number }}</td>
+  </tr>
+</table>
+
+<p>You can use the tracking details above to follow your delivery where available.</p>
+
+<p>We'll continue to keep you updated as your order moves closer to arrival.</p>
+
+<p>Thank you for shopping with Urbana Africa and supporting African fashion designers.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warm regards,</p>
+<p>Urbana Africa Support</p>
+{% endblock %}

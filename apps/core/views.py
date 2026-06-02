@@ -1,6 +1,8 @@
+import hashlib
 import json
 import threading
 from django.conf import settings
+from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
@@ -1503,17 +1505,33 @@ Rules:
 Respond ONLY with valid JSON. No markdown, no extra text.
 Example: {{"occasion": "wedding", "print_type": "ankara", "max_price": 50000, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under ₦50,000 — here’s what our designers have for you."}}"""
 
+        # Cache key: hash of message + user_context
+        cache_key = f"ai_search:gemini:{hashlib.sha256((message + user_context).encode()).hexdigest()}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
         client = genai.Client(api_key=gemini_key)
-        response = client.models.generate_content(
-            model="gemini-1.5-flash-latest",
-            contents=message,
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.1,
-                response_mime_type="application/json",
-            ),
-        )
-        return json.loads(response.text)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                client.models.generate_content,
+                model="gemini-1.5-flash-latest",
+                contents=message,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
+            )
+            try:
+                response = future.result(timeout=8)
+            except concurrent.futures.TimeoutError:
+                raise TimeoutError("Gemini response timed out")
+
+        parsed = json.loads(response.text)
+        cache.set(cache_key, parsed, timeout=300)  # 5 minutes
+        return parsed
 
     # ── Main handler ──────────────────────────────────────────────────────
 
@@ -2021,9 +2039,10 @@ class AiPersonalizedSearchView(APIView):
             avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
         )
 
-        # 3. Score and annotate each product
+        # 3. Score and annotate each product (limit to 20; only 12 returned)
         scored = []
-        for p in base_qs[:50]:
+        products = list(base_qs[:20])
+        for p in products:
             score = 0
             notes = []
 
@@ -2033,18 +2052,18 @@ class AiPersonalizedSearchView(APIView):
                 notes.append("You saved a similar item.")
 
             # Designer affinity
-            if p.user and p.user.id in review_designers:
+            if p.user_id in review_designers:
                 score += 25
-                brand_name = getattr(getattr(p.user, 'designer_profile', None), 'brand_name', 'this designer')
+                brand_name = getattr(p.user.designer_profile, 'brand_name', 'this designer')
                 notes.append(f"You have reviewed {brand_name} positively.")
 
-            # Size match (use prefetched sizes, avoid .exists() N+1)
-            product_sizes_list = list(p.sizes.all())
-            if user_sizes and product_sizes_list:
-                product_sizes = set(s.name for s in product_sizes_list if s.name)
-                if product_sizes & user_sizes:
-                    score += 20
-                    notes.append("Available in your size.")
+            # Size match (use prefetched sizes)
+            if user_sizes:
+                for s in p.sizes.all():
+                    if s.name and s.name in user_sizes:
+                        score += 20
+                        notes.append("Available in your size.")
+                        break
 
             # Popularity
             score += min(p.popularity_score / 100, 15)

@@ -67,12 +67,13 @@ class AdminProductViewSet(AdminBaseViewSet):
 
     serializer_class = AdminProductSerializer
 
-    filterset_fields = [
-        "is_published",
-        "is_admin_published",
-        "is_active",
-        "featured",
-    ]
+    filterset_fields = {
+        "is_published": ["exact"],
+        "is_admin_published": ["exact"],
+        "is_active": ["exact"],
+        "featured": ["exact"],
+        "designer_product__designer": ["exact"],
+    }
 
     search_fields = ["name", "sku"]
     ordering_fields = ["created_at", "name"]
@@ -147,6 +148,17 @@ class AdminProductViewSet(AdminBaseViewSet):
             notification_type=Notification.Type.PRODUCT,
             link=f"/products/edit/{product.id}",
         )
+
+        # Send storefront live email on first published product
+        try:
+            published_count = Product.objects.filter(
+                user=product.user, is_published=True, is_admin_published=True
+            ).count()
+            if published_count == 1:
+                from apps.utils.notifications import send_designer_storefront_live
+                send_designer_storefront_live(product.user)
+        except Exception as e:
+            print(f"[EMAIL] Storefront live failed: {e}")
 
         # Email notification
         try:

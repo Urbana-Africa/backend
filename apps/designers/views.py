@@ -27,8 +27,7 @@ from django.utils import timezone
 from django.template.loader import render_to_string
 import threading
 from apps.utils.email_sender import resend_sendmail
-import csv
-from io import StringIO
+from apps.utils.notifications import send_designer_welcome_email
 from django.db.models.functions import TruncWeek
 from rest_framework.decorators import action
 from django_filters.rest_framework import DjangoFilterBackend
@@ -587,18 +586,7 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
 
             # Send welcome email only on first profile creation
             try:
-                context = {
-                    "designer_name": profile.brand_name or request.user.first_name or "Designer",
-                }
-                message = render_to_string("administrator/designer_welcome.html", context)
-                threading.Thread(
-                    target=resend_sendmail,
-                    args=(
-                        "Welcome to Urbana Studio",
-                        [request.user.email],
-                        message,
-                    ),
-                ).start()
+                send_designer_welcome_email(request.user)
             except Exception as e:
                 print(f"Error sending designer welcome email: {str(e)}")
 

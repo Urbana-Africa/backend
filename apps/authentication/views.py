@@ -941,13 +941,10 @@ class Signup(APIView):
             send_verification_email(user)
 
             # Send welcome emails via notification service
-            from apps.utils.notifications import send_customer_welcome_email, send_designer_welcome_email
+            from apps.utils.notifications import send_customer_welcome_email
 
             if user_type == 'customer':
                 send_customer_welcome_email(user)
-
-            if user_type == 'designer':
-                send_designer_welcome_email(user)
 
             data = {'status':'success','data':serialized_data.data}
             return Response(data,status=status.HTTP_202_ACCEPTED)
@@ -1102,13 +1099,10 @@ def GoogleOneTapLogin(request):
         elif user.user_type == "designer":
             Designer.objects.get_or_create(user=user)
 
-        # Send welcome email for new users
-        if created:
-            from apps.utils.notifications import send_customer_welcome_email, send_designer_welcome_email
-            if user.user_type == "customer":
-                send_customer_welcome_email(user)
-            elif user.user_type == "designer":
-                send_designer_welcome_email(user)
+        # Send welcome email for new users (customers only; designers get welcome after profile setup)
+        if created and user.user_type == "customer":
+            from apps.utils.notifications import send_customer_welcome_email
+            send_customer_welcome_email(user)
 
         # If user exists but is not active, return inactive status (no cookies)
         # This prevents unverified email/password users from bypassing verification via Google auth

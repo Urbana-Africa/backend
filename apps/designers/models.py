@@ -55,6 +55,31 @@ class Designer(BaseModel):
         related_name="featured_for_designer"
     )
 
+    # ── New fields for redesigned profile ──
+    founder_name = models.CharField(max_length=200, blank=True, help_text="Designer or founder name")
+    phone = models.CharField(max_length=50, blank=True, help_text="Phone / WhatsApp number")
+    city = models.CharField(max_length=200, blank=True, help_text="City / base of operation")
+    unique_attributes = models.JSONField(
+        default=list, blank=True,
+        help_text='Brand uniqueness checkboxes e.g. ["handmade", "sustainable"]'
+    )
+    product_count_range = models.CharField(
+        max_length=50, blank=True,
+        help_text="Products ready to list: 1-5, 6-10, 11-25, 25+"
+    )
+    price_range = models.CharField(
+        max_length=50, blank=True,
+        help_text="Average product price range"
+    )
+    production_type = models.CharField(
+        max_length=100, blank=True,
+        help_text="Ready-to-wear, made-to-order, custom orders, pre-order, mix"
+    )
+    ships_internationally = models.CharField(
+        max_length=50, blank=True,
+        help_text="Yes, No, Not yet but I want to"
+    )
+
     # ✅ Single lifecycle field
     status = models.CharField(
         max_length=20,

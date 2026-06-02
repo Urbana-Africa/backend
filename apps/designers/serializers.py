@@ -242,6 +242,14 @@ class DesignerSerializer(serializers.ModelSerializer):
             'sustainability_notes',
             'sustainability_certifications',
             'featured_collection',
+            'founder_name',
+            'phone',
+            'city',
+            'unique_attributes',
+            'product_count_range',
+            'price_range',
+            'production_type',
+            'ships_internationally',
         ]
         read_only_fields = [
             'id',
@@ -251,7 +259,7 @@ class DesignerSerializer(serializers.ModelSerializer):
             'slug',
             'created_at',
             'status_updated_at',
-            'lookbook_files',     # prevent accidental write via this field
+            'lookbook_files',
             'featured_collection',
         ]
 

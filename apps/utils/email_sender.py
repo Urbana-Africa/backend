@@ -10,7 +10,7 @@ from django.conf import settings
 
 
 def resend_sendmail(subject, recipient_list, message, from_email=None, from_name=None):
-    from_email = from_email or "hello@urbanaafrica.com"
+    from_email = from_email or "hello@accounts.urbanaafrica.com"
     if from_name:
         from_email = f"{from_name} <{from_email}>"
 

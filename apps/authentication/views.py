@@ -510,7 +510,11 @@ def send_verification_email(user:User):
     <b>Use """ + code_digits + """ as your activation code.</b><br>
     This code will expire in 10 minutes.</p>"""
     subject = 'urbana   - Account creation'
-    threading.Thread(target=resend_sendmail,args=(subject, [user.email], message,)).start()
+    threading.Thread(
+        target=resend_sendmail,
+        args=(subject, [user.email], message),
+        kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Africa"},
+    ).start()
     return True
 
 

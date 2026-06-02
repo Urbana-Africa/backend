@@ -1106,6 +1106,18 @@ def GoogleOneTapLogin(request):
             elif user.user_type == "designer":
                 send_designer_welcome_email(user)
 
+        # If user exists but is not active, return inactive status (no cookies)
+        # This prevents unverified email/password users from bypassing verification via Google auth
+        if not user.is_active:
+            return Response(
+                {
+                    "status": "success",
+                    "inactive": True,
+                    "user": UserSerializer(user, many=False).data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         # Generate tokens using SimpleJWT
         refresh = RefreshToken.for_user(user)
         access_token = str(refresh.access_token)

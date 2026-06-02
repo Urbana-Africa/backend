@@ -22,7 +22,7 @@ def send_designer_welcome_email(user: User):
         threading.Thread(
             target=resend_sendmail,
             args=("Welcome to Urbana Africa", [user.email], message),
-            kwargs={"from_email": "hello@urbanaafrica.com", "from_name": "Michael Lan, Founder of Urbana Africa"},
+            kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Michael Lan, Founder of Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Designer welcome failed: {e}")
@@ -37,7 +37,7 @@ def send_designer_product_upload_reminder(user: User):
         threading.Thread(
             target=resend_sendmail,
             args=("Upload your best products to Urbana", [user.email], message),
-            kwargs={"from_email": "designers@urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
+            kwargs={"from_email": "designers@accounts.urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Designer upload reminder failed: {e}")
@@ -52,7 +52,7 @@ def send_designer_storefront_reminder(user: User):
         threading.Thread(
             target=resend_sendmail,
             args=("Your Urbana storefront is waiting", [user.email], message),
-            kwargs={"from_email": "designers@urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
+            kwargs={"from_email": "designers@accounts.urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Designer storefront reminder failed: {e}")
@@ -67,7 +67,7 @@ def send_designer_storefront_live(user: User):
         threading.Thread(
             target=resend_sendmail,
             args=("Your Urbana storefront is live", [user.email], message),
-            kwargs={"from_email": "designers@urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
+            kwargs={"from_email": "designers@accounts.urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Designer storefront live failed: {e}")
@@ -92,7 +92,7 @@ def send_designer_new_order(order_item: OrderItem):
         threading.Thread(
             target=resend_sendmail,
             args=("You have a new Urbana order", [designer.email], message),
-            kwargs={"from_email": "designers@urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
+            kwargs={"from_email": "designers@accounts.urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Designer new order failed: {e}")
@@ -115,7 +115,7 @@ def send_designer_order_shipped(order_item: OrderItem):
         threading.Thread(
             target=resend_sendmail,
             args=("Your Urbana order has been marked as shipped", [designer.email], message),
-            kwargs={"from_email": "designers@urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
+            kwargs={"from_email": "designers@accounts.urbanaafrica.com", "from_name": "Zuri from Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Designer order shipped failed: {e}")
@@ -133,7 +133,7 @@ def send_customer_welcome_email(user: User):
         threading.Thread(
             target=resend_sendmail,
             args=("Welcome to Urbana Africa", [user.email], message),
-            kwargs={"from_email": "hello@urbanaafrica.com", "from_name": "Urbana Africa"},
+            kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Customer welcome failed: {e}")
@@ -147,7 +147,7 @@ def send_customer_browse_reminder(user: User):
         threading.Thread(
             target=resend_sendmail,
             args=("Discover African fashion differently", [user.email], message),
-            kwargs={"from_email": "hello@urbanaafrica.com", "from_name": "Urbana Africa"},
+            kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Customer browse reminder failed: {e}")
@@ -174,7 +174,7 @@ def send_customer_order_confirmed(order_item: OrderItem):
         threading.Thread(
             target=resend_sendmail,
             args=("Your Urbana order is confirmed", [customer.user.email], message),
-            kwargs={"from_email": "support@urbanaafrica.com", "from_name": "Urbana Africa Support"},
+            kwargs={"from_email": "support@accounts.urbanaafrica.com", "from_name": "Urbana Africa Support"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Customer order confirmed failed: {e}")
@@ -199,7 +199,7 @@ def send_customer_order_shipped(order_item: OrderItem):
         threading.Thread(
             target=resend_sendmail,
             args=("Your Urbana order is on its way", [customer.user.email], message),
-            kwargs={"from_email": "support@urbanaafrica.com", "from_name": "Urbana Africa Support"},
+            kwargs={"from_email": "support@accounts.urbanaafrica.com", "from_name": "Urbana Africa Support"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Customer order shipped failed: {e}")
@@ -221,7 +221,7 @@ def send_customer_order_delivered(order_item: OrderItem):
         threading.Thread(
             target=resend_sendmail,
             args=("Your Urbana order has arrived", [customer.user.email], message),
-            kwargs={"from_email": "support@urbanaafrica.com", "from_name": "Urbana Africa Support"},
+            kwargs={"from_email": "support@accounts.urbanaafrica.com", "from_name": "Urbana Africa Support"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Customer order delivered failed: {e}")
@@ -243,7 +243,7 @@ def send_customer_review_request(order_item: OrderItem):
         threading.Thread(
             target=resend_sendmail,
             args=("How did your Urbana piece fit?", [customer.user.email], message),
-            kwargs={"from_email": "hello@urbanaafrica.com", "from_name": "Urbana Africa"},
+            kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Africa"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Customer review request failed: {e}")

@@ -37,7 +37,7 @@
             <h1>Hello, {{ designer.brand_name|default:designer.user.first_name }}</h1>
             
             {% if designer.status == 'approved' %}
-                <p>We are delighted to welcome you to the <strong>Global Urbana Marketplace</strong>. Your brand has been curated and approved by our council.</p>
+                <p>We are delighted to welcome you to the <strong>Global Urbana Marketplace</strong>. Your brand has been curated and approved by our curation team.</p>
                 <p>You can now access your studio dashboard to manage orders, collections, and treasury.</p>
                 <a href="https://designer.urbanaafrica.com" class="button">Access Studio Dashboard</a>
             {% elif designer.status == 'rejected' %}
@@ -53,13 +53,13 @@
                 <p style="margin-top: 20px;">You are welcome to update your profile and lookbooks for re-consideration.</p>
                 <a href="https://designer.urbanaafrica.com/onboard" class="button">Update Profile</a>
             {% elif designer.status == 'blocked' %}
-                <p>Access to your Urbana Studio account has been restricted by our compliance council. If you believe this is a mistake, please reach out to our support team.</p>
+                <p>Access to your Urbana Studio account has been restricted by our compliance team. If you believe this is a mistake, please reach out to our support team.</p>
             {% else %}
                 <p>Your profile status has been updated to <strong>{{ designer.status }}</strong>. Our team is currently reviewing your latest updates.</p>
             {% endif %}
         </div>
         <div class="footer">
-            &copy; 2026 Urbana Council. All rights reserved.<br>
+            &copy; 2026 Urbana Africa. All rights reserved.<br>
             Curation for the Modern African Artisan.
         </div>
     </div>

@@ -148,6 +148,7 @@ class Product(BaseModel):
     discount = models.DecimalField(max_digits=5, decimal_places=2, blank=True, default=0, help_text="Discount in %")
     currency = models.ForeignKey(Currency, on_delete=models.SET_NULL, null=True)
     category = models.ForeignKey(Category, related_name='products', on_delete=models.SET_NULL, null=True)
+    categories = models.ManyToManyField(Category, blank=True, related_name='products_m2m')
     subcategory = models.ForeignKey(Category, related_name='sub_products', on_delete=models.SET_NULL, null=True, blank=True)
     brand = models.ForeignKey(Brand, on_delete=models.SET_NULL, null=True, blank=True)
     material = models.CharField(max_length=100, blank=True, null=True)

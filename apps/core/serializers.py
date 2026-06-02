@@ -92,6 +92,9 @@ class ProductSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False,
     )
+    # Allow custom values beyond model choices for "Other" selections
+    print_type = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    occasion = serializers.CharField(max_length=20, required=False, allow_blank=True)
 
     class Meta:
         model = Product
@@ -104,6 +107,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "currency",
             "currency_code",
             "category",
+            "categories",
             "subcategory",
             "material",
             "colors",
@@ -183,12 +187,19 @@ class ProductSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         request = self.context.get("request")
         sizes = validated_data.pop("sizes", None)
+        categories = validated_data.pop("categories", None)
         fit_me_image = validated_data.pop("fit_me_image", None)
         colors_data = validated_data.pop("colors_input", None)
         product = Product.objects.create(**validated_data)
 
         if sizes:
             product.sizes.set(sizes)
+
+        if categories:
+            product.categories.set(categories)
+            if not product.category and categories:
+                product.category = categories[0]
+                product.save(update_fields=["category"])
 
         self._handle_colors(product, colors_data)
 
@@ -218,6 +229,7 @@ class ProductSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         request = self.context.get("request")
         sizes = validated_data.pop("sizes", None)
+        categories = validated_data.pop("categories", None)
         fit_me_image = validated_data.pop("fit_me_image", None)
         colors_data = validated_data.pop("colors_input", None)
 
@@ -230,6 +242,12 @@ class ProductSerializer(serializers.ModelSerializer):
 
         if sizes is not None:
             instance.sizes.set(sizes)
+
+        if categories is not None:
+            instance.categories.set(categories)
+            if categories and not instance.category:
+                instance.category = categories[0]
+                instance.save(update_fields=["category"])
 
         self._handle_colors(instance, colors_data)
 
@@ -267,6 +285,7 @@ class ProductSerializer(serializers.ModelSerializer):
         except Designer.DoesNotExist:
             data['designer'] = None
         data['category'] = CategorySerializer(instance.category).data if instance.category else None
+        data['categories'] = CategorySerializer(instance.categories, many=True).data
         data['subcategory'] = CategorySerializer(instance.subcategory).data if instance.subcategory else None
         data['brand'] = BrandSerializer(instance.brand).data if instance.brand else None
         data['sizes'] = SizesSerializer(instance.sizes, many=True).data

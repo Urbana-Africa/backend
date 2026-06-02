@@ -1056,6 +1056,11 @@ def GoogleOneTapLogin(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Get user_type from request (customer or designer)
+        user_type = request.data.get("user_type", "customer")
+        if user_type not in ["customer", "designer"]:
+            user_type = "customer"
+
         # Get or create user
         user, created = User.objects.get_or_create(
             email=email,
@@ -1063,6 +1068,7 @@ def GoogleOneTapLogin(request):
                 "first_name": first_name,
                 "last_name": last_name,
                 "is_active": True,
+                "user_type": user_type,
             },
         )
 
@@ -1071,19 +1077,74 @@ def GoogleOneTapLogin(request):
             user.first_name = first_name
         if not user.last_name and last_name:
             user.last_name = last_name
+
+        # Ensure user_type is set (for existing users who may not have it)
+        if created:
+            user.user_type = user_type
+            # Generate username for new users
+            if not user.username:
+                while True:
+                    username = f'{first_name or ""}{last_name or ""}{round(random()*999999)}'.lower()
+                    try:
+                        User.objects.get(username=username)
+                    except ObjectDoesNotExist:
+                        user.username = username
+                        break
         user.save()
 
-        token = get_tokens_for_user(user)
+        # Create Customer or Designer profile if missing
+        if user.user_type == "customer":
+            Customer.objects.get_or_create(user=user)
+        elif user.user_type == "designer":
+            Designer.objects.get_or_create(user=user)
 
-        return Response(
+        # Send welcome email for new users
+        if created:
+            from apps.utils.notifications import send_customer_welcome_email, send_designer_welcome_email
+            if user.user_type == "customer":
+                send_customer_welcome_email(user)
+            elif user.user_type == "designer":
+                send_designer_welcome_email(user)
+
+        # Generate tokens using SimpleJWT
+        refresh = RefreshToken.for_user(user)
+        access_token = str(refresh.access_token)
+        refresh_token = str(refresh)
+
+        # Prepare response (no tokens in body → more secure)
+        response = Response(
             {
                 "status": "success",
-                "token": token,
                 "user": UserSerializer(user, many=False).data,
                 "is_new_user": created,
             },
             status=status.HTTP_200_OK,
         )
+
+        # Set secure HttpOnly cookies
+        response.set_cookie(
+            key=settings.SIMPLE_JWT["AUTH_COOKIE"],
+            value=access_token,
+            max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            path="/",
+            domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+        )
+
+        response.set_cookie(
+            key=settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+            value=refresh_token,
+            max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            path="/",
+            domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+        )
+
+        return response
 
     except ValueError as e:
         return Response(

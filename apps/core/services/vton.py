@@ -70,12 +70,14 @@ class VtonProvider(ABC):
 # ──────────────────────────────────────────────────────────────────────────
 class GeminiVtonProvider(VtonProvider):
     key = "gemini"
-    label = "Google AI (Imagen + Gemini)"
-    description = "Imagen 3 for try-on, Gemini for chat/vision."
+    label = "Google Gemini 2.5 (Nano Banana)"
+    description = "Multi-modal Gemini image generation for garment-swap try-on."
     enabled = True
 
-    # Imagen 3 for guaranteed image generation (VTON)
-    DEFAULT_VTON_MODEL = "imagen-3.0-generate-002"
+    # Gemini 2.5 Flash Image ("Nano Banana") — multi-modal image
+    # generation/editing model. Accepts input images + text prompt and returns
+    # a generated image. This is the correct model for garment-swap VTON.
+    DEFAULT_VTON_MODEL = "gemini-2.5-flash-image-preview"
 
     # Gemini for multi-modal chat and vision understanding
     DEFAULT_CHAT_MODEL = "gemini-2.0-flash"
@@ -112,41 +114,41 @@ class GeminiVtonProvider(VtonProvider):
 
         client = genai.Client(api_key=gemini_key)
 
-        # ── VTON path: Imagen for image generation ──
-        if self.VTON_MODEL.startswith("imagen-"):
+        # Multi-modal generation: person photo + garment image + text prompt.
+        # Gemini 2.5 Flash Image returns a generated image as inline_data.
+        candidate_models = []
+        seen = set()
+        for m in (self.VTON_MODEL, self.DEFAULT_VTON_MODEL, "gemini-2.5-flash-image"):
+            if m and m not in seen:
+                seen.add(m)
+                candidate_models.append(m)
+
+        last_error = None
+        for model_name in candidate_models:
             try:
-                response = client.models.generate_images(
-                    model=self.VTON_MODEL,
-                    prompt=prompt,
-                    config=types.GenerateImagesConfig(
-                        number_of_images=1,
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Part.from_bytes(data=person_bytes, mime_type=person_mime),
+                        types.Part.from_bytes(data=garment_bytes, mime_type=garment_mime),
+                        prompt,
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_modalities=["IMAGE", "TEXT"],
                     ),
                 )
             except Exception as exc:
-                raise VtonError(f"Imagen generation failed: {exc}")
+                last_error = exc
+                continue
 
-            image_bytes = self._extract_imagen_image(response)
-            if not image_bytes:
-                raise VtonError("Imagen did not return an image.")
-            return image_bytes
-
-        # Fallback: Gemini multi-modal image editing
-        try:
-            response = client.models.generate_content(
-                model=self.VTON_MODEL,
-                contents=[
-                    types.Part.from_bytes(data=person_bytes, mime_type=person_mime),
-                    types.Part.from_bytes(data=garment_bytes, mime_type=garment_mime),
-                    prompt,
-                ],
+            image_bytes = self._extract_gemini_image(response)
+            if image_bytes:
+                return image_bytes
+            last_error = VtonError(
+                f"Gemini ({model_name}) did not return an image."
             )
-        except Exception as exc:
-            raise VtonError(f"Gemini generation failed: {exc}")
 
-        image_bytes = self._extract_gemini_image(response)
-        if not image_bytes:
-            raise VtonError("Gemini did not return an image.")
-        return image_bytes
+        raise VtonError(f"Gemini generation failed: {last_error}")
 
     def chat(self, messages: list[dict], images: list[tuple[bytes, str]] | None = None):
         """

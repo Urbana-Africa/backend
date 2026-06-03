@@ -495,7 +495,6 @@ class AdminDesignerViewSet(AdminBaseViewSet):
 
     search_fields = [
         "brand_name",
-        "specialty",
         "country",
         "user__first_name",
         "user__last_name",

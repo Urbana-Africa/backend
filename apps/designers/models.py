@@ -27,7 +27,10 @@ class Designer(BaseModel):
     bio = models.TextField(blank=True)
     story = models.TextField(blank=True)
     brand_name = models.CharField(max_length=200, default='', blank=True)
-    specialty = models.CharField(max_length=200, default='', blank=True)
+    specialty = models.JSONField(
+        default=list, blank=True,
+        help_text='List of fashion niches e.g. ["womenswear", "menswear", "accessories"]'
+    )
     country = models.TextField(blank=True)
     years_of_experience = models.IntegerField(blank=True, default=0)
 

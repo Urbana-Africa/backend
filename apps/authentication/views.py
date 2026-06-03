@@ -556,6 +556,7 @@ class VerifyEmail(APIView):
                 if check_password(verification_code,code.code):
                     data = {'status':'success'}
                     user.is_active = True
+                    user.is_verified = True
                     user.save()
                     code.delete()
                     data['data'] = UserSerializer(user,many=False).data
@@ -1068,6 +1069,7 @@ def GoogleOneTapLogin(request):
                 "first_name": first_name,
                 "last_name": last_name,
                 "is_active": True,
+                "is_verified": True,
                 "user_type": user_type,
             },
         )
@@ -1077,6 +1079,10 @@ def GoogleOneTapLogin(request):
             user.first_name = first_name
         if not user.last_name and last_name:
             user.last_name = last_name
+
+        # Mark as verified for Google OAuth (Google verifies emails)
+        if not user.is_verified:
+            user.is_verified = True
 
         # Ensure user_type is set (for existing users who may not have it)
         if created:

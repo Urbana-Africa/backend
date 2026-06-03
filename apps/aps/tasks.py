@@ -182,6 +182,7 @@ def send_delayed_designer_emails():
     designers_24h = Designer.objects.filter(
         created_at__lte=day_ago,
         created_at__gte=day_ago - timedelta(hours=2),
+        upload_reminder_sent_at__isnull=True,
     )
     for designer in designers_24h:
         published = Product.objects.filter(
@@ -190,6 +191,8 @@ def send_delayed_designer_emails():
         if not published:
             try:
                 send_designer_product_upload_reminder(designer.user)
+                designer.upload_reminder_sent_at = now
+                designer.save(update_fields=["upload_reminder_sent_at"])
             except Exception as e:
                 print(f"[SCHEDULED] Designer 24h reminder failed: {e}")
 
@@ -199,6 +202,7 @@ def send_delayed_designer_emails():
     designers_48h = Designer.objects.filter(
         created_at__lte=two_days_ago,
         created_at__gte=three_days_ago,
+        storefront_reminder_sent_at__isnull=True,
     )
     for designer in designers_48h:
         published = Product.objects.filter(
@@ -207,6 +211,8 @@ def send_delayed_designer_emails():
         if not published:
             try:
                 send_designer_storefront_reminder(designer.user)
+                designer.storefront_reminder_sent_at = now
+                designer.save(update_fields=["storefront_reminder_sent_at"])
             except Exception as e:
                 print(f"[SCHEDULED] Designer storefront reminder failed: {e}")
 

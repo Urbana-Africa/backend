@@ -566,6 +566,11 @@ class VerifyEmail(APIView):
                         Designer.objects.get_or_create(user=user)
                     else:
                         Customer.objects.get_or_create(user=user)
+
+                    # Send welcome email after successful verification
+                    from apps.utils.notifications import send_customer_welcome_email
+                    if user.user_type == 'customer':
+                        send_customer_welcome_email(user)
                 else:
                     data= {'status':'error','message':'invalid code'}
                 return Response({**data},status=status.HTTP_200_OK)
@@ -939,12 +944,6 @@ class Signup(APIView):
             
             serialized_data = UserSerializer(user)
             send_verification_email(user)
-
-            # Send welcome emails via notification service
-            from apps.utils.notifications import send_customer_welcome_email
-
-            if user_type == 'customer':
-                send_customer_welcome_email(user)
 
             data = {'status':'success','data':serialized_data.data}
             return Response(data,status=status.HTTP_202_ACCEPTED)

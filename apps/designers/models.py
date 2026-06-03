@@ -92,6 +92,11 @@ class Designer(BaseModel):
 
     status_updated_at = models.DateTimeField(auto_now=True)
 
+    # Email tracking — prevents duplicate scheduled reminder emails
+    welcome_email_sent_at = models.DateTimeField(null=True, blank=True)
+    upload_reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    storefront_reminder_sent_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     slug = models.SlugField(unique=True, blank=True, null=True)
 

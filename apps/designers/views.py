@@ -584,11 +584,14 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
             except Exception as e:
                 print(f"Error sending profile submission email: {str(e)}")
 
-            # Send welcome email only on first profile creation
-            try:
-                send_designer_welcome_email(request.user)
-            except Exception as e:
-                print(f"Error sending designer welcome email: {str(e)}")
+            # Send welcome email only on first profile creation (track to prevent duplicates)
+            if not profile.welcome_email_sent_at:
+                try:
+                    send_designer_welcome_email(request.user)
+                    profile.welcome_email_sent_at = timezone.now()
+                    profile.save(update_fields=["welcome_email_sent_at"])
+                except Exception as e:
+                    print(f"Error sending designer welcome email: {str(e)}")
 
         return Response({
             "status": "success",

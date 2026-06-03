@@ -98,10 +98,26 @@ class AdminProductSerializer(AdminBaseSerializer):
     media = MediaAssetSerializer(many=True, read_only=True)
     colors = ColorSerializer(many=True, read_only=True)
     sizes = SizesSerializer(many=True, read_only=True)
+    designer = serializers.SerializerMethodField()
 
     class Meta(AdminBaseSerializer.Meta):
         model = Product
         read_only_fields = ["slug", "sku", "created_at"]
+
+    def get_designer(self, obj):
+        try:
+            profile = obj.user.designer_profile
+            return {
+                "id": profile.id,
+                "brand_name": profile.brand_name,
+                "slug": profile.slug,
+                "profile_picture": profile.profile_picture.url if profile.profile_picture else None,
+                "status": profile.status,
+                "email": obj.user.email,
+                "full_name": f"{obj.user.first_name or ''} {obj.user.last_name or ''}".strip(),
+            }
+        except Exception:
+            return None
 
 
 class AdminCategorySerializer(AdminBaseSerializer):

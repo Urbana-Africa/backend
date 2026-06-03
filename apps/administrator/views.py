@@ -3,6 +3,7 @@ from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 import threading
@@ -12,6 +13,7 @@ from apps.customers.models import *
 from apps.designers.models import *
 from apps.utils.pagination import StandardPagination
 from .serializers import *
+from apps.core.serializers import ProductSerializer
 from apps.utils.email_sender import resend_sendmail
 
 
@@ -66,6 +68,7 @@ class AdminProductViewSet(AdminBaseViewSet):
     ).prefetch_related("sizes", "media")
 
     serializer_class = AdminProductSerializer
+    parser_classes = (JSONParser, FormParser, MultiPartParser)
 
     filterset_fields = {
         "is_published": ["exact"],
@@ -78,6 +81,49 @@ class AdminProductViewSet(AdminBaseViewSet):
     search_fields = ["name", "sku"]
     ordering_fields = ["created_at", "name"]
     ordering = ["-created_at"]
+
+    @action(detail=False, methods=["post"], url_path="create-for-designer")
+    def create_for_designer(self, request):
+        designer_id = request.data.get("designer_id")
+        if not designer_id:
+            return Response(
+                {"status": "error", "message": "designer_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            designer = Designer.objects.get(id=designer_id)
+        except Designer.DoesNotExist:
+            return Response(
+                {"status": "error", "message": "Designer not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Build product data (strip out files and designer_id)
+        data = {k: v for k, v in request.data.items() if k not in ["designer_id", "media", "media[]"]}
+        serializer = ProductSerializer(data=data)
+        if serializer.is_valid():
+            product = serializer.save(user=designer.user)
+            # Link to designer
+            DesignerProduct.objects.create(
+                designer=designer,
+                product=product,
+                stock=data.get("stock", 0),
+            )
+            # Handle uploaded images
+            images = request.FILES.getlist("media[]")
+            if images:
+                for img in images[:6]:
+                    asset = MediaAsset.objects.create(
+                        file=img,
+                        media_type=MediaAsset.MediaType.IMAGE,
+                    )
+                    product.media.add(asset)
+            return Response({
+                "status": "success",
+                "message": "Product created for designer",
+                "data": AdminProductSerializer(product).data
+            }, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["patch"], url_path="unpublish")
     def unpublish(self, request, pk=None):

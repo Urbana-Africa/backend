@@ -517,9 +517,17 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
             if profile_picture:
                 profile.profile_picture = profile_picture
                 profile.save(update_fields=['profile_picture'])
+            elif request.data.get('remove_profile_picture'):
+                profile.profile_picture.delete(save=False)
+                profile.profile_picture = None
+                profile.save(update_fields=['profile_picture'])
 
             if banner_image:
                 profile.banner_image = banner_image
+                profile.save(update_fields=['banner_image'])
+            elif request.data.get('remove_banner_image'):
+                profile.banner_image.delete(save=False)
+                profile.banner_image = None
                 profile.save(update_fields=['banner_image'])
             if lookbook_files:
                 for file in lookbook_files:

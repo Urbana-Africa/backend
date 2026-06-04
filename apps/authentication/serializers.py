@@ -16,6 +16,8 @@ class UserSerializer(serializers.ModelSerializer):
         extra_kwargs = {'password': {'write_only': True}}
 
     def get_role(self, obj):
+        if obj.is_superuser or obj.is_staff:
+            return 'admin'
         try:
             if obj.designer_profile:
                 return 'designer'

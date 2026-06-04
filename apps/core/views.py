@@ -6,7 +6,7 @@ from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
-from django.db.models import Avg, Prefetch, Sum
+from django.db.models import Avg, Prefetch, Sum, Count
 from google import genai
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -479,8 +479,12 @@ class ProductListView(APIView):
         # BASE QUERYSET
         # -----------------------
         queryset = (
-            Product.objects.filter(is_published=True,is_admin_published = True, is_active=True)
-            .exclude(media=False)
+            Product.objects.filter(is_published=True, is_admin_published=True, is_active=True)
+            .annotate(media_count=Count("media"))
+            .filter(media_count__gt=0)
+            .annotate(color_count=Count("colors", distinct=True))
+            .annotate(size_count=Count("sizes", distinct=True))
+            .filter(color_count__gt=0, size_count__gt=0)
             .select_related(
                 "user",
                 "currency",

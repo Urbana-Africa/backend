@@ -87,8 +87,7 @@ class ProductSerializer(serializers.ModelSerializer):
     fit_me_image = serializers.ImageField(required=False, allow_null=True)
     avg_rating = serializers.SerializerMethodField(read_only=True)
     currency_code = serializers.SerializerMethodField(read_only=True)
-    colors_input = serializers.ListField(
-        child=serializers.DictField(),
+    colors_input = serializers.JSONField(
         write_only=True,
         required=False,
     )
@@ -152,10 +151,10 @@ class ProductSerializer(serializers.ModelSerializer):
         # Require sizes and colors on create; on update they are optional if not sent
         is_create = self.instance is None
         if is_create:
-            # JSON: "sizes", FormData/MultiPart: "sizes[]"
-            sizes = raw.get("sizes") or raw.getlist("sizes[]")
+            # JSON: "sizes", FormData/MultiPart: "sizes" or legacy "sizes[]"
+            sizes = raw.getlist("sizes") or raw.getlist("sizes[]")
 
-            # JSON: "colors_input", FormData: keys like "colors_input[0][name]"
+            # JSON: "colors_input", FormData: JSON string under "colors_input"
             colors_input = raw.get("colors_input") or raw.get("colors")
             if not colors_input:
                 colors_input = any(

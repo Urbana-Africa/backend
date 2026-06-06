@@ -7,7 +7,7 @@ from apps.core.models import MediaAsset, Product, Color, Sizes
 from apps.core.serializers import ProductSerializer, ColorSerializer, SizesSerializer, MediaAssetSerializer
 from apps.customers.models import OrderItem, ReturnRequest
 from apps.designers.serializers import ReturnRequestSerializer
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from apps.utils.pagination import StandardPagination
 from .models import Designer, DesignerProduct, DesignerStory, StoryView, Notification
 from .serializers import (
@@ -908,5 +908,94 @@ class NotificationViewSet(viewsets.ModelViewSet):
             "status": "success",
             "count": count,
         })
+
+
+class DesignerSearchView(APIView):
+    """Global search for designer app across products, orders, returns, notifications and profile."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        q = request.GET.get("q", "").strip()
+        if not q:
+            return Response({"status": "success", "query": q, "results": []})
+
+        user = request.user
+        results = []
+
+        # Products
+        products = Product.objects.filter(user=user).filter(
+            Q(name__icontains=q) | Q(sku__icontains=q)
+        )[:5]
+        for p in products:
+            results.append({
+                "type": "product",
+                "id": p.id,
+                "title": p.name,
+                "subtitle": f"SKU: {p.sku or '-'}",
+                "status": "Published" if p.is_published else "Draft",
+                "detail_url": f"/products/edit/{p.id}",
+            })
+
+        # Orders (OrderItem)
+        order_items = OrderItem.objects.filter(
+            product__user=user
+        ).filter(
+            Q(order__order_id__icontains=q) | Q(product__name__icontains=q)
+        ).select_related("order", "product")[:5]
+        for item in order_items:
+            results.append({
+                "type": "order",
+                "id": item.id,
+                "title": f"Order #{item.order.order_id}",
+                "subtitle": item.product.name,
+                "status": item.status,
+                "detail_url": f"/orders/{item.id}",
+            })
+
+        # Returns
+        returns = ReturnRequest.objects.filter(
+            order_item__product__user=user
+        ).filter(
+            Q(return_id__icontains=q) | Q(order_item__order__order_id__icontains=q)
+        ).select_related("order_item__order")[:5]
+        for r in returns:
+            results.append({
+                "type": "return",
+                "id": r.return_id,
+                "title": f"Return #{r.return_id}",
+                "subtitle": f"Order #{r.order_item.order.order_id}",
+                "status": r.status,
+                "detail_url": f"/returns/{r.order_item.id}",
+            })
+
+        # Notifications
+        notifications = Notification.objects.filter(user=user).filter(
+            Q(title__icontains=q) | Q(message__icontains=q)
+        )[:5]
+        for n in notifications:
+            results.append({
+                "type": "notification",
+                "id": n.id,
+                "title": n.title,
+                "subtitle": n.message[:80] + "..." if len(n.message) > 80 else n.message,
+                "status": "Unread" if not n.is_read else "Read",
+                "detail_url": n.link or "/notifications",
+            })
+
+        # Profile
+        profiles = Designer.objects.filter(user=user).filter(
+            Q(brand_name__icontains=q) | Q(country__icontains=q)
+        )[:3]
+        for prof in profiles:
+            results.append({
+                "type": "profile",
+                "id": prof.id,
+                "title": prof.brand_name or "Designer Profile",
+                "subtitle": prof.country or "",
+                "status": "Verified" if prof.is_verified else "Pending",
+                "detail_url": "/profile",
+            })
+
+        return Response({"status": "success", "query": q, "results": results})
 
 

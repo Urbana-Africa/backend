@@ -1,5 +1,6 @@
 from rest_framework.routers import DefaultRouter
 
+from django.urls import path
 from .views import (
     # ViewSets
     DesignerStoryViewSet,
@@ -9,6 +10,7 @@ from .views import (
     DesignerDashboardViewSet,
     DesignerReturnRequestViewSet,
     NotificationViewSet,
+    DesignerSearchView,
 )
 
 router = DefaultRouter(trailing_slash=False)
@@ -25,4 +27,6 @@ router.register(r"returns", DesignerReturnRequestViewSet, basename="designer-ret
 router.register(r"notifications", NotificationViewSet, basename="designer-notifications")
 
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path('search', DesignerSearchView.as_view(), name='designer-search'),
+]

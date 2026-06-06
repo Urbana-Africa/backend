@@ -22,6 +22,7 @@ from .models import OrderTracking, CartItem, OrderItem
 from django.core.paginator import Paginator
 from rest_framework import status
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Q
 # ---------------- Checkout ----------------
 class CheckoutView(APIView):
     """Handles checkout: cart → order → payment → tracking"""
@@ -734,3 +735,76 @@ class DisputeView(APIView):
         ).order_by("-created_at")
         serializer = DisputeSerializer(disputes, many=True)
         return Response({"status": "success", "data": serializer.data})
+
+
+class CustomerSearchView(APIView):
+    """Global search for customer app across orders, returns, wishlist, addresses and profile."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        q = request.GET.get("q", "").strip()
+        if not q:
+            return Response({"status": "success", "query": q, "results": []})
+
+        customer = request.user.customer_profile
+        results = []
+
+        # Orders
+        orders = Order.objects.filter(customer=customer).filter(
+            Q(order_id__icontains=q) | Q(status__icontains=q)
+        )[:5]
+        for o in orders:
+            results.append({
+                "type": "order",
+                "id": o.id,
+                "title": f"Order #{o.order_id}",
+                "subtitle": f"{o.total_amount} — {o.status.title()}",
+                "status": o.status,
+                "detail_url": f"/orders/{o.order_id}",
+            })
+
+        # Returns
+        returns = ReturnRequest.objects.filter(
+            order_item__order__customer=customer
+        ).filter(
+            Q(return_id__icontains=q) | Q(status__icontains=q)
+        ).select_related("order_item__order")[:5]
+        for r in returns:
+            results.append({
+                "type": "return",
+                "id": r.return_id,
+                "title": f"Return #{r.return_id}",
+                "subtitle": f"Order #{r.order_item.order.order_id}",
+                "status": r.status,
+                "detail_url": f"/returns/{r.return_id}",
+            })
+
+        # Wishlist
+        wishlist = Wishlist.objects.filter(customer=customer).filter(
+            Q(product__name__icontains=q) | Q(product__sku__icontains=q)
+        ).select_related("product")[:5]
+        for w in wishlist:
+            results.append({
+                "type": "wishlist",
+                "id": w.id,
+                "title": w.product.name,
+                "subtitle": f"Added {w.added_at.strftime('%b %d, %Y')}",
+                "status": "Saved",
+                "detail_url": f"/wishlist",
+            })
+
+        # Addresses
+        addresses = Address.objects.filter(customer=customer).filter(
+            Q(line1__icontains=q) | Q(city__icontains=q) | Q(country__icontains=q) | Q(postal_code__icontains=q)
+        )[:3]
+        for a in addresses:
+            results.append({
+                "type": "address",
+                "id": a.id,
+                "title": a.line1,
+                "subtitle": f"{a.city}, {a.country}",
+                "status": "Default" if a.is_default else "",
+                "detail_url": "/profile",
+            })
+
+        return Response({"status": "success", "query": q, "results": results})

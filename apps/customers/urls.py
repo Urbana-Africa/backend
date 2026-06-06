@@ -2,7 +2,8 @@ from django.urls import path
 from .views import (
     CheckoutView, CustomerProfileView, AddressView, OrderDetailView, OrderTrackingView,
     ShippingMethodListView, WishlistView, CartView,
-    OrderListView, ReturnRequestView, ReturnResolveView, ReturnDetailView, DisputeView
+    OrderListView, ReturnRequestView, ReturnResolveView, ReturnDetailView, DisputeView,
+    CustomerSearchView
 )
 
 urlpatterns = [
@@ -19,4 +20,5 @@ urlpatterns = [
     path('shipping-methods', ShippingMethodListView.as_view(), name='shipping-methods'),
     path('orders/<str:order_id>/tracking', OrderTrackingView.as_view(), name='order-tracking'),
     path('checkout', CheckoutView.as_view(), name='checkout'),
+    path('search', CustomerSearchView.as_view(), name='customer-search'),
 ]

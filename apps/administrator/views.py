@@ -6,6 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
+from django.db.models import Q
 import threading
 from django.template.loader import render_to_string
 from apps.core.models import *
@@ -808,3 +809,129 @@ class AdminTicketViewSet(AdminBaseViewSet):
             {"status": "success", "message": "Status updated.", "data": SupportTicketSerializer(ticket).data},
             status=status.HTTP_200_OK,
         )
+
+
+class AdminGlobalSearchView(APIView):
+    """Global search across all admin-managed entities."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        q = request.GET.get("q", "").strip()
+        if not q:
+            return Response({"status": "success", "query": q, "results": []})
+
+        results = []
+
+        # Designers
+        designers = Designer.objects.filter(
+            Q(brand_name__icontains=q) | Q(country__icontains=q) | Q(user__email__icontains=q) | Q(user__username__icontains=q)
+        )[:5]
+        for d in designers:
+            results.append({
+                "type": "designer",
+                "id": d.id,
+                "title": d.brand_name or "Designer",
+                "subtitle": d.country or "",
+                "status": "Verified" if d.is_verified else "Pending",
+                "detail_url": f"/designers/{d.id}",
+            })
+
+        # Products
+        products = Product.objects.filter(
+            Q(name__icontains=q) | Q(sku__icontains=q)
+        )[:5]
+        for p in products:
+            results.append({
+                "type": "product",
+                "id": p.id,
+                "title": p.name,
+                "subtitle": f"SKU: {p.sku or '-'}",
+                "status": "Published" if p.is_published else "Draft",
+                "detail_url": f"/products/edit/{p.id}",
+            })
+
+        # Orders (OrderItem)
+        order_items = OrderItem.objects.filter(
+            Q(order__order_id__icontains=q) | Q(order__status__icontains=q) | Q(product__name__icontains=q)
+        ).select_related("order", "product")[:5]
+        for item in order_items:
+            results.append({
+                "type": "order",
+                "id": item.id,
+                "title": f"Order #{item.order.order_id}",
+                "subtitle": item.product.name,
+                "status": item.status,
+                "detail_url": f"/orders/{item.id}",
+            })
+
+        # Customers
+        customers = Customer.objects.select_related("user").filter(
+            Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(user__first_name__icontains=q) | Q(user__last_name__icontains=q) | Q(phone__icontains=q)
+        )[:5]
+        for c in customers:
+            results.append({
+                "type": "customer",
+                "id": c.id,
+                "title": c.user.get_full_name() or c.user.username,
+                "subtitle": c.user.email,
+                "status": "Active",
+                "detail_url": "/customers",
+            })
+
+        # Returns
+        returns = ReturnRequest.objects.filter(
+            Q(return_id__icontains=q) | Q(status__icontains=q)
+        ).select_related("order_item__order")[:5]
+        for r in returns:
+            results.append({
+                "type": "return",
+                "id": r.return_id,
+                "title": f"Return #{r.return_id}",
+                "subtitle": f"Order #{r.order_item.order.order_id}",
+                "status": r.status,
+                "detail_url": f"/returns/{r.order_item.id}",
+            })
+
+        # Disputes
+        disputes = Dispute.objects.filter(
+            Q(id__icontains=q) | Q(return_request__return_id__icontains=q)
+        ).select_related("return_request")[:5]
+        for d in disputes:
+            results.append({
+                "type": "dispute",
+                "id": d.id,
+                "title": f"Dispute #{d.id}",
+                "subtitle": f"Return #{d.return_request.return_id}",
+                "status": d.return_request.status,
+                "detail_url": "/disputes",
+            })
+
+        # Tickets
+        tickets = SupportTicket.objects.filter(
+            Q(subject__icontains=q) | Q(reference__icontains=q) | Q(description__icontains=q)
+        )[:5]
+        for t in tickets:
+            results.append({
+                "type": "ticket",
+                "id": t.id,
+                "title": t.subject,
+                "subtitle": f"Ref: {t.reference}",
+                "status": t.status,
+                "detail_url": f"/tickets/{t.id}",
+            })
+
+        # Smart Collections
+        collections = SmartCollection.objects.filter(
+            Q(name__icontains=q) | Q(description__icontains=q)
+        )[:5]
+        for c in collections:
+            results.append({
+                "type": "collection",
+                "id": c.id,
+                "title": c.name,
+                "subtitle": c.collection_type,
+                "status": "Active" if c.is_active else "Inactive",
+                "detail_url": "/smart-collections",
+            })
+
+        return Response({"status": "success", "query": q, "results": results})

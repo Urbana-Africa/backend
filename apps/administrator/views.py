@@ -922,13 +922,13 @@ class AdminGlobalSearchView(APIView):
 
         # Smart Collections
         collections = SmartCollection.objects.filter(
-            Q(name__icontains=q) | Q(description__icontains=q)
+            Q(title__icontains=q) | Q(description__icontains=q)
         )[:5]
         for c in collections:
             results.append({
                 "type": "collection",
                 "id": c.id,
-                "title": c.name,
+                "title": c.title,
                 "subtitle": c.collection_type,
                 "status": "Active" if c.is_active else "Inactive",
                 "detail_url": "/smart-collections",

@@ -66,7 +66,12 @@ class CheckoutView(APIView):
             # shipping_method is passed down or defaulted to "Designer Fulfilled"
             shipping_method = request.data.get('shipping_method', 'Designer Fulfilled')
 
-            # 3️⃣ Calculate totals
+            # 3️⃣ Calculate totals with dynamic pricing & trade bloc surcharges
+            from decimal import Decimal
+            from apps.pay.services.pricing import calculate_product_price_breakdown
+
+            buyer_country = shipping_address.country or 'US'
+
             cart_items = CartItem.objects.filter(customer=customer).select_related('product')
             if not cart_items.exists():
                 return Response({"status":"error", "message":"Cart is empty."}, status=400)
@@ -74,8 +79,35 @@ class CheckoutView(APIView):
                 if item.product.stock < item.quantity:
                     return Response({"status":"error", "message":f'{item.product.name} is out of stock'}, status=400)
 
-            subtotal = sum([item.subtotal() for item in cart_items])
-            total_amount = subtotal # logistics handled by designer
+            total_amount = Decimal("0.00")
+            sub_total = Decimal("0.00")
+            shipping_amount = Decimal("0.00")
+
+            item_breakdowns = []
+            for item in cart_items:
+                # Calculate the dynamic pricing breakdown in USD
+                breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                qty = Decimal(str(item.quantity))
+
+                item_base = breakdown['base_price'] * qty
+                item_shipping = breakdown['shipping_cost'] * qty
+                item_duties = breakdown['duties_buffer'] * qty
+                item_margin = breakdown['platform_margin'] * qty
+                item_total = breakdown['total_price'] * qty
+
+                total_amount += item_total
+                sub_total += item_base + item_margin + item_duties
+                shipping_amount += item_shipping
+
+                item_breakdowns.append({
+                    'item': item,
+                    'breakdown': breakdown,
+                    'item_base': item_base,
+                    'item_shipping': item_shipping,
+                    'item_duties': item_duties,
+                    'item_margin': item_margin,
+                    'item_total': item_total
+                })
 
             # 4️⃣ Create Payment record
             invoice = Invoice.objects.create(
@@ -91,21 +123,36 @@ class CheckoutView(APIView):
                 shipping_address=shipping_address,
                 shipping_method=shipping_method,
                 total_amount=total_amount,
+                sub_total=sub_total,
+                shipping_amount=shipping_amount,
                 status='pending'
             )
 
             # 6️⃣ Order Items
-            for item in cart_items:
+            for entry in item_breakdowns:
+                item = entry['item']
+                breakdown = entry['breakdown']
+                
+                # Persist details in item properties
+                item_properties = {
+                    **(item.properties or {}),
+                    'base_price': float(breakdown['base_price']),
+                    'shipping_cost': float(breakdown['shipping_cost']),
+                    'duties_buffer': float(breakdown['duties_buffer']),
+                    'platform_margin': float(breakdown['platform_margin']),
+                    'total_price': float(breakdown['total_price']),
+                }
+                
                 order_item = OrderItem.objects.create(
                     order=order,
                     tracking_number = f"URBITR-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random() * 99999999990).__round__()}",
-                    properties = item.properties,
+                    properties = item_properties,
                     product=item.product,
                     color=item.color,
                     size=item.size,
                     quantity=item.quantity,
-                    sub_total=item.product.price*item.quantity,
-                    amount=item.product.price
+                    sub_total=entry['item_total'],
+                    amount=breakdown['total_price']
                 )
                 item.product.stock = item.product.stock - item.quantity if item.product.stock > 0 else 0
                 item.product.save()

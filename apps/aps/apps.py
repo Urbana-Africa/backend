@@ -11,7 +11,7 @@ class ApsConfig(AppConfig):
         import threading
 
         # Skip commands that shouldn’t start the scheduler
-        if any(cmd in sys.argv for cmd in ["migrate", "makemigrations","collectstatic", "shell"]):
+        if any(cmd in sys.argv for cmd in ["migrate", "makemigrations", "collectstatic", "shell", "test"]):
             return
         logger.info("Starting APScheduler (DjangoJobStore)")
         threading.Thread(target=self._start_scheduler, daemon=True).start()

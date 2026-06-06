@@ -95,3 +95,118 @@ def create_or_fetch_tracking(carrier: str, tracking_number: str) -> dict:
             "raw": None,
         }
 
+
+from shippo.models.components import ShipmentCreateRequest, AddressCreateRequest, ParcelCreateRequest
+
+def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, dimensions: dict = None) -> dict:
+    """
+    Creates a shipment object on Shippo to fetch rates.
+    If Shippo API fails (e.g. 401 unauthorized, invalid key, or network issue),
+    it falls back to a zone-based shipping cost calculation.
+    """
+    # 1. Clean addresses
+    from_country = (from_address.get('country') or 'GH').upper().strip()
+    to_country = (to_address.get('country') or 'US').upper().strip()
+    
+    # Defaults for dimensions if not provided
+    dims = dimensions or {'length': '30.00', 'width': '20.00', 'height': '10.00'}
+    
+    # 2. Try Shippo API
+    try:
+        addr_from = AddressCreateRequest(
+            name=from_address.get('name') or 'Urbana Designer',
+            street1=from_address.get('street1') or '1 Fort Road',
+            city=from_address.get('city') or 'Accra',
+            state=from_address.get('state') or '',
+            zip=from_address.get('postal_code') or '',
+            country=from_country
+        )
+        
+        addr_to = AddressCreateRequest(
+            name=to_address.get('name') or 'Urbana Customer',
+            street1=to_address.get('street1') or 'Main Street',
+            city=to_address.get('city') or 'New York',
+            state=to_address.get('state') or '',
+            zip=to_address.get('postal_code') or '',
+            country=to_country
+        )
+        
+        parcel = ParcelCreateRequest(
+            length=str(dims.get('length', '30.00')),
+            width=str(dims.get('width', '20.00')),
+            height=str(dims.get('height', '10.00')),
+            distance_unit='cm',
+            weight=f"{float(weight_kg):.2f}",
+            mass_unit='kg'
+        )
+        
+        req = ShipmentCreateRequest(
+            address_from=addr_from,
+            address_to=addr_to,
+            parcels=[parcel]
+        )
+        
+        shipment = shippo_client.shipments.create(req)
+        
+        # Convert Shippo models to list of dict rates
+        if shipment.rates:
+            rates_list = []
+            for rate in shipment.rates:
+                rates_list.append({
+                    "amount": float(rate.amount),
+                    "currency": rate.currency,
+                    "provider": rate.provider,
+                    "service_level": rate.servicelevel.name if rate.servicelevel else 'Standard',
+                    "estimated_days": rate.estimated_days or 5,
+                    "source": "shippo"
+                })
+            return {
+                "status": "success",
+                "rates": rates_list
+            }
+    except Exception as e:
+        # Log error in console/logs
+        print(f"[Shippo API Warning] Dynamic rates lookup failed, using fallback logic. Details: {e}")
+        
+    # 3. Fallback Pricing Matrix (Zone-Based)
+    # Determine the shipping zone
+    if from_country == to_country:
+        # Domestic shipping
+        base_fee = 5.00
+        per_kg_fee = 1.00
+        service_name = "Domestic Standard"
+        provider = "Local Carrier"
+        estimated_days = 2
+    elif from_country in ('NG', 'GH', 'KE', 'ZA') and to_country in ('NG', 'GH', 'KE', 'ZA'):
+        # Intra-African cross-border
+        base_fee = 15.00
+        per_kg_fee = 3.00
+        service_name = "Intra-Africa Express"
+        provider = "DHL Africa"
+        estimated_days = 4
+    else:
+        # International (US, EU, Rest of world)
+        base_fee = 30.00
+        per_kg_fee = 8.00
+        service_name = "International Priority"
+        provider = "DHL Express"
+        estimated_days = 5
+        
+    total_fee = base_fee + (per_kg_fee * float(weight_kg))
+    
+    # Return a mocked standard rate structure matching Shippo format
+    fallback_rates = [{
+        "amount": round(total_fee, 2),
+        "currency": "USD",
+        "provider": provider,
+        "service_level": service_name,
+        "estimated_days": estimated_days,
+        "source": "fallback"
+    }]
+    
+    return {
+        "status": "success",
+        "rates": fallback_rates
+    }
+
+

@@ -289,6 +289,27 @@ class ProductSerializer(serializers.ModelSerializer):
         data['brand'] = BrandSerializer(instance.brand).data if instance.brand else None
         data['sizes'] = SizesSerializer(instance.sizes, many=True).data
         data['colors'] = ColorSerializer(instance.colors, many=True).data
+
+        # Dynamic geo-IP pricing calculation
+        request = self.context.get('request')
+        if request:
+            try:
+                x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+                if x_forwarded_for:
+                    ip = x_forwarded_for.split(',')[0].strip()
+                else:
+                    ip = request.META.get('REMOTE_ADDR')
+
+                from apps.pay.services.pricing import get_country_from_ip, calculate_product_price_breakdown
+                buyer_country = get_country_from_ip(ip)
+                breakdown = calculate_product_price_breakdown(instance, buyer_country)
+                
+                data['price'] = float(breakdown['total_price'])
+                data['currency_code'] = "USD"  # Keep stable base USD so frontend convert() works seamlessly
+            except Exception as e:
+                # Log error and fall back gracefully to original model price
+                print(f"[Dynamic Pricing Warning] Failed to compute dynamic price for product {instance.id}: {str(e)}")
+
         return data
     
 

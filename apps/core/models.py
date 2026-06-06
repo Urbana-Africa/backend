@@ -251,6 +251,30 @@ class Product(BaseModel):
             "Minimum 512px on short edge."
         ),
     )
+    weight_kg = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=0.50,
+        help_text="Product weight in kilograms (kg)"
+    )
+    length_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=30.00,
+        help_text="Package length in centimeters (cm)"
+    )
+    width_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=20.00,
+        help_text="Package width in centimeters (cm)"
+    )
+    height_cm = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=10.00,
+        help_text="Package height in centimeters (cm)"
+    )
 
     def save(self, *args, **kwargs):
         if not self.slug:

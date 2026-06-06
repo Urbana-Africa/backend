@@ -49,14 +49,14 @@ class SeedSalesViewTest(TransactionTestCase):
     def test_seed_sales_endpoint_only_in_debug(self):
         """Test that seed sales endpoint only works in DEBUG mode"""
         with patch.object(settings, 'DEBUG', False):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
             self.assertIn("Only available in DEBUG mode", response.json()['error'])
     
     def test_seed_sales_creates_unique_order_ids(self):
         """Test that seeded orders have unique order IDs"""
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # Check that all orders have unique order_ids
@@ -66,7 +66,7 @@ class SeedSalesViewTest(TransactionTestCase):
     def test_seed_sales_creates_unique_tracking_numbers(self):
         """Test that seeded order items have unique tracking numbers"""
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # Check that all order items have unique tracking_numbers
@@ -76,7 +76,7 @@ class SeedSalesViewTest(TransactionTestCase):
     def test_seed_sales_creates_correct_number_of_records(self):
         """Test that seeding creates the expected number of records"""
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # Should create 5 successful + 2 returned = 7 orders per designer
@@ -98,7 +98,7 @@ class SeedSalesViewTest(TransactionTestCase):
     def test_seed_sales_creates_seed_customer(self):
         """Test that seed customer is created correctly"""
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             seed_user = User.objects.get(username="seed_customer")
@@ -114,7 +114,7 @@ class SeedSalesViewTest(TransactionTestCase):
     def test_seed_sales_creates_successful_and_returned_orders(self):
         """Test that both successful and returned orders are created"""
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # Check successful orders
@@ -147,7 +147,7 @@ class SeedSalesViewTest(TransactionTestCase):
     def test_seed_sales_creates_escrows_with_correct_status(self):
         """Test that escrows are created with correct status"""
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # All escrows should start as 'held' and then be processed
@@ -160,12 +160,12 @@ class SeedSalesViewTest(TransactionTestCase):
                 expected_commission = escrow.amount * decimal.Decimal("0.10")
                 self.assertEqual(escrow.platform_commission, expected_commission)
     
-    @patch('apps.pay.services.escrow.release_escrow')
-    @patch('apps.pay.services.escrow.refund_escrow_to_customer')
+    @patch('apps.pay.views.release_escrow')
+    @patch('apps.pay.views.refund_escrow_to_customer')
     def test_seed_sales_calls_escrow_services(self, mock_refund, mock_release):
         """Test that appropriate escrow services are called"""
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # Should call release_escrow 5 times (for successful orders)
@@ -188,7 +188,7 @@ class SeedSalesViewTest(TransactionTestCase):
         )
         
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # Should create a product for the new designer
@@ -199,14 +199,14 @@ class SeedSalesViewTest(TransactionTestCase):
             
             # Should create orders for the new designer too
             orders = Order.objects.filter(
-                orderitem__product__user=new_designer_user
+                items__product__user=new_designer_user
             )
             self.assertEqual(orders.count(), 7)
     
     def test_seed_sales_id_generation_formats(self):
         """Test that generated IDs follow expected formats"""
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # Check order ID format
@@ -224,21 +224,21 @@ class SeedSalesViewTest(TransactionTestCase):
                 self.assertIn("-", item.tracking_number)
 
 
-class SeedSalesIntegrationTest(TransactionTestCase):
+class SeedSalesIntegrationTest(SeedSalesViewTest):
     """Integration tests for seed sales functionality"""
     
     def test_multiple_seed_calls_dont_duplicate_ids(self):
         """Test that multiple calls to seed sales don't create duplicate IDs"""
         with patch.object(settings, 'DEBUG', True):
             # First call
-            response1 = self.client.get('/api/pay/seed-sales')
+            response1 = self.client.get('/pay/seed-sales')
             self.assertEqual(response1.status_code, status.HTTP_200_OK)
             
             initial_order_count = Order.objects.count()
             initial_item_count = OrderItem.objects.count()
             
             # Second call
-            response2 = self.client.get('/api/pay/seed-sales')
+            response2 = self.client.get('/pay/seed-sales')
             self.assertEqual(response2.status_code, status.HTTP_200_OK)
             
             # Should have created more records without conflicts
@@ -271,7 +271,7 @@ class SeedSalesIntegrationTest(TransactionTestCase):
             )
         
         with patch.object(settings, 'DEBUG', True):
-            response = self.client.get('/api/pay/seed-sales')
+            response = self.client.get('/pay/seed-sales')
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             
             # Should create orders for all designers

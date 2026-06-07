@@ -931,7 +931,7 @@ class DesignerSearchView(APIView):
                 "type": "product",
                 "id": p.id,
                 "title": p.name,
-                "subtitle": f"SKU: {p.sku or '-'}",
+                "subtitle": f"ID: {p.sku or '-'}",
                 "status": "Published" if p.is_published else "Draft",
                 "detail_url": f"/products/edit/{p.id}",
             })

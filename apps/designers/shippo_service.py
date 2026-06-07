@@ -16,6 +16,10 @@ from django.conf import settings
 # Initialize once (recommended; use api_key_header for current SDK)
 shippo_client = shippo.Shippo(api_key_header=settings.SHIPPO_API_KEY)
 
+# Safety buffer applied to shipping rates (15%) to prevent losses
+# on actual shipping costs being higher than quoted at checkout.
+SHIPPING_BUFFER_PERCENT = 0.15
+
 
 def create_or_fetch_tracking(carrier: str, tracking_number: str) -> dict:
     """
@@ -98,7 +102,7 @@ def create_or_fetch_tracking(carrier: str, tracking_number: str) -> dict:
 
 from shippo.models.components import ShipmentCreateRequest, AddressCreateRequest, ParcelCreateRequest
 
-def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, dimensions: dict = None) -> dict:
+def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, dimensions: dict = None, local_shipping_fee: float = None) -> dict:
     """
     Creates a shipment object on Shippo to fetch rates.
     If Shippo API fails (e.g. 401 unauthorized, invalid key, or network issue),
@@ -107,6 +111,20 @@ def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, d
     # 1. Clean addresses
     from_country = (from_address.get('country') or 'GH').upper().strip()
     to_country = (to_address.get('country') or 'US').upper().strip()
+    
+    # If domestic shipping and a custom local shipping fee is specified, use it immediately
+    if from_country == to_country and local_shipping_fee is not None and float(local_shipping_fee) > 0:
+        return {
+            "status": "success",
+            "rates": [{
+                "amount": float(local_shipping_fee),
+                "currency": "USD",
+                "provider": "Local Carrier",
+                "service_level": "Domestic Custom",
+                "estimated_days": 2,
+                "source": "designer_custom"
+            }]
+        }
     
     # Defaults for dimensions if not provided
     dims = dimensions or {'length': '30.00', 'width': '20.00', 'height': '10.00'}
@@ -160,6 +178,16 @@ def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, d
                     "estimated_days": rate.estimated_days or 5,
                     "source": "shippo"
                 })
+            
+            # Sort by amount DESCENDING — most expensive first
+            rates_list.sort(key=lambda r: r["amount"], reverse=True)
+            
+            # Apply safety buffer to the top (most expensive) rate
+            # This ensures we never lose money on shipping costs
+            top_rate = rates_list[0]
+            top_rate["amount"] = round(top_rate["amount"] * (1 + SHIPPING_BUFFER_PERCENT), 2)
+            top_rate["source"] = "shippo_buffered"
+            
             return {
                 "status": "success",
                 "rates": rates_list
@@ -194,14 +222,17 @@ def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, d
         
     total_fee = base_fee + (per_kg_fee * float(weight_kg))
     
+    # Apply the same safety buffer as Shippo rates
+    total_fee = round(total_fee * (1 + SHIPPING_BUFFER_PERCENT), 2)
+    
     # Return a mocked standard rate structure matching Shippo format
     fallback_rates = [{
-        "amount": round(total_fee, 2),
+        "amount": total_fee,
         "currency": "USD",
         "provider": provider,
         "service_level": service_name,
         "estimated_days": estimated_days,
-        "source": "fallback"
+        "source": "fallback_buffered"
     }]
     
     return {

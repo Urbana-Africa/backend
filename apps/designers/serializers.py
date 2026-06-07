@@ -250,6 +250,7 @@ class DesignerSerializer(serializers.ModelSerializer):
             'price_range',
             'production_type',
             'ships_internationally',
+            'local_shipping_fee',
         ]
         read_only_fields = [
             'id',

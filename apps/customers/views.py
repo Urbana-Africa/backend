@@ -23,6 +23,77 @@ from django.core.paginator import Paginator
 from rest_framework import status
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q
+# ---------------- Checkout Preview ----------------
+class CheckoutPreviewView(APIView):
+    """Calculates checkout preview totals (subtotal, shipping cost, duties/taxes, total) based on country/address."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            customer = request.user.customer_profile
+            shipping_address_id = request.data.get('shipping_address_id')
+            country = request.data.get('country')
+
+            buyer_country = 'US'
+            if shipping_address_id:
+                try:
+                    shipping_address = customer.addresses.get(id=shipping_address_id)
+                    buyer_country = shipping_address.country or 'US'
+                except Address.DoesNotExist:
+                    pass
+            elif country:
+                buyer_country = country
+
+            cart_items = CartItem.objects.filter(customer=customer).select_related('product')
+            if not cart_items.exists():
+                return Response({
+                    "status": "success",
+                    "data": {
+                        "sub_total": 0.0,
+                        "shipping_amount": 0.0,
+                        "duties_amount": 0.0,
+                        "total_amount": 0.0,
+                    }
+                })
+
+            from decimal import Decimal
+            from apps.pay.services.pricing import calculate_product_price_breakdown
+
+            total_amount = Decimal("0.00")
+            sub_total = Decimal("0.00")
+            shipping_amount = Decimal("0.00")
+            duties_amount = Decimal("0.00")
+
+            for item in cart_items:
+                breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                qty = Decimal(str(item.quantity))
+
+                item_base = breakdown['base_price'] * qty
+                item_shipping = breakdown['shipping_cost'] * qty
+                item_duties = breakdown['duties_buffer'] * qty
+                item_margin = breakdown['platform_margin'] * qty
+                item_total = breakdown['total_price'] * qty
+
+                total_amount += item_total
+                sub_total += item_base + item_margin + item_duties
+                shipping_amount += item_shipping
+                duties_amount += item_duties
+
+            return Response({
+                "status": "success",
+                "data": {
+                    "sub_total": float(sub_total),
+                    "shipping_amount": float(shipping_amount),
+                    "duties_amount": float(duties_amount),
+                    "total_amount": float(total_amount),
+                    "buyer_country": buyer_country,
+                }
+            })
+        except Exception as e:
+            print(e)
+            return Response({'status': 'error', 'message': 'An error occurred calculating preview.'}, status=400)
+
+
 # ---------------- Checkout ----------------
 class CheckoutView(APIView):
     """Handles checkout: cart → order → payment → tracking"""

@@ -280,7 +280,7 @@ class Product(BaseModel):
         if not self.slug:
             self.slug = slugify(self.name + str(round(random()*9999999)))
         if not self.sku:
-            self.sku = f"PROD-{uuid.uuid4().hex[:8].upper()}"
+            self.sku = f"U-{uuid.uuid4().hex[:8].upper()}"
         super().save(*args, **kwargs)
 
     def __str__(self):

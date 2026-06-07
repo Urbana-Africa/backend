@@ -487,6 +487,85 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
             "data": OrderItemSerializer(order_item).data
         })
 
+    @action(detail=True, methods=["post"])
+    def generate_shipping_label(self, request, item_id=None):
+        order_item = self.get_object()
+        
+        # Check if shipping label has already been generated
+        props = order_item.properties or {}
+        if "shipping_label_url" in props:
+            return Response({
+                "status": "success",
+                "message": "Shipping label already generated.",
+                "data": {
+                    "label_url": props["shipping_label_url"],
+                    "tracking_number": order_item.tracking_number,
+                    "carrier": props.get("carrier")
+                }
+            })
+
+        from apps.designers.shippo_service import generate_label_for_order_item
+        res = generate_label_for_order_item(order_item)
+        
+        if res.get("status") == "success":
+            # Save real tracking number
+            order_item.tracking_number = res["tracking_number"]
+            
+            # Save label url and other metadata in properties
+            props["shipping_label_url"] = res["label_url"]
+            props["carrier"] = res["carrier"]
+            props["shippo_transaction_id"] = res["shippo_transaction_id"]
+            order_item.properties = props
+            
+            # Transition order status to shipped
+            order_item.status = "shipped"
+            order_item.designer_status = "shipped"
+            order_item.save()
+            
+            # Create or update Shipment tracking record in database
+            try:
+                from apps.designers.models import Shipment
+                Shipment.objects.update_or_create(
+                    order_item=order_item,
+                    defaults={
+                        "carrier": res["carrier"],
+                        "tracking_number": res["tracking_number"],
+                        "tracking_status": "in_transit",
+                        "tracking_data": res
+                    }
+                )
+            except Exception as e:
+                print(f"Error saving Shipment model during label gen: {e}")
+                
+            # Trigger shipped notifications
+            from apps.utils.notifications import (
+                send_designer_order_shipped,
+                send_customer_order_shipped,
+            )
+            try:
+                send_designer_order_shipped(order_item)
+            except Exception as e:
+                print(f"[EMAIL] Designer shipped failed: {e}")
+            try:
+                send_customer_order_shipped(order_item)
+            except Exception as e:
+                print(f"[EMAIL] Customer shipped failed: {e}")
+                
+            return Response({
+                "status": "success",
+                "message": "Shipping label generated successfully.",
+                "data": {
+                    "label_url": res["label_url"],
+                    "tracking_number": res["tracking_number"],
+                    "carrier": res["carrier"]
+                }
+            })
+        else:
+            return Response({
+                "status": "error",
+                "message": res.get("error", "Failed to generate shipping label.")
+            }, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 

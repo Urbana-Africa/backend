@@ -2,7 +2,7 @@ from django.urls import path
 
 from apps.pay.confirm import FlutterwaveConfirmView, PaystackConfirmView, StripeConfirmView
 from apps.pay.initialize import InitializeFlutterwavePayment, InitializePaystackPayment, InitializeStripePayment
-from apps.pay.webhooks import FlutterwaveWebhookView, PaystackWebhookView, StripeWebhookView
+from apps.pay.webhooks import FlutterwaveWebhookView, PaystackWebhookView, StripeWebhookView, ShippoWebhookView
 from . import views as payviews
 from rest_framework.routers import DefaultRouter
 from .views import (
@@ -52,6 +52,7 @@ urlpatterns = [
     path("webhook/flutterwave", FlutterwaveWebhookView.as_view()),
     path("webhook/paystack", PaystackWebhookView.as_view()),
     path("webhooks/stripe/", StripeWebhookView.as_view(), name="stripe-webhook"),
+    path("webhook/shippo", ShippoWebhookView.as_view(), name="shippo-webhook"),
 
     # ─── Subscribe / cancel ───────────────────────────────────────────────────
     path("subscribe", payviews.Subscribe.as_view(), name="subscribe"),

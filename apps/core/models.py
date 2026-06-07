@@ -324,9 +324,19 @@ class ShippingMethod(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2)
     estimated_days = models.PositiveIntegerField(help_text="Estimated delivery in days")
     is_active = models.BooleanField(default=True)
+    applicable_countries = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of ISO country codes this method applies to. Empty = global."
+    )
 
     def __str__(self):
         return f"{self.name} (${self.price})"
+
+    def is_available_for_country(self, country_code):
+        if not self.applicable_countries:
+            return True
+        return country_code in self.applicable_countries
 
 
 

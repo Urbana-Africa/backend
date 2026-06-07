@@ -160,12 +160,15 @@ class DesignerListView(APIView):
     def get(self, request):
         search = request.GET.get('search')
         designer_id = request.GET.get('id')
+        designer_slug = request.GET.get('slug')
         ordering = request.GET.get('ordering', 'user__username')
 
-        if designer_id:
+        lookup_val = designer_slug or designer_id
+        if lookup_val:
             try:
                 designer = Designer.objects.prefetch_related('lookbook_files').get(
-                    slug=designer_id, status=Designer.Status.APPROVED
+                    Q(slug=lookup_val) | Q(id=lookup_val),
+                    status=Designer.Status.APPROVED
                 )
             except Designer.DoesNotExist:
                 return Response({

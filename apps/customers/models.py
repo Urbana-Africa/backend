@@ -23,6 +23,8 @@ class Address(models.Model):
     """Shipping/Billing address."""
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='addresses')
     label = models.CharField(max_length=50, default="Home")
+    recipient_name = models.CharField(max_length=255, default='', blank=True)
+    phone = models.CharField(max_length=50, default='', blank=True)
     line1 = models.CharField(max_length=255)
     line2 = models.CharField(max_length=255, blank=True, null=True)
     city = models.CharField(max_length=100)

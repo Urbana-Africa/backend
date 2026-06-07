@@ -33,7 +33,7 @@ def complete_successful_payment(payment, invoice):
                     platform_margin = Decimal(str(props.get('platform_margin', 0)))
                     duties_buffer = Decimal(str(props.get('duties_buffer', 0)))
                     
-                    designer_base = base_price * qty
+                    designer_base = (base_price - platform_margin) * qty
                     commission = (platform_margin + duties_buffer) * qty
                     escrow_amount = designer_base + commission
                 else:

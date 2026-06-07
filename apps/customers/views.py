@@ -58,10 +58,9 @@ class CheckoutPreviewView(APIView):
 
             from decimal import Decimal
             from apps.pay.services.pricing import calculate_product_price_breakdown
+            from apps.core.models import ShippingMethod
 
-            total_amount = Decimal("0.00")
             sub_total = Decimal("0.00")
-            shipping_amount = Decimal("0.00")
             duties_amount = Decimal("0.00")
 
             for item in cart_items:
@@ -69,15 +68,30 @@ class CheckoutPreviewView(APIView):
                 qty = Decimal(str(item.quantity))
 
                 item_base = breakdown['base_price'] * qty
-                item_shipping = breakdown['shipping_cost'] * qty
                 item_duties = breakdown['duties_buffer'] * qty
-                item_margin = breakdown['platform_margin'] * qty
-                item_total = breakdown['total_price'] * qty
 
-                total_amount += item_total
-                sub_total += item_base + item_margin + item_duties
-                shipping_amount += item_shipping
+                sub_total += item_base
                 duties_amount += item_duties
+
+            # Resolve shipping amount from selected rate or fallback
+            shipping_rate = request.data.get('shipping_rate')
+            if shipping_rate and isinstance(shipping_rate, dict) and 'amount' in shipping_rate:
+                shipping_amount = Decimal(str(shipping_rate['amount']))
+            else:
+                # Fallback to dynamic shipping calculation
+                shipping_amount = Decimal("0.00")
+                for item in cart_items:
+                    breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                    qty = Decimal(str(item.quantity))
+                    shipping_amount += breakdown['shipping_cost'] * qty
+
+            total_amount = sub_total + shipping_amount + duties_amount
+
+            shipping_method_name = (
+                f"{shipping_rate['provider']} - {shipping_rate['service_level']}"
+                if shipping_rate and isinstance(shipping_rate, dict)
+                else "Dynamic Shipping"
+            )
 
             return Response({
                 "status": "success",
@@ -87,6 +101,7 @@ class CheckoutPreviewView(APIView):
                     "duties_amount": float(duties_amount),
                     "total_amount": float(total_amount),
                     "buyer_country": buyer_country,
+                    "shipping_method_name": shipping_method_name,
                 }
             })
         except Exception as e:
@@ -150,10 +165,8 @@ class CheckoutView(APIView):
                 if item.product.stock < item.quantity:
                     return Response({"status":"error", "message":f'{item.product.name} is out of stock'}, status=400)
 
-            total_amount = Decimal("0.00")
             sub_total = Decimal("0.00")
-            shipping_amount = Decimal("0.00")
-
+            duties_amount = Decimal("0.00")
             item_breakdowns = []
             for item in cart_items:
                 # Calculate the dynamic pricing breakdown in USD
@@ -166,9 +179,8 @@ class CheckoutView(APIView):
                 item_margin = breakdown['platform_margin'] * qty
                 item_total = breakdown['total_price'] * qty
 
-                total_amount += item_total
-                sub_total += item_base + item_margin + item_duties
-                shipping_amount += item_shipping
+                sub_total += item_base
+                duties_amount += item_duties
 
                 item_breakdowns.append({
                     'item': item,
@@ -179,6 +191,21 @@ class CheckoutView(APIView):
                     'item_margin': item_margin,
                     'item_total': item_total
                 })
+
+            # Resolve shipping method from selected rate or fallback
+            shipping_rate = request.data.get('shipping_rate')
+            if shipping_rate and isinstance(shipping_rate, dict) and 'amount' in shipping_rate:
+                shipping_method = f"{shipping_rate['provider']} - {shipping_rate['service_level']}"
+                shipping_amount = Decimal(str(shipping_rate['amount']))
+            else:
+                shipping_method = request.data.get('shipping_method', 'Designer Fulfilled')
+                shipping_amount = Decimal("0.00")
+                for item in cart_items:
+                    breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                    qty = Decimal(str(item.quantity))
+                    shipping_amount += breakdown['shipping_cost'] * qty
+
+            total_amount = sub_total + shipping_amount + duties_amount
 
             # 4️⃣ Create Payment record
             invoice = Invoice.objects.create(
@@ -199,11 +226,63 @@ class CheckoutView(APIView):
                 status='pending'
             )
 
-            # 6️⃣ Order Items
+            # 6️⃣ Build per-group shipping addresses when ship_all_to_same is false
+            ship_all_to_same = request.data.get('ship_all_to_same', True)
+            group_addresses_payload = request.data.get('group_addresses', [])
+
+            from collections import defaultdict
+            designer_groups_checkout = defaultdict(list)
+            for item in cart_items:
+                product = item.product
+                designer = getattr(product, 'user', None)
+                profile = getattr(designer, 'designer_profile', None) if designer else None
+                designer_id = getattr(profile, 'id', 'default') if profile else 'default'
+                designer_groups_checkout[designer_id].append(item)
+
+            group_address_map = {}
+            if not ship_all_to_same and group_addresses_payload:
+                for g_idx, (designer_id, group_items) in enumerate(designer_groups_checkout.items()):
+                    if g_idx < len(group_addresses_payload):
+                        ga = group_addresses_payload[g_idx]
+                        saved_addr_id = ga.get('saved_address_id')
+                        if saved_addr_id:
+                            try:
+                                group_addr = customer.addresses.get(id=saved_addr_id)
+                            except Address.DoesNotExist:
+                                group_addr = shipping_address
+                        else:
+                            group_addr, _ = Address.objects.get_or_create(
+                                customer=customer,
+                                line1=ga.get('line1', shipping_address.line1),
+                                line2=ga.get('line2', shipping_address.line2),
+                                city=ga.get('city', shipping_address.city),
+                                state=ga.get('state', shipping_address.state),
+                                postal_code=ga.get('postal_code', shipping_address.postal_code),
+                                country=ga.get('country', shipping_address.country),
+                                defaults={
+                                    'recipient_name': ga.get('recipient_name', shipping_address.recipient_name),
+                                    'phone': ga.get('phone', shipping_address.phone or ''),
+                                }
+                            )
+                        group_address_map[designer_id] = group_addr
+                    else:
+                        group_address_map[designer_id] = shipping_address
+            else:
+                for designer_id in designer_groups_checkout:
+                    group_address_map[designer_id] = shipping_address
+
+            # 7️⃣ Order Items
             for entry in item_breakdowns:
                 item = entry['item']
                 breakdown = entry['breakdown']
-                
+
+                # Determine which group this item belongs to
+                product = item.product
+                designer = getattr(product, 'user', None)
+                profile = getattr(designer, 'designer_profile', None) if designer else None
+                item_designer_id = getattr(profile, 'id', 'default') if profile else 'default'
+                item_shipping_address = group_address_map.get(item_designer_id, shipping_address)
+
                 # Persist details in item properties
                 item_properties = {
                     **(item.properties or {}),
@@ -212,8 +291,10 @@ class CheckoutView(APIView):
                     'duties_buffer': float(breakdown['duties_buffer']),
                     'platform_margin': float(breakdown['platform_margin']),
                     'total_price': float(breakdown['total_price']),
+                    'shipping_address_id': item_shipping_address.id,
+                    'shipping_address_str': f"{item_shipping_address.line1}, {item_shipping_address.city}, {item_shipping_address.country}",
                 }
-                
+
                 order_item = OrderItem.objects.create(
                     order=order,
                     tracking_number = f"URBITR-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random() * 99999999990).__round__()}",
@@ -263,7 +344,11 @@ class CheckoutView(APIView):
             cart_items.delete()
 
             # 8️⃣ Create Tracking
-            estimated_delivery = timezone.now().date() + timezone.timedelta(days=3)  # modify if needed
+            if shipping_method_obj:
+                estimated_days = shipping_method_obj.estimated_days
+            else:
+                estimated_days = 3
+            estimated_delivery = timezone.now().date() + timezone.timedelta(days=estimated_days)
             tracking_number = f"URBOTR-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random() * 99999999990).__round__()}"
             OrderTracking.objects.create(
                 order=order,
@@ -304,6 +389,187 @@ class ShippingMethodListView(APIView):
         })
 
 
+# ---------------- Shipping Rates (Live Shippo) ----------------
+class ShippingRatesView(APIView):
+    """
+    Fetch live shipping rates from Shippo based on cart + selected address.
+    Items are grouped by designer — each designer ships from their own location.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        customer = request.user.customer_profile
+
+        # Resolve destination address
+        shipping_address_id = request.data.get('shipping_address_id')
+        to_address = {
+            'name': request.data.get('recipient_name', 'Urbana Customer'),
+            'street1': request.data.get('line1', ''),
+            'street2': request.data.get('line2', ''),
+            'city': request.data.get('city', ''),
+            'state': request.data.get('state', ''),
+            'postal_code': request.data.get('postal_code', ''),
+            'country': request.data.get('country', 'US'),
+        }
+
+        if shipping_address_id:
+            try:
+                addr = customer.addresses.get(id=shipping_address_id)
+                to_address = {
+                    'name': addr.recipient_name or 'Urbana Customer',
+                    'street1': addr.line1,
+                    'street2': addr.line2 or '',
+                    'city': addr.city,
+                    'state': addr.state or '',
+                    'postal_code': addr.postal_code or '',
+                    'country': addr.country or 'US',
+                }
+            except Address.DoesNotExist:
+                pass
+
+        # Cart items with designer info
+        cart_items = CartItem.objects.filter(customer=customer).select_related(
+            'product', 'product__user__designer_profile'
+        )
+        if not cart_items.exists():
+            return Response({"status": "success", "data": {"rates": [], "shipment_groups": []}})
+
+        # Group items by designer
+        from collections import defaultdict
+        designer_groups = defaultdict(list)
+        for item in cart_items:
+            product = item.product
+            designer = getattr(product, 'user', None)
+            profile = getattr(designer, 'designer_profile', None) if designer else None
+            designer_id = getattr(profile, 'id', 'default') if profile else 'default'
+            designer_groups[designer_id].append({'item': item, 'profile': profile, 'product': product})
+
+        from apps.designers.shippo_service import get_shipping_rates
+
+        shipment_groups = []
+        all_errors = []
+        test_origin = request.data.get('origin_address')
+        ship_all_to_same = request.data.get('ship_all_to_same', True)
+        group_addresses = request.data.get('group_addresses', [])
+
+        for group_idx, (designer_id, group_items) in enumerate(designer_groups.items()):
+            first = group_items[0]
+            profile = first['profile']
+
+            # Build origin address
+            if test_origin:
+                from_address = {
+                    'name': test_origin.get('name', 'Urbana Designer'),
+                    'street1': test_origin.get('street1', '1 Fort Road'),
+                    'city': test_origin.get('city', 'New York'),
+                    'state': test_origin.get('state', ''),
+                    'postal_code': test_origin.get('postal_code', ''),
+                    'country': test_origin.get('country', 'US'),
+                }
+            else:
+                from_address = {
+                    'name': profile.brand_name if profile else 'Urbana Designer',
+                    'street1': '1 Fort Road',
+                    'city': profile.city if profile else 'Accra',
+                    'state': '',
+                    'postal_code': '',
+                    'country': (profile.country or 'GH').upper().strip() if profile else 'GH',
+                }
+
+            # Build destination address — use per-group address when ship_all_to_same is false
+            if not ship_all_to_same and group_addresses and group_idx < len(group_addresses):
+                ga = group_addresses[group_idx]
+                group_to_address = {
+                    'name': ga.get('recipient_name', to_address.get('name', 'Urbana Customer')),
+                    'street1': ga.get('line1', to_address.get('street1', '')),
+                    'street2': ga.get('line2', to_address.get('street2', '')),
+                    'city': ga.get('city', to_address.get('city', '')),
+                    'state': ga.get('state', to_address.get('state', '')),
+                    'postal_code': ga.get('postal_code', to_address.get('postal_code', '')),
+                    'country': ga.get('country', to_address.get('country', 'US')),
+                }
+            else:
+                group_to_address = to_address
+
+            group_weight = sum(
+                float(entry['product'].weight_kg or 0.5) * entry['item'].quantity
+                for entry in group_items
+            )
+
+            rates_result = get_shipping_rates(
+                from_address=from_address,
+                to_address=group_to_address,
+                weight_kg=group_weight,
+            )
+
+            items_summary = []
+            for entry in group_items:
+                prod = entry['product']
+                media_first = prod.media.first()
+                image_url = None
+                if media_first and hasattr(media_first, 'file') and media_first.file:
+                    try:
+                        image_url = media_first.file.url
+                    except (AttributeError, ValueError):
+                        image_url = str(media_first.file)
+                items_summary.append({
+                    'product_id': prod.id,
+                    'name': prod.name,
+                    'quantity': entry['item'].quantity,
+                    'image': image_url,
+                })
+
+            shipment_groups.append({
+                'designer_id': designer_id,
+                'designer_name': profile.brand_name if profile else 'Urbana Designer',
+                'origin_country': from_address['country'],
+                'origin_city': from_address['city'],
+                'destination_country': group_to_address['country'],
+                'items': items_summary,
+                'total_weight_kg': round(group_weight, 2),
+                'rates': rates_result.get('rates', []),
+                'error': rates_result.get('error'),
+            })
+
+            if rates_result.get('error'):
+                all_errors.append(rates_result['error'])
+
+        # Build combined rates by summing cheapest per group for each service level
+        # This only works cleanly when all groups share the same provider/service_level names
+        combined_rates = []
+        if all(g['rates'] for g in shipment_groups):
+            service_levels = {}
+            for group in shipment_groups:
+                for rate in group['rates']:
+                    key = f"{rate['provider']}::{rate['service_level']}"
+                    if key not in service_levels:
+                        service_levels[key] = {
+                            'provider': rate['provider'],
+                            'service_level': rate['service_level'],
+                            'amount': 0,
+                            'currency': rate['currency'],
+                            'estimated_days': rate['estimated_days'],
+                            'source': rate['source'],
+                        }
+                    service_levels[key]['amount'] += rate['amount']
+                    service_levels[key]['estimated_days'] = max(
+                        service_levels[key]['estimated_days'],
+                        rate['estimated_days']
+                    )
+            combined_rates = list(service_levels.values())
+            combined_rates.sort(key=lambda r: r['amount'])
+
+        return Response({
+            "status": "success",
+            "data": {
+                "rates": combined_rates,
+                "shipment_groups": shipment_groups,
+                "multi_shipment": len(shipment_groups) > 1,
+                "errors": all_errors if all_errors else None,
+            }
+        })
+
+
 # ---------------- Order Tracking ----------------
 class OrderTrackingView(APIView):
     """Retrieve tracking info for a specific order."""
@@ -314,15 +580,50 @@ class OrderTrackingView(APIView):
             order = Order.objects.get(order_id=order_id, customer=request.user.customer_profile)
             tracking = order.tracking
             serializer = OrderTrackingSerializer(tracking)
+            
+            # Serialize package tracking info per item
+            item_shipments = []
+            for item in order.items.all():
+                shipment_info = {
+                    "item_id": item.item_id,
+                    "product_name": item.product.name if item.product else "Unknown Product",
+                    "quantity": item.quantity,
+                    "tracking_number": item.tracking_number,
+                    "status": item.status,
+                    "carrier": item.properties.get("carrier") or "",
+                    "estimated_delivery": None,
+                    "tracking_events": []
+                }
+                
+                # Fetch Shipment model data if exists
+                try:
+                    from apps.designers.models import Shipment
+                    shipment = Shipment.objects.filter(order_item=item).first()
+                    if shipment:
+                        shipment_info["tracking_status"] = shipment.tracking_status
+                        if shipment.tracking_data:
+                            shipment_info["tracking_events"] = shipment.tracking_data.get("tracking_history", [])
+                            eta = shipment.tracking_data.get("estimated_delivery_date")
+                            if eta:
+                                shipment_info["estimated_delivery"] = eta
+                except Exception as e:
+                    print(f"Error fetching shipment data: {e}")
+                
+                item_shipments.append(shipment_info)
+
             return Response({
-                "status":"success",
+                "status": "success",
                 "message": f"Tracking info for order {order_id} retrieved successfully.",
-                "data": serializer.data
+                "data": {
+                    **serializer.data,
+                    "item_shipments": item_shipments
+                }
             })
         except Order.DoesNotExist:
             return Response({"status":"error", "message": "Order not found."}, status=404)
         except OrderTracking.DoesNotExist:
             return Response({"status":"error", "message": "Tracking info not available yet."}, status=404)
+
 
 # ---------------- Customer Profile ----------------
 class CustomerProfileView(APIView):

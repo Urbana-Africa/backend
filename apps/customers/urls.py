@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     CheckoutView, CheckoutPreviewView, CustomerProfileView, AddressView, OrderDetailView, OrderTrackingView,
-    ShippingMethodListView, WishlistView, CartView,
+    ShippingMethodListView, ShippingRatesView, WishlistView, CartView,
     OrderListView, ReturnRequestView, ReturnResolveView, ReturnDetailView, DisputeView,
     CustomerSearchView
 )
@@ -18,6 +18,7 @@ urlpatterns = [
     path('disputes', DisputeView.as_view(), name='customer-disputes'),
     path('orderdetail', OrderDetailView.as_view()),
     path('shipping-methods', ShippingMethodListView.as_view(), name='shipping-methods'),
+    path('shipping-rates', ShippingRatesView.as_view(), name='shipping-rates'),
     path('orders/<str:order_id>/tracking', OrderTrackingView.as_view(), name='order-tracking'),
     path('checkout/preview', CheckoutPreviewView.as_view(), name='checkout-preview'),
     path('checkout', CheckoutView.as_view(), name='checkout'),

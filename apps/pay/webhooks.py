@@ -353,3 +353,74 @@ class StripeWebhookView(BaseWebhookView):
                 )
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
+
+from rest_framework.permissions import AllowAny
+from django.utils import timezone
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ShippoWebhookView(APIView):
+    """
+    POST /pay/webhook/shippo
+    Processes tracking updates from Shippo.
+    If tracking status is 'DELIVERED', updates OrderItem and executes customer notification.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        payload = request.body.decode("utf-8")
+        try:
+            event_data = json.loads(payload)
+        except ValueError:
+            return Response({"error": "Invalid JSON"}, status=400)
+            
+        event = event_data.get("event")
+        data = event_data.get("data")
+        
+        # Audit log the webhook event
+        log_webhook_event("Shippo", event or "unknown", event_data, reference=data.get("tracking_number") if data else None)
+        
+        if event == "track_updated" and data:
+            tracking_number = data.get("tracking_number")
+            carrier = data.get("carrier")
+            status_obj = data.get("tracking_status") or {}
+            current_status = status_obj.get("status")
+            
+            if tracking_number:
+                # Find the OrderItem associated with this tracking number
+                from apps.customers.models import OrderItem
+                order_item = OrderItem.objects.filter(tracking_number=tracking_number).first()
+                if order_item:
+                    # Update tracking state in database
+                    try:
+                        from apps.designers.models import Shipment
+                        Shipment.objects.update_or_create(
+                            order_item=order_item,
+                            defaults={
+                                "carrier": carrier or order_item.properties.get("carrier") or "",
+                                "tracking_number": tracking_number,
+                                "tracking_status": current_status,
+                                "tracking_data": data
+                            }
+                        )
+                    except Exception as e:
+                        print(f"Error updating shipment from webhook: {e}")
+                        
+                    # If status is delivered, mark order item delivered and notify
+                    if current_status == "DELIVERED" and order_item.status != "delivered":
+                        order_item.status = "delivered"
+                        order_item.designer_status = "delivered"
+                        order_item.delivered_at = timezone.now()
+                        order_item.save()
+                        
+                        # Send customer delivery confirmation email
+                        from apps.utils.notifications import send_customer_order_delivered
+                        try:
+                            send_customer_order_delivered(order_item)
+                        except Exception as e:
+                            print(f"[EMAIL] Customer delivered email failed: {e}")
+                            
+                        # Log webhook as processed successfully
+                        log_webhook_event("Shippo", event, event_data, reference=tracking_number, processed=True)
+                        
+        return Response({"status": "ok"}, status=200)

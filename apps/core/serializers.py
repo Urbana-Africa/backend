@@ -28,7 +28,7 @@ class CurrencySerializer(serializers.ModelSerializer):
 class ShippingMethodSerializer(serializers.ModelSerializer):
     class Meta:
         model = ShippingMethod
-        fields = ['id', 'name', 'price', 'estimated_days', 'is_active']
+        fields = ['id', 'name', 'price', 'estimated_days', 'is_active', 'applicable_countries']
 
 
 

@@ -60,10 +60,10 @@ class TestEscrowSplits(TestCase):
 
         # Verify the Escrow.objects.create was called with correct amounts
         create_kwargs = MockEscrow.objects.create.call_args[1]
-        # designer_base = 50 * 2 = 100
+        # designer_base = (50 - 5) * 2 = 90
         # commission = (5 + 12) * 2 = 34
-        # escrow_amount = 100 + 34 = 134
-        self.assertEqual(create_kwargs["amount"], Decimal("134.00"))
+        # escrow_amount = 90 + 34 = 124
+        self.assertEqual(create_kwargs["amount"], Decimal("124.00"))
         self.assertEqual(create_kwargs["platform_commission"], Decimal("34.00"))
         self.assertEqual(create_kwargs["status"], "held")
 

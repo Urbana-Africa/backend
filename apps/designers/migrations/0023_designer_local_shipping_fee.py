@@ -3,6 +3,24 @@
 from django.db import migrations, models
 
 
+def clean_specialty_json(apps, schema_editor):
+    """Ensure all specialty values are valid JSON arrays before SQLite table remake."""
+    Designer = apps.get_model('designers', 'Designer')
+    for designer in Designer.objects.all():
+        val = designer.specialty
+        # Convert lingering empty strings or non-list values to valid JSON arrays
+        if val is None or val == '' or val == 'null':
+            designer.specialty = []
+            designer.save(update_fields=['specialty'])
+        elif isinstance(val, str):
+            # If it's still a plain string, wrap it in a list
+            designer.specialty = [val.strip()] if val.strip() else []
+            designer.save(update_fields=['specialty'])
+        elif not isinstance(val, list):
+            designer.specialty = []
+            designer.save(update_fields=['specialty'])
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,6 +28,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(clean_specialty_json, migrations.RunPython.noop),
         migrations.AddField(
             model_name='designer',
             name='local_shipping_fee',

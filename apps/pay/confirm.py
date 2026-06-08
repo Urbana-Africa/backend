@@ -155,6 +155,18 @@ class BasePaymentConfirmView(APIView):
             except Exception as e:
                 print(f"Error sending customer order confirmation email: {str(e)}")
 
+            # Notify designers of new paid order
+            try:
+                if order:
+                    from apps.utils.notifications import send_designer_new_order
+                    for item in order.items.select_related("product").all():
+                        try:
+                            send_designer_new_order(item)
+                        except Exception as e:
+                            print(f"Error sending designer order email: {str(e)}")
+            except Exception as e:
+                print(f"Error sending designer order emails: {str(e)}")
+
         return Response(
             {
                 "message": f"{self.processor.capitalize()} payment verified successfully",

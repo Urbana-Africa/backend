@@ -132,9 +132,13 @@ def calculate_product_price_breakdown(product, buyer_country_code: str) -> dict:
     Formula:
       Visible List Price = Base Price + Dynamic Shipping + Duties/Taxes Buffer + Platform Margin
     """
-    base_price = Decimal(str(product.price))
+    # 1. Base price in USD
+    product_currency_code = product.currency.code if hasattr(product, 'currency') and product.currency else "USD"
+    raw_price = Decimal(str(product.price))
+    from apps.pay.services.pricing import convert_currency_with_buffer
+    base_price = convert_currency_with_buffer(raw_price, product_currency_code, "USD")
     
-    # 1. Resolve Designer's Origin Country
+    # Resolve Designer's Origin Country
     designer_country = 'NG'
     local_shipping_fee = None
     designer_id = 'default'

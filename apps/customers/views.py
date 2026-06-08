@@ -319,17 +319,6 @@ class CheckoutView(APIView):
                     link=f"/orders/{order_item.id}",
                 )
 
-                # Send new order emails via notification service
-                from apps.utils.notifications import send_designer_new_order, send_customer_order_confirmed
-                try:
-                    send_designer_new_order(order_item)
-                except Exception as e:
-                    print(f"Error sending designer order email: {str(e)}")
-                try:
-                    send_customer_order_confirmed(order_item)
-                except Exception as e:
-                    print(f"Error sending customer order email: {str(e)}")
-
                 # Low stock alert
                 if item.product.stock <= 5 and item.product.stock >= 0:
                     Notification.objects.create(
@@ -344,10 +333,13 @@ class CheckoutView(APIView):
             cart_items.delete()
 
             # 8️⃣ Create Tracking
-            if shipping_method_obj:
-                estimated_days = shipping_method_obj.estimated_days
+            estimated_days = 3
+            if shipping_rate and isinstance(shipping_rate, dict):
+                estimated_days = shipping_rate.get('estimated_days', 3)
             else:
-                estimated_days = 3
+                shipping_method_obj = ShippingMethod.objects.filter(name=shipping_method).first()
+                if shipping_method_obj:
+                    estimated_days = shipping_method_obj.estimated_days
             estimated_delivery = timezone.now().date() + timezone.timedelta(days=estimated_days)
             tracking_number = f"URBOTR-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random() * 99999999990).__round__()}"
             OrderTracking.objects.create(

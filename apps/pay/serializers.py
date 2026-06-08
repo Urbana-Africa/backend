@@ -52,15 +52,21 @@ class TransferSerializer(serializers.ModelSerializer):
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
+    currency = serializers.SerializerMethodField()
+
     class Meta:
         model = Invoice
         fields = '__all__'
+
+    def get_currency(self, instance):
+        from apps.pay.initialize import get_invoice_currency
+        return get_invoice_currency(instance)
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         if instance.payment:
             representation['payment'] = PaymentSerializer(instance.payment, many=False).data
-        
+
         # Include user info for payment processors
         representation['user'] = {
             'email': instance.user.email,

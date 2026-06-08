@@ -199,11 +199,10 @@ class InitializeStripePayment(BaseInitializeInvoicePayment):
                 automatic_payment_methods={"enabled": True},
                 metadata={
                     "invoice_id": str(invoice.id),
-                    "invoice_reference": invoice.reference,
                     "attempt_reference": attempt.reference,
                     "user_id": str(request.user.id),
                 },
-                idempotency_key=f"invoice-{invoice.reference}",
+                idempotency_key=f"invoice-{invoice.id}",
             )
 
         except stripe.error.StripeError as e:

@@ -53,3 +53,14 @@ def complete_successful_payment(payment, invoice):
                 # Link escrow to the sub-order
                 item.escrow = escrow
                 item.save(update_fields=['escrow'])
+
+            # Send order emails after successful payment
+            from apps.utils.notifications import send_designer_new_order, send_customer_order_confirmed
+            try:
+                send_designer_new_order(item)
+            except Exception as e:
+                print(f"Error sending designer order email: {str(e)}")
+            try:
+                send_customer_order_confirmed(item)
+            except Exception as e:
+                print(f"Error sending customer order confirmation email: {str(e)}")

@@ -151,13 +151,18 @@ if IS_DEVELOPMENT:
         }
     }
 else:
-    # Use MySQL in production or staging, current setting is just placeholder
+    # MySQL for production / staging (Hetzner)
     DATABASES = {
         "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": config("DB_NAME"),
+            "USER": config("DB_USER"),
+            "PASSWORD": config("DB_PASSWORD"),
+            "HOST": config("DB_HOST", default="127.0.0.1"),
+            "PORT": config("DB_PORT", default="3306"),
             "OPTIONS": {
-                "timeout": 20,
+                "charset": "utf8mb4",
+                "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
             },
         }
     }

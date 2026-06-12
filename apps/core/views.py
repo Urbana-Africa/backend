@@ -1491,7 +1491,18 @@ class AiSearchView(APIView):
 
     def _call_gemini(self, message, gemini_key, user_context=""):
         system_prompt = f"""You are a fashion assistant for Urbana Africa, a pan-African fashion marketplace.
-Extract structured search parameters from the user's natural language query.
+Analyze the user's natural language query.
+First, determine if the message is a customer support/service question (such as return policies, refunds, order tracking, wallet balance, custom tailoring guide) rather than a shopping search query.
+If it IS a customer support/service question:
+- Set `is_support` to true.
+- In `style_note`, write a direct, highly helpful, friendly and complete customer service answer.
+- Set all other parameters (occasion, print_type, price, search, etc.) to null.
+
+If it IS NOT a customer support question (i.e. it is a styling or shopping query):
+- Set `is_support` to false.
+- Extract structured search parameters from the user's natural language query.
+- Set `style_note` to a warm, friendly 1-2 sentence styling summary of what you understood.
+
 {user_context}
 Available product fields:
 - occasion: "wedding" | "work" | "casual" | "party" | "traditional" | "other"
@@ -1501,16 +1512,17 @@ Available product fields:
 - min_price: number in USD (only if user explicitly mentions a minimum price)
 - max_price: number in USD (only if user mentions a budget or maximum)
 - search: 1-3 keywords describing the clothing type (e.g. "dress", "agbada", "jumpsuit", "headpiece")
-- style_note: A warm, friendly 1-2 sentence summary of what you understood and what to expect.
+- style_note: The response text to display to the user.
 
 Rules:
 - Only set fields clearly implied by the query — do not guess.
 - If price is vague ("affordable", "cheap"), do NOT set min_price/max_price.
-- style_note must always be present and feel personal, not robotic.
+- style_note must always be present.
 - If the user mentions gender (male/female) in their query, respect it. Otherwise use the user profile context provided above.
 
 Respond ONLY with valid JSON. No markdown, no extra text.
-Example: {{"occasion": "wedding", "print_type": "ankara", "max_price": 50000, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under ₦50,000 — here’s what our designers have for you."}}"""
+Example for support: {{"is_support": true, "style_note": "To return a product, navigate to your Profile, go to 'Orders', select the item, and click 'Return Item' within 14 days of delivery.", "search": null}}
+Example for shopping: {{"is_support": false, "occasion": "wedding", "print_type": "ankara", "max_price": 500, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under USD 500 — here’s what our designers have for you."}}"""
 
         # Cache key: hash of message + user_context
         cache_key = f"ai_search:gemini:{hashlib.sha256((message + user_context).encode()).hexdigest()}"
@@ -1557,6 +1569,25 @@ Example: {{"occasion": "wedding", "print_type": "ankara", "max_price": 50000, "s
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
+        # Check for direct local support queries (matches quick action chips exactly)
+        exact_query = message.lower().strip("?. ")
+        support_answers = {
+            "help me track my last order": "To track your order, navigate to your Profile dashboard, click on 'Orders', and select your active order to see real-time shipping status and tracking updates.",
+            "show custom tailors sizing guide": "Urbana provides a detailed Bespoke Measurement Vault under your Profile dashboard where you can store your parameters. You can also use our interactive camera FitMe tool for live visual pose alignment.",
+            "how do i return a product": "To return a product, go to the 'Orders' list under your Profile dashboard, select the order, and click 'Return Item'. We accept returns within 14 days of delivery in original, unused condition.",
+            "check my urbana wallet balance": "You can view your current Urbana Wallet balance and transaction history in the 'Wallet' tab of your Profile. You can also fund it directly using standard checkout gateways (Card, Transfer, or Mobile Money)."
+        }
+
+        if exact_query in support_answers:
+            return Response(
+                {
+                    "status": "success",
+                    "style_note": support_answers[exact_query],
+                    "data": [],
+                },
+                status=status.HTTP_200_OK,
+            )
+
         # Step 1 — Build user context
         user = request.user if request.user.is_authenticated else None
         user_context = ""
@@ -1579,6 +1610,17 @@ Example: {{"occasion": "wedding", "print_type": "ankara", "max_price": 50000, "s
                 "search": message,
                 "style_note": "Here\u2019s what I found based on your description.",
             }
+
+        # Handle support response from Gemini
+        if parsed_filters.get("is_support") is True:
+            return Response(
+                {
+                    "status": "success",
+                    "style_note": parsed_filters.get("style_note"),
+                    "data": [],
+                },
+                status=status.HTTP_200_OK,
+            )
 
         limit = int(request.GET.get("limit", 20))
         is_fallback = False
@@ -1674,12 +1716,10 @@ class AiSuggestionsView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Pull up to 20 distinct products that have occasion/print_type
+        # Pull up to 20 distinct products
         products = (
             Product.objects
             .filter(is_published=True, is_admin_published=True, is_active=True)
-            .exclude(occasion="other")
-            .exclude(print_type="other")
             .select_related("category")
             .values("name", "occasion", "print_type", "category__name", "price")
             .order_by("-popularity_score", "-created_at")[:20]
@@ -1688,6 +1728,19 @@ class AiSuggestionsView(APIView):
         products_list = list(products)
         random.shuffle(products_list)
         sample = products_list[:10]  # Take 10 to give Gemini variety
+
+        DEFAULT_SUGGESTIONS = [
+            "Style me for a Nigerian Wedding party",
+            "Adire capsule wardrobe under $200",
+            "Ankara gifts for a special occasion",
+            "Custom tailored Agbada fit sizes",
+            "Modern African streetwear styling"
+        ]
+
+        if not sample:
+            return Response(
+                {"status": "success", "data": DEFAULT_SUGGESTIONS}, status=status.HTTP_200_OK
+            )
 
         # Format DB sample for Gemini
         context_items = []
@@ -1738,8 +1791,15 @@ Example: ["Show me elegant Adire outfits for work", "Ankara wedding guest dress 
 
     def _build_dynamic_suggestions(self, products):
         """Build AI-style suggestions from real product data when Gemini is unavailable."""
+        DEFAULT_SUGGESTIONS = [
+            "Style me for a Nigerian Wedding party",
+            "Adire capsule wardrobe under $200",
+            "Ankara gifts for a special occasion",
+            "Custom tailored Agbada fit sizes",
+            "Modern African streetwear styling"
+        ]
         if not products:
-            return ["Explore our latest African fashion"]
+            return DEFAULT_SUGGESTIONS
 
         suggestions = []
         occasions = {}
@@ -1796,7 +1856,7 @@ Example: ["Show me elegant Adire outfits for work", "Ankara wedding guest dress 
                 continue
 
         if not suggestions:
-            suggestions = [f"Explore {random.choice(cat_list) if cat_list else 'our collection'}"]
+            suggestions = DEFAULT_SUGGESTIONS
 
         return suggestions[:5]
 

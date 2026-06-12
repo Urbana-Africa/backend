@@ -289,14 +289,34 @@ if IS_PRODUCTION:
     CORS_EXPOSE_HEADERS = ["Set-Cookie", "Authorization"]
 
 else:
-    # Development: more permissive
-    CORS_ALLOWED_ORIGINS = []
+    # Development / Staging: allow local + real domains for preview/testing
+    CORS_ALLOWED_ORIGINS = [
+        "https://urbanaafrica.com",
+        "https://www.urbanaafrica.com",
+        "https://api.urbanaafrica.com",
+        "https://admin.urbanaafrica.com",
+        "https://auth.urbanaafrica.com",
+        "https://customer.urbanaafrica.com",
+        "https://designer.urbanaafrica.com",
+    ]
     CORS_ALLOWED_ORIGIN_REGEXES = [
         r"^https?://([a-z0-9-]+\.)*urbana\.local(:\d+)?$",
         r"^https?://localhost(:\d+)?$",
         r"^https?://127\.0\.0\.1(:\d+)?$",
     ]
+    CORS_ALLOW_HEADERS = [
+        "accept",
+        "authorization",
+        "content-type",
+        "x-csrftoken",
+        "x-requested-with",
+        "origin",
+    ]
+    CORS_EXPOSE_HEADERS = ["Set-Cookie", "Authorization"]
     CSRF_TRUSTED_ORIGINS = [
+        "https://urbanaafrica.com", "https://www.urbanaafrica.com", "https://api.urbanaafrica.com",
+        "https://admin.urbanaafrica.com", "https://auth.urbanaafrica.com",
+        "https://customer.urbanaafrica.com", "https://designer.urbanaafrica.com",
         "http://localhost:5172", "http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176",
         "http://127.0.0.1:5172", "http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://127.0.0.1:5175", "http://127.0.0.1:5176",
         "http://urbana.local:5172", "http://api.urbana.local:8000", "http://admin.urbana.local:5176",

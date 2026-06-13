@@ -207,18 +207,18 @@ if IS_PRODUCTION:
     CSRF_COOKIE_SAMESITE = "None"
     JWT_COOKIE_SAMESITE = "None"
 else:
-    # Dev / staging: configurable via env so real-domain previews work
-    # For local .urbana.local dev, override in .env:
-    #   COOKIE_DOMAIN=.urbana.local
-    #   COOKIE_SECURE=False
-    #   SESSION_COOKIE_SAMESITE=Lax
-    #   CSRF_COOKIE_SAMESITE=Lax
-    #   JWT_COOKIE_SAMESITE=Lax
-    COOKIE_DOMAIN = config("COOKIE_DOMAIN", default=".urbanaafrica.com")
-    COOKIE_SECURE = config("COOKIE_SECURE", default=True, cast=bool)
-    SESSION_COOKIE_SAMESITE = config("SESSION_COOKIE_SAMESITE", default="None")
-    CSRF_COOKIE_SAMESITE = config("CSRF_COOKIE_SAMESITE", default="None")
-    JWT_COOKIE_SAMESITE = config("JWT_COOKIE_SAMESITE", default="None")
+    # Dev / staging: defaults optimised for localhost/HTTP.
+    # For real-domain preview (e.g. *.urbanaafrica.com), override in .env:
+    #   COOKIE_DOMAIN=.urbanaafrica.com
+    #   COOKIE_SECURE=True
+    #   SESSION_COOKIE_SAMESITE=None
+    #   CSRF_COOKIE_SAMESITE=None
+    #   JWT_COOKIE_SAMESITE=None
+    COOKIE_DOMAIN = config("COOKIE_DOMAIN", default=None)
+    COOKIE_SECURE = config("COOKIE_SECURE", default=False, cast=bool)
+    SESSION_COOKIE_SAMESITE = config("SESSION_COOKIE_SAMESITE", default="Lax")
+    CSRF_COOKIE_SAMESITE = config("CSRF_COOKIE_SAMESITE", default="Lax")
+    JWT_COOKIE_SAMESITE = config("JWT_COOKIE_SAMESITE", default="Lax")
 
 # Apply domain & secure flags
 SESSION_COOKIE_DOMAIN = COOKIE_DOMAIN

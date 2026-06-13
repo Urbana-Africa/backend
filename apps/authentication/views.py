@@ -199,7 +199,8 @@ class CustomTokenRefreshView(TokenRefreshView):
 
 @method_decorator(ensure_csrf_cookie,'get')
 class SetCSRFCookie(APIView):
-    permission_classes = ([IsAuthenticated])
+    permission_classes = ([AllowAny])
+    authentication_classes = ()
 
     def get(self,request):
         return JsonResponse({

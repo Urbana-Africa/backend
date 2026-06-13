@@ -1446,7 +1446,7 @@ class AiSearchView(APIView):
     def _base_qs(self):
         return (
             Product.objects
-            .filter(is_published=True, is_admin_published=True, is_active=True)
+            .filter(is_published=True, is_admin_published=True, is_active=True, stock__gt=0)
             .exclude(media=False)
             .select_related("user", "currency", "category", "subcategory", "brand", "country_of_origin")
             .prefetch_related("media", "sizes", "user__designer_profile")
@@ -2176,7 +2176,8 @@ class AiPersonalizedSearchView(APIView):
         base_qs = Product.objects.filter(
             Q(name__icontains=query) |
             Q(description__icontains=query) |
-            Q(category__name__icontains=query)
+            Q(category__name__icontains=query),
+            stock__gt=0
         ).select_related("user__designer_profile", "category").prefetch_related("sizes").annotate(
             avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
         )
@@ -2225,7 +2226,7 @@ class AiPersonalizedSearchView(APIView):
         # 4. Fallback to trending if base search yields too few results
         if len(products) < MIN_RESULTS:
             fallback_qs = Product.objects.filter(
-                is_published=True, is_admin_published=True, is_active=True
+                is_published=True, is_admin_published=True, is_active=True, stock__gt=0
             ).exclude(media=False).select_related("user__designer_profile", "category").prefetch_related("sizes").annotate(
                 avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
             ).order_by("-popularity_score", "-created_at")[:6]

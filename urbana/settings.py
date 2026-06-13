@@ -20,6 +20,21 @@ IS_PRODUCTION = ENV == "prod"
 IS_DEVELOPMENT = ENV == "dev"
 
 # =====================================================
+# Frontend URLs
+# =====================================================
+
+if IS_PRODUCTION:
+    STORE_URL = "https://www.urbanaafrica.com"
+    CUSTOMER_URL = "https://customer.urbanaafrica.com"
+    DESIGNER_URL = "https://designer.urbanaafrica.com"
+    ADMIN_URL = "https://admin.urbanaafrica.com"
+else:
+    STORE_URL = config("STORE_URL", default="https://www.urbanaafrica.com")
+    CUSTOMER_URL = config("CUSTOMER_URL", default="https://customer.urbanaafrica.com")
+    DESIGNER_URL = config("DESIGNER_URL", default="https://designer.urbanaafrica.com")
+    ADMIN_URL = config("ADMIN_URL", default="https://admin.urbanaafrica.com")
+
+# =====================================================
 # Hosts & Allowed
 # =====================================================
 

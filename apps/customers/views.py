@@ -716,9 +716,50 @@ class CartView(APIView):
     def get(self, request):
         customer, _ = Customer.objects.get_or_create(user=request.user)
 
-        cart_items = CartItem.objects.filter(customer=customer)
-        serializer = CartItemSerializer(cart_items, many=True)
-        return Response({"status":"success", "message": "Cart retrieved successfully.", "data": serializer.data})
+        cart_items = CartItem.objects.filter(customer=customer).select_related('product')
+        removed_items = []
+        valid_items = []
+
+        for item in cart_items:
+            product = item.product
+            # Product no longer exists, inactive, or unpublished
+            if not product or not product.is_active or not product.is_published:
+                removed_items.append({
+                    "name": product.name if product else "Unknown",
+                    "reason": "no_longer_available"
+                })
+                item.delete()
+                continue
+
+            # Out of stock
+            if product.stock <= 0:
+                removed_items.append({
+                    "name": product.name,
+                    "reason": "out_of_stock"
+                })
+                item.delete()
+                continue
+
+            # Quantity exceeds available stock — clamp to stock instead of removing
+            if product.stock < item.quantity:
+                removed_items.append({
+                    "name": product.name,
+                    "reason": "quantity_adjusted",
+                    "old_quantity": item.quantity,
+                    "new_quantity": product.stock
+                })
+                item.quantity = product.stock
+                item.save()
+
+            valid_items.append(item)
+
+        serializer = CartItemSerializer(valid_items, many=True)
+        return Response({
+            "status": "success",
+            "message": "Cart retrieved successfully.",
+            "data": serializer.data,
+            "removed_items": removed_items
+        })
 
     def post(self, request):
         product_id = request.data.get('product_id')

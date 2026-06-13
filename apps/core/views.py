@@ -1058,9 +1058,9 @@ class SeedDummyDataView(APIView):
             # Attach Sizes
             product.sizes.add(size_s, size_m, size_l)
 
-            # Attach Colors (Name must be globally unique per user's model design)
-            Color.objects.get_or_create(name=f"Black - {slug_base}", hex_code="#000000", product=product)
-            Color.objects.get_or_create(name=f"White - {slug_base}", hex_code="#FFFFFF", product=product)
+            # Attach Colors (simple color names)
+            Color.objects.get_or_create(name="Black", hex_code="#000000", product=product)
+            Color.objects.get_or_create(name="White", hex_code="#FFFFFF", product=product)
 
             # Generate and attach 1 dummy picture from picsum
             try:
@@ -1439,7 +1439,7 @@ class AiSearchView(APIView):
       4. Trending products
     """
     permission_classes = [AllowAny]
-    MIN_RESULTS = 4
+    MIN_RESULTS = 6
 
     # ── DB helpers ────────────────────────────────────────────────────────
 
@@ -1487,21 +1487,31 @@ class AiSearchView(APIView):
             qs = qs.filter(print_type=f["print_type"])
         return qs
 
-    # ── Gemini ────────────────────────────────────────────────────────────
+# ── Gemini helper (module-level so both views can use it) ─────────────
 
-    def _call_gemini(self, message, gemini_key, user_context=""):
-        system_prompt = f"""You are a fashion assistant for Urbana Africa, a pan-African fashion marketplace.
+def _call_gemini(message, gemini_key, user_context=""):
+    system_prompt = f"""You are a fashion assistant for Urbana Africa, a pan-African fashion marketplace.
 Analyze the user's natural language query.
-First, determine if the message is a customer support/service question (such as return policies, refunds, order tracking, wallet balance, custom tailoring guide) rather than a shopping search query.
-If it IS a customer support/service question:
+First, determine if the message is:
+A) a customer support/service question (returns, refunds, order tracking, wallet balance, custom tailoring guide)
+B) a fashion advice/trending question ("suggest trending styles", "what should I wear", "what is in fashion", general fashion tips)
+C) a specific shopping/product search query (looking for dresses, suits, shoes, etc.)
+D) completely off-topic (not related to fashion, shopping, or Urbana — e.g. weather, politics, math homework, general trivia)
+
+If A or B:
 - Set `is_support` to true.
-- In `style_note`, write a direct, highly helpful, friendly and complete customer service answer.
+- In `style_note`, write a direct, highly helpful, friendly and complete answer. For fashion advice, give concrete, inspiring suggestions with examples.
 - Set all other parameters (occasion, print_type, price, search, etc.) to null.
 
-If it IS NOT a customer support question (i.e. it is a styling or shopping query):
+If C:
 - Set `is_support` to false.
 - Extract structured search parameters from the user's natural language query.
-- Set `style_note` to a warm, friendly 1-2 sentence styling summary of what you understood.
+- Set `style_note` to a warm, friendly 1-2 sentence summary of what you understood.
+
+If D (off-topic):
+- Set `is_support` to true.
+- In `style_note`, write a polite, friendly message redirecting the user back to fashion/shopping topics. Example: "I'm your Urbana Assistant and I specialize in African fashion, outfit curation, and marketplace support. I'd love to help you find the perfect piece or answer any shopping questions. What are you looking for today?"
+- Set all other parameters to null.
 
 {user_context}
 Available product fields:
@@ -1522,36 +1532,40 @@ Rules:
 
 Respond ONLY with valid JSON. No markdown, no extra text.
 Example for support: {{"is_support": true, "style_note": "To return a product, navigate to your Profile, go to 'Orders', select the item, and click 'Return Item' within 14 days of delivery.", "search": null}}
-Example for shopping: {{"is_support": false, "occasion": "wedding", "print_type": "ankara", "max_price": 500, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under USD 500 — here’s what our designers have for you."}}"""
+Example for advice: {{"is_support": true, "style_note": "This season's top trends:\n1. Modern Ankara Power Suits\n2. Adire Minimalist Dresses\n3. Kente Statement Jackets\n4. Bogolan Streetwear\n5. Sustainable Capsule Wardrobes\n\nWould you like me to find specific pieces?", "search": null}}
+Example for off-topic: {{"is_support": true, "style_note": "I'm your Urbana Assistant and I specialize in African fashion, outfit curation, and marketplace support. I'd love to help you find the perfect piece or answer any shopping questions. What are you looking for today?", "search": null}}
+Example for shopping: {{"is_support": false, "occasion": "wedding", "print_type": "ankara", "max_price": 500, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under USD 500 — here's what our designers have for you."}}"""
 
-        # Cache key: hash of message + user_context
-        cache_key = f"ai_search:gemini:{hashlib.sha256((message + user_context).encode()).hexdigest()}"
-        cached = cache.get(cache_key)
-        if cached:
-            return cached
+    # Cache key: hash of message + user_context
+    cache_key = f"ai_search:gemini:{hashlib.sha256((message + user_context).encode()).hexdigest()}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
 
-        client = genai.Client(api_key=gemini_key)
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                client.models.generate_content,
-                model="gemini-1.5-flash-latest",
-                contents=message,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.1,
-                    response_mime_type="application/json",
-                ),
-            )
-            try:
-                response = future.result(timeout=8)
-            except concurrent.futures.TimeoutError:
-                raise TimeoutError("Gemini response timed out")
+    client = genai.Client(api_key=gemini_key)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            client.models.generate_content,
+            model="gemini-1.5-flash-latest",
+            contents=message,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.1,
+                response_mime_type="application/json",
+            ),
+        )
+        try:
+            response = future.result(timeout=8)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError("Gemini response timed out")
 
-        parsed = json.loads(response.text)
-        cache.set(cache_key, parsed, timeout=300)  # 5 minutes
-        return parsed
+    parsed = json.loads(response.text)
+    cache.set(cache_key, parsed, timeout=300)  # 5 minutes
+    return parsed
 
+
+class AiSearchView(APIView):
     # ── Main handler ──────────────────────────────────────────────────────
 
     def post(self, request):
@@ -1575,16 +1589,22 @@ Example for shopping: {{"is_support": false, "occasion": "wedding", "print_type"
             "help me track my last order": "To track your order, navigate to your Profile dashboard, click on 'Orders', and select your active order to see real-time shipping status and tracking updates.",
             "show custom tailors sizing guide": "Urbana provides a detailed Bespoke Measurement Vault under your Profile dashboard where you can store your parameters. You can also use our interactive camera FitMe tool for live visual pose alignment.",
             "how do i return a product": "To return a product, go to the 'Orders' list under your Profile dashboard, select the order, and click 'Return Item'. We accept returns within 14 days of delivery in original, unused condition.",
-            "check my urbana wallet balance": "You can view your current Urbana Wallet balance and transaction history in the 'Wallet' tab of your Profile. You can also fund it directly using standard checkout gateways (Card, Transfer, or Mobile Money)."
+            "check my urbana wallet balance": "You can view your current Urbana Wallet balance and transaction history in the 'Wallet' tab of your Profile. You can also fund it directly using standard checkout gateways (Card, Transfer, or Mobile Money).",
+        }
+        advice_answers = {
+            "suggest trending fashion styles": "Here are the hottest trends our community is loving right now:\n\n1. Modern Ankara Power Suits – Bold prints meet corporate chic.\n2. Adire Minimalist Dresses – Clean silhouettes with hand-dyed textures.\n3. Kente Statement Jackets – Layered over neutrals for maximum impact.\n4. Bogolan Streetwear – Earth-tone mud cloth paired with contemporary cuts.\n5. Sustainable Capsule Wardrobes – Mix-and-match pieces from eco-conscious designers.\n\nWould you like me to find specific pieces in any of these styles?",
+            "what is trending": "This season's top trends include:\n\n• **Ankara Blazers** – Tailored outerwear with vibrant West-African prints.\n• **Adire Jumpsuits** – One-piece hand-dyed garments for effortless elegance.\n• **Kente Accents** – Woven strips on cuffs, collars, and accessories.\n• **Minimalist Neutral Sets** – Beige, cream, and clay tones for everyday luxury.\n• **Sustainable Linens** – Breathable, ethically sourced fabrics.\n\nTap any style above to see matching pieces.",
+            "what should i wear": "I'd love to help you decide! Tell me more about the occasion (wedding, work, casual, party, traditional) and I'll curate the perfect outfit for you.",
         }
 
         if exact_query in support_answers:
             return Response(
-                {
-                    "status": "success",
-                    "style_note": support_answers[exact_query],
-                    "data": [],
-                },
+                {"status": "success", "style_note": support_answers[exact_query], "data": []},
+                status=status.HTTP_200_OK,
+            )
+        if exact_query in advice_answers:
+            return Response(
+                {"status": "success", "style_note": advice_answers[exact_query], "data": []},
                 status=status.HTTP_200_OK,
             )
 
@@ -1604,7 +1624,7 @@ Example for shopping: {{"is_support": false, "occasion": "wedding", "print_type"
 
         # Step 2 — Parse with Gemini
         try:
-            parsed_filters = self._call_gemini(message, gemini_key, user_context)
+            parsed_filters = _call_gemini(message, gemini_key, user_context)
         except Exception:
             parsed_filters = {
                 "search": message,
@@ -1622,7 +1642,7 @@ Example for shopping: {{"is_support": false, "occasion": "wedding", "print_type"
                 status=status.HTTP_200_OK,
             )
 
-        limit = int(request.GET.get("limit", 20))
+        limit = int(request.GET.get("limit", 6))
         is_fallback = False
         fallback_reason = None
 
@@ -1734,7 +1754,7 @@ class AiSuggestionsView(APIView):
             "Adire capsule wardrobe under $200",
             "Ankara gifts for a special occasion",
             "Custom tailored Agbada fit sizes",
-            "Modern African streetwear styling"
+            "Modern African streetwear"
         ]
 
         if not sample:
@@ -1796,7 +1816,7 @@ Example: ["Show me elegant Adire outfits for work", "Ankara wedding guest dress 
             "Adire capsule wardrobe under $200",
             "Ankara gifts for a special occasion",
             "Custom tailored Agbada fit sizes",
-            "Modern African streetwear styling"
+            "Modern African streetwear"
         ]
         if not products:
             return DEFAULT_SUGGESTIONS
@@ -2087,6 +2107,59 @@ class AiPersonalizedSearchView(APIView):
         if not query:
             return Response({"status": "error", "message": "Query is required."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # --- Support & Advice handling (bypass product search) ---
+        exact_query = query.lower().strip("?. ")
+        support_answers = {
+            "help me track my last order": "To track your order, navigate to your Profile dashboard, click on 'Orders', and select your active order to see real-time shipping status and tracking updates.",
+            "show custom tailors sizing guide": "Urbana provides a detailed Bespoke Measurement Vault under your Profile dashboard where you can store your parameters. You can also use our interactive camera FitMe tool for live visual pose alignment.",
+            "how do i return a product": "To return a product, go to the 'Orders' list under your Profile dashboard, select the order, and click 'Return Item'. We accept returns within 14 days of delivery in original, unused condition.",
+            "check my urbana wallet balance": "You can view your current Urbana Wallet balance and transaction history in the 'Wallet' tab of your Profile. You can also fund it directly using standard checkout gateways (Card, Transfer, or Mobile Money).",
+        }
+        advice_answers = {
+            "suggest trending fashion styles": "Here are the hottest trends our community is loving right now:\n\n1. Modern Ankara Power Suits – Bold prints meet corporate chic.\n2. Adire Minimalist Dresses – Clean silhouettes with hand-dyed textures.\n3. Kente Statement Jackets – Layered over neutrals for maximum impact.\n4. Bogolan Streetwear – Earth-tone mud cloth paired with contemporary cuts.\n5. Sustainable Capsule Wardrobes – Mix-and-match pieces from eco-conscious designers.\n\nWould you like me to find specific pieces in any of these styles?",
+            "what is trending": "This season's top trends include:\n\n• **Ankara Blazers** – Tailored outerwear with vibrant West-African prints.\n• **Adire Jumpsuits** – One-piece hand-dyed garments for effortless elegance.\n• **Kente Accents** – Woven strips on cuffs, collars, and accessories.\n• **Minimalist Neutral Sets** – Beige, cream, and clay tones for everyday luxury.\n• **Sustainable Linens** – Breathable, ethically sourced fabrics.\n\nTap any style above to see matching pieces.",
+            "what should i wear": "I'd love to help you decide! Tell me more about the occasion (wedding, work, casual, party, traditional) and I'll curate the perfect outfit for you.",
+        }
+
+        if exact_query in support_answers:
+            return Response(
+                {"status": "success", "style_note": support_answers[exact_query], "data": []},
+                status=status.HTTP_200_OK,
+            )
+        if exact_query in advice_answers:
+            return Response(
+                {"status": "success", "style_note": advice_answers[exact_query], "data": []},
+                status=status.HTTP_200_OK,
+            )
+
+        # --- Gemini parsing for shopping vs off-topic classification ---
+        gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
+        if gemini_key:
+            user = request.user
+            user_context = ""
+            if user:
+                parts = []
+                if getattr(user, 'gender', ''):
+                    parts.append(f"gender: {user.gender}")
+                if getattr(user, 'height', ''):
+                    parts.append(f"height: {user.height}")
+                if getattr(user, 'size', ''):
+                    parts.append(f"typical size: {user.size}")
+                if parts:
+                    user_context = f"User profile context (use if query doesn't contradict): {', '.join(parts)}.\n"
+            try:
+                parsed = _call_gemini(query, gemini_key, user_context)
+                if parsed.get("is_support") is True:
+                    return Response(
+                        {"status": "success", "style_note": parsed.get("style_note"), "data": []},
+                        status=status.HTTP_200_OK,
+                    )
+                # Use Gemini-extracted search keyword if available
+                if parsed.get("search"):
+                    query = parsed["search"]
+            except Exception:
+                pass  # Fall back to raw query text search
+
         user = request.user
 
         # 1. Gather user context
@@ -2097,6 +2170,8 @@ class AiPersonalizedSearchView(APIView):
         if size_recs:
             user_sizes = set(filter(None, [size_recs.top_size, size_recs.bottom_size, size_recs.shoe_size]))
 
+        MIN_RESULTS = 6
+
         # 2. Base search
         base_qs = Product.objects.filter(
             Q(name__icontains=query) |
@@ -2106,56 +2181,98 @@ class AiPersonalizedSearchView(APIView):
             avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
         )
 
-        # 3. Score and annotate each product (limit to 20; only 12 returned)
-        scored = []
-        products = list(base_qs[:20])
-        for p in products:
-            score = 0
-            notes = []
+        def _score_products(products):
+            scored = []
+            for p in products:
+                score = 0
+                notes = []
 
-            # Lookbook affinity
-            if p.id in lookbook_ids:
-                score += 30
-                notes.append("You saved a similar item.")
+                # Lookbook affinity
+                if p.id in lookbook_ids:
+                    score += 30
+                    notes.append("You saved a similar item.")
 
-            # Designer affinity
-            if p.user_id in review_designers:
-                score += 25
-                brand_name = getattr(p.user.designer_profile, 'brand_name', 'this designer')
-                notes.append(f"You have reviewed {brand_name} positively.")
+                # Designer affinity
+                if p.user_id in review_designers:
+                    score += 25
+                    brand_name = getattr(p.user.designer_profile, 'brand_name', 'this designer')
+                    notes.append(f"You have reviewed {brand_name} positively.")
 
-            # Size match (use prefetched sizes)
-            if user_sizes:
-                for s in p.sizes.all():
-                    if s.name and s.name in user_sizes:
-                        score += 20
-                        notes.append("Available in your size.")
-                        break
+                # Size match (use prefetched sizes)
+                if user_sizes:
+                    for s in p.sizes.all():
+                        if s.name and s.name in user_sizes:
+                            score += 20
+                            notes.append("Available in your size.")
+                            break
 
-            # Popularity
-            score += min(p.popularity_score / 100, 15)
-            score += p.avg_rating * 2 if p.avg_rating else 0
+                # Popularity
+                score += min(p.popularity_score / 100, 15)
+                score += p.avg_rating * 2 if p.avg_rating else 0
 
-            scored.append({
-                "product": p,
-                "score": score,
-                "notes": notes,
-            })
+                scored.append({
+                    "product": p,
+                    "score": score,
+                    "notes": notes,
+                })
+            scored.sort(key=lambda x: x["score"], reverse=True)
+            return scored
 
-        scored.sort(key=lambda x: x["score"], reverse=True)
+        # 3. Score base results
+        products = list(base_qs[:6])
+        is_fallback = False
 
-        # 4. Build response
+        # 4. Fallback to trending if base search yields too few results
+        if len(products) < MIN_RESULTS:
+            fallback_qs = Product.objects.filter(
+                is_published=True, is_admin_published=True, is_active=True
+            ).exclude(media=False).select_related("user__designer_profile", "category").prefetch_related("sizes").annotate(
+                avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
+            ).order_by("-popularity_score", "-created_at")[:6]
+
+            # Exclude products already in base results to avoid duplicates
+            existing_ids = {p.id for p in products}
+            fallback_products = [p for p in fallback_qs if p.id not in existing_ids]
+
+            # Combine base + fallback, prioritizing base results
+            products = products + fallback_products
+            is_fallback = True
+
+        scored = _score_products(products)
+
+        # 5. Build response
         results = []
-        for item in scored[:12]:
+        for item in scored[:6]:
             ser = ProductSerializer(item["product"], context={"request": request}).data
             ser["ai_score"] = item["score"]
             ser["ai_notes"] = item["notes"]
             results.append(ser)
 
+        is_personalized = bool(lookbook_ids or review_designers or user_sizes)
+
+        if is_fallback and not (lookbook_ids or review_designers or user_sizes):
+            style_note = (
+                "I couldn't find exact matches for that right now, "
+                "but here are some popular pieces our community is loving."
+            )
+        elif is_fallback:
+            style_note = (
+                "I couldn't find exact matches for that right now, "
+                "but here are some personalized picks based on your profile."
+            )
+        else:
+            style_note = (
+                "Here are personalized recommendations based on your style profile."
+                if is_personalized
+                else "Here are matching pieces from our collection."
+            )
+
         return Response({
             "status": "success",
+            "style_note": style_note,
             "data": results,
-            "personalized": bool(lookbook_ids or review_designers or user_sizes),
+            "personalized": is_personalized,
+            "is_fallback": is_fallback,
         }, status=status.HTTP_200_OK)
 
 
@@ -2227,7 +2344,7 @@ class AiPhotoFitMeView(APIView):
                 photo_bytes = photo.read()
                 mime = photo.content_type or "image/jpeg"
 
-                prompt = f"""You are a virtual fashion stylist for Urbana Africa.
+                prompt = f"""You are a virtual assistant for Urbana Africa.
 Analyze the user's body in the uploaded photo and the product details below.
 
 Product: {product.name}

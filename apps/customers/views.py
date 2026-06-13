@@ -44,8 +44,26 @@ class CheckoutPreviewView(APIView):
             elif country:
                 buyer_country = country
 
-            cart_items = CartItem.objects.filter(customer=customer).select_related('product')
-            if not cart_items.exists():
+            # Support inline items from AI chat checkout
+            inline_items = request.data.get('items')
+            if inline_items and isinstance(inline_items, list):
+                product_ids = [i.get('product_id') for i in inline_items if i.get('product_id')]
+                products = Product.objects.filter(id__in=product_ids)
+                product_map = {p.id: p for p in products}
+                cart_items = []
+                for i in inline_items:
+                    pid = i.get('product_id')
+                    if pid and pid in product_map:
+                        # Fake a cart-like object for reuse
+                        class FakeItem:
+                            def __init__(self, prod, qty):
+                                self.product = prod
+                                self.quantity = qty
+                        cart_items.append(FakeItem(product_map[pid], i.get('quantity', 1)))
+            else:
+                cart_items = list(CartItem.objects.filter(customer=customer).select_related('product'))
+
+            if not cart_items:
                 return Response({
                     "status": "success",
                     "data": {
@@ -158,8 +176,33 @@ class CheckoutView(APIView):
 
             buyer_country = shipping_address.country or 'US'
 
-            cart_items = CartItem.objects.filter(customer=customer).select_related('product')
-            if not cart_items.exists():
+            # Support inline items from AI chat checkout
+            inline_items = request.data.get('items')
+            if inline_items and isinstance(inline_items, list):
+                product_ids = [i.get('product_id') for i in inline_items if i.get('product_id')]
+                products = Product.objects.filter(id__in=product_ids)
+                product_map = {p.id: p for p in products}
+                cart_items = []
+                for i in inline_items:
+                    pid = i.get('product_id')
+                    if pid and pid in product_map:
+                        class InlineItem:
+                            def __init__(self, prod, qty, color='', size=''):
+                                self.product = prod
+                                self.quantity = qty
+                                self.color = color
+                                self.size = size
+                                self.properties = {}
+                        cart_items.append(InlineItem(
+                            product_map[pid],
+                            i.get('quantity', 1),
+                            i.get('color', ''),
+                            i.get('size', '')
+                        ))
+            else:
+                cart_items = list(CartItem.objects.filter(customer=customer).select_related('product'))
+
+            if not cart_items:
                 return Response({"status":"error", "message":"Cart is empty."}, status=400)
             for item in cart_items:
                 if item.product.stock < item.quantity:
@@ -295,13 +338,21 @@ class CheckoutView(APIView):
                     'shipping_address_str': f"{item_shipping_address.line1}, {item_shipping_address.city}, {item_shipping_address.country}",
                 }
 
+                # Resolve color/size strings to model instances (for AI inline items)
+                color_obj = item.color
+                size_obj = item.size
+                if isinstance(item.color, str) and item.color:
+                    color_obj = item.product.colors.filter(name__iexact=item.color).first()
+                if isinstance(item.size, str) and item.size:
+                    size_obj = item.product.sizes.filter(name__iexact=item.size).first()
+
                 order_item = OrderItem.objects.create(
                     order=order,
                     tracking_number = f"URBITR-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M')}-{(random() * 99999999990).__round__()}",
                     properties = item_properties,
                     product=item.product,
-                    color=item.color,
-                    size=item.size,
+                    color=color_obj,
+                    size=size_obj,
                     quantity=item.quantity,
                     sub_total=entry['item_total'],
                     amount=breakdown['total_price']
@@ -329,8 +380,9 @@ class CheckoutView(APIView):
                         link=f"/products/edit/{item.product.id}",
                     )
 
-            # 7️⃣ Clear cart
-            cart_items.delete()
+            # 7️⃣ Clear cart (only if items came from cart, not inline AI items)
+            if not (inline_items and isinstance(inline_items, list)):
+                CartItem.objects.filter(customer=customer).delete()
 
             # 8️⃣ Create Tracking
             estimated_days = 3
@@ -419,11 +471,29 @@ class ShippingRatesView(APIView):
             except Address.DoesNotExist:
                 pass
 
-        # Cart items with designer info
-        cart_items = CartItem.objects.filter(customer=customer).select_related(
-            'product', 'product__user__designer_profile'
-        )
-        if not cart_items.exists():
+        # Support inline items from AI chat checkout
+        inline_items = request.data.get('items')
+        if inline_items and isinstance(inline_items, list):
+            product_ids = [i.get('product_id') for i in inline_items if i.get('product_id')]
+            products = Product.objects.filter(id__in=product_ids).select_related(
+                'user__designer_profile'
+            )
+            product_map = {p.id: p for p in products}
+            cart_items = []
+            for i in inline_items:
+                pid = i.get('product_id')
+                if pid and pid in product_map:
+                    class FakeItem:
+                        def __init__(self, prod, qty):
+                            self.product = prod
+                            self.quantity = qty
+                    cart_items.append(FakeItem(product_map[pid], i.get('quantity', 1)))
+        else:
+            cart_items = list(CartItem.objects.filter(customer=customer).select_related(
+                'product', 'product__user__designer_profile'
+            ))
+
+        if not cart_items:
             return Response({"status": "success", "data": {"rates": [], "shipment_groups": []}})
 
         # Group items by designer

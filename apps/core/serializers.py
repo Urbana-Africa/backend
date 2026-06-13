@@ -83,10 +83,14 @@ class BrandSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     media = MediaAssetSerializer(many=True, read_only=True)
     colors = ColorSerializer(many=True, read_only=True)
+    sizes = SizesSerializer(many=True, read_only=True)
     country_of_origin = CountrySerializer(read_only=True)
     fit_me_image = serializers.ImageField(required=False, allow_null=True)
     avg_rating = serializers.SerializerMethodField(read_only=True)
     currency_code = serializers.SerializerMethodField(read_only=True)
+    thumbnail = serializers.SerializerMethodField(read_only=True)
+    designer_name = serializers.SerializerMethodField(read_only=True)
+    has_try_on = serializers.SerializerMethodField(read_only=True)
     colors_input = serializers.JSONField(
         write_only=True,
         required=False,
@@ -108,6 +112,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "category",
             "categories",
             "subcategory",
+            "brand",
             "material",
             "colors",
             "sizes",
@@ -117,6 +122,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "is_published",
             "featured",
             "media",
+            "thumbnail",
+            "designer_name",
             "is_sustainable",
             "sustainability_notes",
             "availability_type",
@@ -129,12 +136,29 @@ class ProductSerializer(serializers.ModelSerializer):
             "fit_stats",
             "size_chart_image",
             "fit_me_image",
+            "has_try_on",
             "avg_rating",
             "colors_input",
         )
 
     def get_currency_code(self, obj):
         return obj.currency.code if obj.currency else "USD"
+
+    def get_thumbnail(self, obj):
+        first_image = obj.media.filter(media_type="image").first()
+        if first_image and first_image.file:
+            return first_image.file.url
+        return None
+
+    def get_designer_name(self, obj):
+        if obj.user and hasattr(obj.user, 'designer_profile') and obj.user.designer_profile:
+            return obj.user.designer_profile.brand_name
+        if obj.brand:
+            return obj.brand.name
+        return None
+
+    def get_has_try_on(self, obj):
+        return bool(obj.fit_me_image)
 
     def get_avg_rating(self, obj):
         avg = obj.reviews.filter(is_approved=True).aggregate(

@@ -1490,7 +1490,7 @@ class AiSearchView(APIView):
 # ── Gemini helper (module-level so both views can use it) ─────────────
 
 def _call_gemini(message, gemini_key, user_context=""):
-    system_prompt = f"""You are a fashion assistant for Urbana Africa, a pan-African fashion marketplace.
+    system_prompt = f"""You are Zuri, a warm, personal fashion companion for Urbana Africa, a pan-African fashion marketplace. Speak like a friendly human stylist — not a robot. Use "I", "me", and "my" naturally. Avoid stiff or overly formal language.
 Analyze the user's natural language query.
 First, determine if the message is:
 A) a customer support/service question (returns, refunds, order tracking, wallet balance, custom tailoring guide)
@@ -1510,7 +1510,7 @@ If C:
 
 If D (off-topic):
 - Set `is_support` to true.
-- In `style_note`, write a polite, friendly message redirecting the user back to fashion/shopping topics. Example: "I'm your Urbana Assistant and I specialize in African fashion, outfit curation, and marketplace support. I'd love to help you find the perfect piece or answer any shopping questions. What are you looking for today?"
+- In `style_note`, write a polite but firm message telling the user you only answer fashion, shopping, and Urbana marketplace questions. Do NOT answer the off-topic question at all. Redirect them clearly. Example: "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?"
 - Set all other parameters to null.
 
 {user_context}
@@ -1533,7 +1533,7 @@ Rules:
 Respond ONLY with valid JSON. No markdown, no extra text.
 Example for support: {{"is_support": true, "style_note": "To return a product, navigate to your Profile, go to 'Orders', select the item, and click 'Return Item' within 14 days of delivery.", "search": null}}
 Example for advice: {{"is_support": true, "style_note": "This season's top trends:\n1. Modern Ankara Power Suits\n2. Adire Minimalist Dresses\n3. Kente Statement Jackets\n4. Bogolan Streetwear\n5. Sustainable Capsule Wardrobes\n\nWould you like me to find specific pieces?", "search": null}}
-Example for off-topic: {{"is_support": true, "style_note": "I'm your Urbana Assistant and I specialize in African fashion, outfit curation, and marketplace support. I'd love to help you find the perfect piece or answer any shopping questions. What are you looking for today?", "search": null}}
+Example for off-topic: {{"is_support": true, "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?", "search": null}}
 Example for shopping: {{"is_support": false, "occasion": "wedding", "print_type": "ankara", "max_price": 500, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under USD 500 — here's what our designers have for you."}}"""
 
     # Cache key: hash of message + user_context
@@ -1771,7 +1771,7 @@ class AiSuggestionsView(APIView):
             )
         context_text = "\n".join(context_items)
 
-        system_prompt = f"""You are a creative fashion assistant for Urbana Africa.
+        system_prompt = f"""You are Zuri, a creative fashion companion for Urbana Africa.
 Your task is to generate 5 inspiring, natural-sounding search prompts that a user could use in our AI Search, BASED EXCLUSIVELY on the actual products in our catalog.
 
 Here is a sample of our current inventory:
@@ -2011,7 +2011,7 @@ class AiTrendingView(APIView):
             try:
                 cat_context = ", ".join([c["product__category__name"] for c in trending_cats if c["product__category__name"]])
                 designer_context = ", ".join([d["designer__brand_name"] for d in trending_designers if d["designer__brand_name"]])
-                system_prompt = f"""You are a creative fashion assistant for Urbana Africa.
+                system_prompt = f"""You are Zuri, a creative fashion companion for Urbana Africa.
 Generate 5 inspiring, natural-sounding search prompts based on current trends:
 Trending categories: {cat_context}
 Trending designers: {designer_context}
@@ -2344,7 +2344,7 @@ class AiPhotoFitMeView(APIView):
                 photo_bytes = photo.read()
                 mime = photo.content_type or "image/jpeg"
 
-                prompt = f"""You are a virtual assistant for Urbana Africa.
+                prompt = f"""You are Zuri, a personal fashion companion for Urbana Africa.
 Analyze the user's body in the uploaded photo and the product details below.
 
 Product: {product.name}

@@ -52,6 +52,7 @@ from .views import (
     AiTryOnView,
     SubscriptionPlanListView,
     UserSubscriptionView,
+    SubscribeView,
 )
 
 # -------------------------------
@@ -140,6 +141,7 @@ urlpatterns += [
     # � Subscriptions
     path("subscription-plans", SubscriptionPlanListView.as_view(), name="core-subscription-plans"),
     path("my-subscription", UserSubscriptionView.as_view(), name="core-my-subscription"),
+    path("subscribe", SubscribeView.as_view(), name="core-subscribe"),
 
     # �📊 Tracking & Analytics
     path("track", TrackEventsView.as_view(), name="track-events"),

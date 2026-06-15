@@ -1480,11 +1480,15 @@ class AiSearchView(APIView):
         return qs
 
     def _apply_loose_filters(self, qs, f):
-        """Style/occasion/print only — drop price, availability, sustainability."""
+        """Loosen non-price filters only — always preserve budget constraints."""
         if f.get("occasion"):
             qs = qs.filter(occasion=f["occasion"])
         if f.get("print_type"):
             qs = qs.filter(print_type=f["print_type"])
+        if f.get("min_price"):
+            qs = qs.filter(price__gte=f["min_price"])
+        if f.get("max_price"):
+            qs = qs.filter(price__lte=f["max_price"])
         return qs
 
 # ── Gemini helper (module-level so both views can use it) ─────────────
@@ -1622,13 +1626,37 @@ class AiSearchView(APIView):
             if parts:
                 user_context = f"User profile context (use if query doesn't contradict): {', '.join(parts)}.\n"
 
+        # Step 1.5 — Lightweight pre-classifier (keyword guard)
+        off_topic_keywords = [
+            "weather", "forecast", "temperature", "rain",
+            "math", "calculate", "solve", "equation", "formula",
+            "code", "programming", "python", "javascript", "bug", "debug",
+            "news", "politics", "election", "president", "government",
+            "recipe", "cook", "ingredient", "food",
+            "sports", "football", "basketball", "soccer", "cricket",
+            "movie", "film", "actor", "netflix",
+            "stock", "crypto", "bitcoin", "invest", "forex",
+            "medical", "diagnosis", "symptom", "doctor", "medicine",
+        ]
+        msg_lower = message.lower()
+        if any(k in msg_lower for k in off_topic_keywords):
+            return Response(
+                {
+                    "status": "success",
+                    "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?",
+                    "data": [],
+                },
+                status=status.HTTP_200_OK,
+            )
+
         # Step 2 — Parse with Gemini
         try:
             parsed_filters = _call_gemini(message, gemini_key, user_context)
         except Exception:
             parsed_filters = {
-                "search": message,
-                "style_note": "Here\u2019s what I found based on your description.",
+                "is_support": True,
+                "search": None,
+                "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?",
             }
 
         # Handle support response from Gemini
@@ -1670,32 +1698,51 @@ class AiSearchView(APIView):
                 original = parsed_filters.get("style_note", "")
                 if parsed_filters.get("max_price"):
                     parsed_filters["style_note"] = (
-                        f"{original} I couldn\u2019t find enough pieces within that exact budget, "
-                        f"so I\u2019ve broadened the results \u2014 prices may vary."
+                        f"{original} I couldnt find enough pieces with those exact details, "
+                        f"so Ive loosened the style filters while keeping your budget in mind."
                     )
 
-        # Step 4 — Tier 3: Keyword-only
+        # Step 4 — Tier 3: Keyword-only + budget preserved
         if not has_results and parsed_filters.get("search"):
             qs3 = self._base_qs()
             qs3 = self._apply_keyword(qs3, parsed_filters.get("search"))
+            if parsed_filters.get("min_price"):
+                qs3 = qs3.filter(price__gte=parsed_filters["min_price"])
+            if parsed_filters.get("max_price"):
+                qs3 = qs3.filter(price__lte=parsed_filters["max_price"])
             qs3 = qs3.order_by("-popularity_score", "-created_at").distinct()
             if _has_enough(qs3, self.MIN_RESULTS):
                 qs = qs3
                 has_results = True
                 is_fallback, fallback_reason = True, "keyword_only"
                 parsed_filters["style_note"] = (
-                    "I couldn\u2019t find an exact match, but here are the closest pieces "
+                    "I couldnt find an exact match, but here are the closest pieces "
                     "our designers have to offer \u2014 styled with your vibe in mind."
                 )
 
-        # Step 5 — Tier 4: Trending fallback
+        # Step 5 — Tier 4: Trending fallback with budget preserved
         if not has_results:
-            qs = self._base_qs().order_by("-popularity_score", "-created_at").distinct()
-            is_fallback, fallback_reason = True, "trending_fallback"
-            parsed_filters["style_note"] = (
-                "I couldn\u2019t find pieces that exactly match your description right now \u2014 "
-                "but here are the most popular looks our community is loving this season."
-            )
+            qs4 = self._base_qs().order_by("-popularity_score", "-created_at").distinct()
+            if parsed_filters.get("min_price"):
+                qs4 = qs4.filter(price__gte=parsed_filters["min_price"])
+            if parsed_filters.get("max_price"):
+                qs4 = qs4.filter(price__lte=parsed_filters["max_price"])
+            if _has_enough(qs4, self.MIN_RESULTS):
+                qs = qs4
+                has_results = True
+                is_fallback, fallback_reason = True, "trending_fallback"
+                parsed_filters["style_note"] = (
+                    "I couldnt find pieces that exactly match your description right now \u2014 "
+                    "but here are the most popular looks our community is loving this season."
+                )
+            else:
+                # Budget too tight — be honest rather than showing over-budget items
+                qs = qs4
+                is_fallback, fallback_reason = True, "budget_empty"
+                parsed_filters["style_note"] = (
+                    f"I couldnt find anything in that price range right now. "
+                    f"Would you like me to broaden the budget or suggest alternatives?"
+                )
 
         paginator = Paginator(qs, limit)
         page_obj = paginator.get_page(1)
@@ -2107,166 +2154,92 @@ class AiPersonalizedSearchView(APIView):
         if not query:
             return Response({"status": "error", "message": "Query is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # --- Support & Advice handling (bypass product search) ---
-        exact_query = query.lower().strip("?. ")
-        support_answers = {
-            "help me track my last order": "To track your order, navigate to your Profile dashboard, click on 'Orders', and select your active order to see real-time shipping status and tracking updates.",
-            "show custom tailors sizing guide": "Urbana provides a detailed Bespoke Measurement Vault under your Profile dashboard where you can store your parameters. You can also use our interactive camera FitMe tool for live visual pose alignment.",
-            "how do i return a product": "To return a product, go to the 'Orders' list under your Profile dashboard, select the order, and click 'Return Item'. We accept returns within 14 days of delivery in original, unused condition.",
-            "check my urbana wallet balance": "You can view your current Urbana Wallet balance and transaction history in the 'Wallet' tab of your Profile. You can also fund it directly using standard checkout gateways (Card, Transfer, or Mobile Money).",
-        }
-        advice_answers = {
-            "suggest trending fashion styles": "Here are the hottest trends our community is loving right now:\n\n1. Modern Ankara Power Suits – Bold prints meet corporate chic.\n2. Adire Minimalist Dresses – Clean silhouettes with hand-dyed textures.\n3. Kente Statement Jackets – Layered over neutrals for maximum impact.\n4. Bogolan Streetwear – Earth-tone mud cloth paired with contemporary cuts.\n5. Sustainable Capsule Wardrobes – Mix-and-match pieces from eco-conscious designers.\n\nWould you like me to find specific pieces in any of these styles?",
-            "what is trending": "This season's top trends include:\n\n• **Ankara Blazers** – Tailored outerwear with vibrant West-African prints.\n• **Adire Jumpsuits** – One-piece hand-dyed garments for effortless elegance.\n• **Kente Accents** – Woven strips on cuffs, collars, and accessories.\n• **Minimalist Neutral Sets** – Beige, cream, and clay tones for everyday luxury.\n• **Sustainable Linens** – Breathable, ethically sourced fabrics.\n\nTap any style above to see matching pieces.",
-            "what should i wear": "I'd love to help you decide! Tell me more about the occasion (wedding, work, casual, party, traditional) and I'll curate the perfect outfit for you.",
-        }
+        # --- Reuse AiSearchView for guardrails + fallback logic ---
+        # Build a synthetic request so AiSearchView can do its full pipeline
+        from rest_framework.request import Request as DRFRequest
+        ai_view = AiSearchView()
+        ai_view.request = request
+        ai_view.format_kwarg = None
 
-        if exact_query in support_answers:
-            return Response(
-                {"status": "success", "style_note": support_answers[exact_query], "data": []},
-                status=status.HTTP_200_OK,
-            )
-        if exact_query in advice_answers:
-            return Response(
-                {"status": "success", "style_note": advice_answers[exact_query], "data": []},
-                status=status.HTTP_200_OK,
-            )
+        # Temporarily override request.data so AiSearchView sees the query as 'message'
+        original_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        request.data = {"message": query}
+        try:
+            response = ai_view.post(request)
+        finally:
+            request.data = original_data
 
-        # --- Gemini parsing for shopping vs off-topic classification ---
-        gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
-        if gemini_key:
-            user = request.user
-            user_context = ""
-            if user:
-                parts = []
-                if getattr(user, 'gender', ''):
-                    parts.append(f"gender: {user.gender}")
-                if getattr(user, 'height', ''):
-                    parts.append(f"height: {user.height}")
-                if getattr(user, 'size', ''):
-                    parts.append(f"typical size: {user.size}")
-                if parts:
-                    user_context = f"User profile context (use if query doesn't contradict): {', '.join(parts)}.\n"
-            try:
-                parsed = _call_gemini(query, gemini_key, user_context)
-                if parsed.get("is_support") is True:
-                    return Response(
-                        {"status": "success", "style_note": parsed.get("style_note"), "data": []},
-                        status=status.HTTP_200_OK,
-                    )
-                # Use Gemini-extracted search keyword if available
-                if parsed.get("search"):
-                    query = parsed["search"]
-            except Exception:
-                pass  # Fall back to raw query text search
+        # If AiSearchView returned a support/off-topic response, pass it through
+        if response.status_code != status.HTTP_200_OK:
+            return response
+        resp_data = response.data
+        if not resp_data.get("data"):
+            return Response(resp_data, status=status.HTTP_200_OK)
 
+        products = resp_data.get("data", [])
+        is_fallback = resp_data.get("is_fallback", False)
+        style_note = resp_data.get("style_note", "")
+
+        # --- Personalization scoring ---
         user = request.user
-
-        # 1. Gather user context
         lookbook_ids = set(Product.objects.filter(lookbooks__user=user).values_list("id", flat=True))
         review_designers = set(Review.objects.filter(customer__user=user).values_list("product__user", flat=True))
         size_recs = SizeRecommendation.objects.filter(user=user).first()
-        user_sizes = set()
-        if size_recs:
-            user_sizes = set(filter(None, [size_recs.top_size, size_recs.bottom_size, size_recs.shoe_size]))
+        user_sizes = set(filter(None, [size_recs.top_size, size_recs.bottom_size, size_recs.shoe_size])) if size_recs else set()
 
-        MIN_RESULTS = 6
-
-        # 2. Base search
-        base_qs = Product.objects.filter(
-            Q(name__icontains=query) |
-            Q(description__icontains=query) |
-            Q(category__name__icontains=query),
-            stock__gt=0
-        ).select_related("user__designer_profile", "category").prefetch_related("sizes").annotate(
+        product_ids = [p["id"] for p in products]
+        db_products = Product.objects.filter(id__in=product_ids).select_related("user__designer_profile", "category").prefetch_related("sizes").annotate(
             avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
         )
+        db_map = {str(p.id): p for p in db_products}
 
-        def _score_products(products):
-            scored = []
-            for p in products:
-                score = 0
-                notes = []
+        scored = []
+        for p_data in products:
+            p = db_map.get(str(p_data["id"]))
+            if not p:
+                continue
+            score = 0
+            notes = []
 
-                # Lookbook affinity
-                if p.id in lookbook_ids:
-                    score += 30
-                    notes.append("You saved a similar item.")
+            if p.id in lookbook_ids:
+                score += 30
+                notes.append("You saved a similar item.")
 
-                # Designer affinity
-                if p.user_id in review_designers:
-                    score += 25
-                    brand_name = getattr(p.user.designer_profile, 'brand_name', 'this designer')
-                    notes.append(f"You have reviewed {brand_name} positively.")
+            if p.user_id in review_designers:
+                score += 25
+                brand_name = getattr(p.user.designer_profile, 'brand_name', 'this designer')
+                notes.append(f"You have reviewed {brand_name} positively.")
 
-                # Size match (use prefetched sizes)
-                if user_sizes:
-                    for s in p.sizes.all():
-                        if s.name and s.name in user_sizes:
-                            score += 20
-                            notes.append("Available in your size.")
-                            break
+            if user_sizes:
+                for s in p.sizes.all():
+                    if s.name and s.name in user_sizes:
+                        score += 20
+                        notes.append("Available in your size.")
+                        break
 
-                # Popularity
-                score += min(p.popularity_score / 100, 15)
-                score += p.avg_rating * 2 if p.avg_rating else 0
+            score += min(p.popularity_score / 100, 15)
+            score += p.avg_rating * 2 if p.avg_rating else 0
 
-                scored.append({
-                    "product": p,
-                    "score": score,
-                    "notes": notes,
-                })
-            scored.sort(key=lambda x: x["score"], reverse=True)
-            return scored
+            ser = ProductSerializer(p, context={"request": request}).data
+            ser["ai_score"] = score
+            ser["ai_notes"] = notes
+            scored.append((score, ser))
 
-        # 3. Score base results
-        products = list(base_qs[:6])
-        is_fallback = False
-
-        # 4. Fallback to trending if base search yields too few results
-        if len(products) < MIN_RESULTS:
-            fallback_qs = Product.objects.filter(
-                is_published=True, is_admin_published=True, is_active=True, stock__gt=0
-            ).exclude(media=False).select_related("user__designer_profile", "category").prefetch_related("sizes").annotate(
-                avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
-            ).order_by("-popularity_score", "-created_at")[:6]
-
-            # Exclude products already in base results to avoid duplicates
-            existing_ids = {p.id for p in products}
-            fallback_products = [p for p in fallback_qs if p.id not in existing_ids]
-
-            # Combine base + fallback, prioritizing base results
-            products = products + fallback_products
-            is_fallback = True
-
-        scored = _score_products(products)
-
-        # 5. Build response
-        results = []
-        for item in scored[:6]:
-            ser = ProductSerializer(item["product"], context={"request": request}).data
-            ser["ai_score"] = item["score"]
-            ser["ai_notes"] = item["notes"]
-            results.append(ser)
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results = [s for _, s in scored]
 
         is_personalized = bool(lookbook_ids or review_designers or user_sizes)
 
-        if is_fallback and not (lookbook_ids or review_designers or user_sizes):
-            style_note = (
-                "I couldn't find exact matches for that right now, "
-                "but here are some popular pieces our community is loving."
-            )
-        elif is_fallback:
+        if is_fallback:
             style_note = (
                 "I couldn't find exact matches for that right now, "
                 "but here are some personalized picks based on your profile."
+                if is_personalized else
+                "I couldn't find exact matches for that right now, "
+                "but here are some popular pieces our community is loving."
             )
-        else:
-            style_note = (
-                "Here are personalized recommendations based on your style profile."
-                if is_personalized
-                else "Here are matching pieces from our collection."
-            )
+        elif is_personalized:
+            style_note = "Here are personalized recommendations based on your style profile."
 
         return Response({
             "status": "success",
@@ -2544,3 +2517,56 @@ class UserSubscriptionView(APIView):
             return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
         except UserSubscription.DoesNotExist:
             return Response({"status": "success", "data": None}, status=status.HTTP_200_OK)
+
+
+class SubscribeView(APIView):
+    """POST /core/subscribe — start a subscription and return an invoice for payment."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        plan_tier = request.data.get("plan_tier")
+        amount = request.data.get("amount")
+
+        if not plan_tier or amount is None:
+            return Response(
+                {"status": "error", "message": "plan_tier and amount are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            plan = SubscriptionPlan.objects.get(tier=plan_tier, is_active=True)
+        except SubscriptionPlan.DoesNotExist:
+            return Response(
+                {"status": "error", "message": "Invalid subscription plan."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Create or update user subscription (pending payment)
+        sub, _ = UserSubscription.objects.update_or_create(
+            user=request.user,
+            defaults={
+                "plan": plan,
+                "status": "pending",
+                "started_at": timezone.now(),
+            },
+        )
+
+        # Create invoice for payment
+        from apps.customers.models import Invoice
+        invoice = Invoice.objects.create(
+            user=request.user,
+            amount=amount,
+            currency="USD",
+            description=f"Urbana {plan.name} subscription",
+            status="pending",
+        )
+
+        return Response(
+            {
+                "status": "success",
+                "message": "Subscription initiated. Proceed to payment.",
+                "invoice": {"id": str(invoice.id), "amount": amount, "currency": "USD"},
+                "subscription": UserSubscriptionSerializer(sub).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )

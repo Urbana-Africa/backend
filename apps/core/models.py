@@ -679,6 +679,7 @@ class SubscriptionPlan(models.Model):
         FREE = "free", "Free"
         STYLE_SEEKER = "style_seeker", "Style Seeker"
         STYLE_ICON = "style_icon", "Style Icon"
+        COUTURE = "couture", "Couture"
 
     name = models.CharField(max_length=50)
     slug = models.SlugField(unique=True)
@@ -708,6 +709,7 @@ class SubscriptionPlan(models.Model):
 class UserSubscription(models.Model):
     class Status(models.TextChoices):
         ACTIVE = "active", "Active"
+        PENDING = "pending", "Pending"
         CANCELLED = "cancelled", "Cancelled"
         EXPIRED = "expired", "Expired"
 

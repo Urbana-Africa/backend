@@ -1491,95 +1491,82 @@ class AiSearchView(APIView):
             qs = qs.filter(price__lte=f["max_price"])
         return qs
 
-# ── Gemini helper (module-level so both views can use it) ─────────────
+    # ── Canonical cache helpers ───────────────────────────────────────────
 
-def _call_gemini(message, gemini_key, user_context=""):
-    system_prompt = f"""You are Zuri, a warm, personal fashion companion for Urbana Africa, a pan-African fashion marketplace. Speak like a friendly human stylist — not a robot. Use "I", "me", and "my" naturally. Avoid stiff or overly formal language.
-Analyze the user's natural language query.
-First, determine if the message is:
-A) a customer support/service question (returns, refunds, order tracking, wallet balance, custom tailoring guide)
-B) a fashion advice/trending question ("suggest trending styles", "what should I wear", "what is in fashion", general fashion tips)
-C) a specific shopping/product search query (looking for dresses, suits, shoes, etc.)
-D) completely off-topic (not related to fashion, shopping, or Urbana — e.g. weather, politics, math homework, general trivia)
+    def _build_canonical_key(self, filters):
+        """Deterministic cache key from parsed filters (cross-user, language-agnostic)."""
+        parts = []
+        if filters.get("search"):
+            parts.append(f"q={filters['search']}")
+        if filters.get("occasion"):
+            parts.append(f"occ={filters['occasion']}")
+        if filters.get("print_type"):
+            parts.append(f"print={filters['print_type']}")
+        if filters.get("availability_type"):
+            parts.append(f"avail={filters['availability_type']}")
+        if filters.get("is_sustainable"):
+            parts.append("sust=1")
+        if filters.get("min_price"):
+            parts.append(f"min={filters['min_price']}")
+        if filters.get("max_price"):
+            parts.append(f"max={filters['max_price']}")
+        # Version v2 bumps cache to handle fixed style_note override logic
+        return "ai_search:results:v2:" + "|".join(sorted(parts))
 
-If A or B:
-- Set `is_support` to true.
-- In `style_note`, write a direct, highly helpful, friendly and complete answer. For fashion advice, give concrete, inspiring suggestions with examples.
-- Set all other parameters (occasion, print_type, price, search, etc.) to null.
-
-If C:
-- Set `is_support` to false.
-- Extract structured search parameters from the user's natural language query.
-- Set `style_note` to a warm, friendly 1-2 sentence summary of what you understood.
-
-If D (off-topic):
-- Set `is_support` to true.
-- In `style_note`, write a polite but firm message telling the user you only answer fashion, shopping, and Urbana marketplace questions. Do NOT answer the off-topic question at all. Redirect them clearly. Example: "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?"
-- Set all other parameters to null.
-
-{user_context}
-Available product fields:
-- occasion: "wedding" | "work" | "casual" | "party" | "traditional" | "other"
-- print_type: "ankara" | "adire" | "kente" | "bogolan" | "other"
-- availability_type: "ready_to_ship" | "made_to_order" | "pre_order" | "rentable"
-- is_sustainable: true | false
-- min_price: number in USD (only if user explicitly mentions a minimum price)
-- max_price: number in USD (only if user mentions a budget or maximum)
-- search: 1-3 keywords describing the clothing type (e.g. "dress", "agbada", "jumpsuit", "headpiece")
-- style_note: The response text to display to the user.
-
-Rules:
-- Only set fields clearly implied by the query — do not guess.
-- If price is vague ("affordable", "cheap"), do NOT set min_price/max_price.
-- style_note must always be present.
-- If the user mentions gender (male/female) in their query, respect it. Otherwise use the user profile context provided above.
-
-Respond ONLY with valid JSON. No markdown, no extra text.
-Example for support: {{"is_support": true, "style_note": "To return a product, navigate to your Profile, go to 'Orders', select the item, and click 'Return Item' within 14 days of delivery.", "search": null}}
-Example for advice: {{"is_support": true, "style_note": "This season's top trends:\n1. Modern Ankara Power Suits\n2. Adire Minimalist Dresses\n3. Kente Statement Jackets\n4. Bogolan Streetwear\n5. Sustainable Capsule Wardrobes\n\nWould you like me to find specific pieces?", "search": null}}
-Example for off-topic: {{"is_support": true, "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?", "search": null}}
-Example for shopping: {{"is_support": false, "occasion": "wedding", "print_type": "ankara", "max_price": 500, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under USD 500 — here's what our designers have for you."}}"""
-
-    # Cache key: hash of message + user_context
-    cache_key = f"ai_search:gemini:{hashlib.sha256((message + user_context).encode()).hexdigest()}"
-    cached = cache.get(cache_key)
-    if cached:
-        return cached
-
-    client = genai.Client(api_key=gemini_key)
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(
-            client.models.generate_content,
-            model="gemini-1.5-flash-latest",
-            contents=message,
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.1,
-                response_mime_type="application/json",
-            ),
-        )
+    def _get_cached_meta(self, canonical_key):
+        """Check Django cache then DB for search result metadata (product IDs + flags).
+        Gracefully handles missing Redis by falling back to DB-only mode."""
+        from apps.core.models import AiQueryCache
+        # Layer 1: Django cache (Redis / LocMem)
         try:
-            response = future.result(timeout=8)
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError("Gemini response timed out")
+            cached = cache.get(canonical_key)
+            if cached:
+                return cached
+        except Exception:
+            pass  # Redis down → skip to DB layer
+        # Layer 2: Persistent DB cache
+        try:
+            db_cache = AiQueryCache.objects.get(canonical_key=canonical_key)
+            db_cache.hit_count += 1
+            db_cache.save(update_fields=["hit_count", "updated_at"])
+            meta = {
+                "product_ids": db_cache.product_ids,
+                "parsed_filters": db_cache.parsed_filters,
+            }
+            try:
+                cache.set(canonical_key, meta, timeout=900)  # 15 min
+            except Exception:
+                pass  # Redis down → still return DB result
+            return meta
+        except AiQueryCache.DoesNotExist:
+            return None
 
-    parsed = json.loads(response.text)
-    cache.set(cache_key, parsed, timeout=300)  # 5 minutes
-    return parsed
+    def _store_cached_meta(self, canonical_key, raw_query, parsed_filters, product_ids):
+        """Persist product IDs + filter metadata in both Django cache and DB.
+        Gracefully handles missing Redis by falling back to DB-only mode."""
+        from apps.core.models import AiQueryCache
+        meta = {
+            "product_ids": product_ids,
+            "parsed_filters": parsed_filters,
+        }
+        try:
+            cache.set(canonical_key, meta, timeout=900)  # 15 min
+        except Exception:
+            pass  # Redis down → still persist to DB
+        AiQueryCache.objects.update_or_create(
+            canonical_key=canonical_key,
+            defaults={
+                "raw_query": raw_query,
+                "parsed_filters": parsed_filters,
+                "product_ids": product_ids,
+                "result_count": len(product_ids),
+            },
+        )
 
-
-class AiSearchView(APIView):
     # ── Main handler ──────────────────────────────────────────────────────
 
-    def post(self, request):
-        message = request.data.get("message", "").strip() or request.data.get("query", "").strip()
-        if not message:
-            return Response(
-                {"status": "error", "message": "Message or query is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+    def _run_search(self, request, message, history=None):
+        """Core search pipeline used by both AiSearchView and AiPersonalizedSearchView."""
         gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
         if not gemini_key:
             return Response(
@@ -1603,12 +1590,12 @@ class AiSearchView(APIView):
 
         if exact_query in support_answers:
             return Response(
-                {"status": "success", "style_note": support_answers[exact_query], "data": []},
+                {"status": "success", "is_chat": True, "style_note": support_answers[exact_query], "data": []},
                 status=status.HTTP_200_OK,
             )
         if exact_query in advice_answers:
             return Response(
-                {"status": "success", "style_note": advice_answers[exact_query], "data": []},
+                {"status": "success", "is_chat": True, "style_note": advice_answers[exact_query], "data": []},
                 status=status.HTTP_200_OK,
             )
 
@@ -1626,49 +1613,130 @@ class AiSearchView(APIView):
             if parts:
                 user_context = f"User profile context (use if query doesn't contradict): {', '.join(parts)}.\n"
 
-        # Step 1.5 — Lightweight pre-classifier (keyword guard)
-        off_topic_keywords = [
-            "weather", "forecast", "temperature", "rain",
-            "math", "calculate", "solve", "equation", "formula",
-            "code", "programming", "python", "javascript", "bug", "debug",
-            "news", "politics", "election", "president", "government",
-            "recipe", "cook", "ingredient", "food",
-            "sports", "football", "basketball", "soccer", "cricket",
-            "movie", "film", "actor", "netflix",
-            "stock", "crypto", "bitcoin", "invest", "forex",
-            "medical", "diagnosis", "symptom", "doctor", "medicine",
-        ]
-        msg_lower = message.lower()
-        if any(k in msg_lower for k in off_topic_keywords):
-            return Response(
-                {
-                    "status": "success",
-                    "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?",
-                    "data": [],
-                },
-                status=status.HTTP_200_OK,
-            )
-
-        # Step 2 — Parse with Gemini
+        # Step 2 — Parse with Gemini (pass conversation history for follow-ups)
         try:
-            parsed_filters = _call_gemini(message, gemini_key, user_context)
+            parsed_filters = _call_gemini(message, gemini_key, user_context, history)
         except Exception:
             parsed_filters = {
                 "is_support": True,
+                "is_chat": True,
                 "search": None,
                 "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?",
             }
+
+        # Safety net: if Gemini mistakenly classifies a fashion query as off-topic,
+        # override to shopping based on local keyword detection.
+        if parsed_filters.get("is_support") is True:
+            msg_lower = message.lower()
+            fashion_keywords = [
+                "cloths", "clothes", "dress", "gown", "suit", "agbada", "kaftan",
+                "outfit", "fashion", "wear", "wearing", "style", "look", "wedding",
+                "party", "work", "casual", "ankara", "adire", "kente", "bogolan",
+                "shirt", "pants", "skirt", "blouse", "jacket", "shoes", "accessories",
+                "jewelry", "headpiece", "jumpsuit", "blazer", "trouser", "shorts",
+                "tops", "jeans", "lace", "aso-ebi", "asoebi", "gele", "iro", "buba",
+                "sneakers", "sandals", "bag", "purse", "hat", "scarf", "wrap",
+                "show me", "find me", "looking for", "search for", "get me",
+            ]
+            if any(k in msg_lower for k in fashion_keywords):
+                parsed_filters["is_support"] = False
+                parsed_filters["is_chat"] = False
+                parsed_filters["style_note"] = "Here are the pieces I found for you."
+                # Infer search term if Gemini failed to extract one
+                if not parsed_filters.get("search"):
+                    inferred_terms = []
+                    if "dress" in msg_lower or "gown" in msg_lower:
+                        inferred_terms.append("dress")
+                    if "suit" in msg_lower or "agbada" in msg_lower or "kaftan" in msg_lower:
+                        inferred_terms.append("suit")
+                    if "shirt" in msg_lower or "blouse" in msg_lower or "top" in msg_lower:
+                        inferred_terms.append("shirt")
+                    if "pants" in msg_lower or "trouser" in msg_lower or "shorts" in msg_lower:
+                        inferred_terms.append("pants")
+                    if "skirt" in msg_lower:
+                        inferred_terms.append("skirt")
+                    if "jacket" in msg_lower or "blazer" in msg_lower:
+                        inferred_terms.append("jacket")
+                    if "shoes" in msg_lower or "sneakers" in msg_lower or "sandals" in msg_lower:
+                        inferred_terms.append("shoes")
+                    if "bag" in msg_lower or "purse" in msg_lower:
+                        inferred_terms.append("bag")
+                    if "jewelry" in msg_lower or "headpiece" in msg_lower or "gele" in msg_lower:
+                        inferred_terms.append("jewelry")
+                    if "hat" in msg_lower or "scarf" in msg_lower or "wrap" in msg_lower:
+                        inferred_terms.append("accessories")
+                    if inferred_terms:
+                        parsed_filters["search"] = " ".join(inferred_terms)
+                    else:
+                        parsed_filters["search"] = "fashion"
 
         # Handle support response from Gemini
         if parsed_filters.get("is_support") is True:
             return Response(
                 {
                     "status": "success",
+                    "is_chat": True,
                     "style_note": parsed_filters.get("style_note"),
                     "data": [],
                 },
                 status=status.HTTP_200_OK,
             )
+
+        # ── Canonical cache lookup (cross-user, skips DB tiers on hit) ──
+        canonical_key = self._build_canonical_key(parsed_filters)
+        cached_meta = self._get_cached_meta(canonical_key)
+        if cached_meta:
+            product_ids = cached_meta.get("product_ids", [])
+            cached_filters = cached_meta.get("parsed_filters", {})
+            style_note = cached_filters.get("style_note", "Here are the pieces I found for you.")
+
+            # Safeguard: ensure the message isn't the off-topic one if products are found
+            off_topic_snippet = "I'm Zuri, and I only help with fashion"
+            if product_ids and off_topic_snippet in style_note:
+                style_note = "Here are the pieces I found for you."
+
+            if product_ids:
+                qs = self._base_qs().filter(id__in=product_ids)
+                id_order = {str(pid): idx for idx, pid in enumerate(product_ids)}
+                page_obj = sorted(qs, key=lambda p: id_order.get(str(p.id), 9999))
+                serializer = ProductSerializer(page_obj, many=True)
+                return Response(
+                    {
+                        "status": "success",
+                        "style_note": style_note,
+                        "parsed_filters": cached_filters,
+                        "is_fallback": cached_filters.get("is_fallback", False),
+                        "fallback_reason": cached_filters.get("fallback_reason"),
+                        "is_chat": cached_filters.get("is_chat", False),
+                        "data": serializer.data,
+                        "pagination": {
+                            "current_page": 1,
+                            "total_pages": 1,
+                            "total_items": len(page_obj),
+                            "has_next": False,
+                        },
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                return Response(
+                    {
+                        "status": "success",
+                        "style_note": style_note if off_topic_snippet not in style_note else "I couldn't find anything matching that right now.",
+                        "parsed_filters": cached_filters,
+                        "is_fallback": cached_filters.get("is_fallback", False),
+                        "fallback_reason": cached_filters.get("fallback_reason"),
+                        "is_chat": cached_filters.get("is_chat", False),
+                        "data": [],
+                        "pagination": {
+                            "current_page": 1,
+                            "total_pages": 0,
+                            "total_items": 0,
+                            "has_next": False,
+                        },
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
         limit = int(request.GET.get("limit", 6))
         is_fallback = False
@@ -1748,13 +1816,30 @@ class AiSearchView(APIView):
         page_obj = paginator.get_page(1)
         serializer = ProductSerializer(page_obj, many=True)
 
+        style_note = parsed_filters.get("style_note", "Here are the pieces I found for you.")
+        # Final safeguard: if we have products, ensure the message isn't the off-topic one
+        off_topic_snippet = "I'm Zuri, and I only help with fashion"
+        if serializer.data and off_topic_snippet in style_note:
+            style_note = "Here are the pieces I found for you."
+
+        # Persist parsed filter metadata for cache reconstruction on hit
+        parsed_filters["is_fallback"] = is_fallback
+        parsed_filters["fallback_reason"] = fallback_reason
+        parsed_filters["is_chat"] = fallback_reason == "budget_empty"
+        parsed_filters["style_note"] = style_note
+
+        # Store in canonical cache so other users with semantically-equivalent queries skip DB tiers
+        product_ids = [str(p["id"]) for p in serializer.data]
+        self._store_cached_meta(canonical_key, message, parsed_filters, product_ids)
+
         return Response(
             {
                 "status": "success",
-                "style_note": parsed_filters.get("style_note", "Here are the pieces I found for you."),
+                "style_note": style_note,
                 "parsed_filters": parsed_filters,
                 "is_fallback": is_fallback,
                 "fallback_reason": fallback_reason,
+                "is_chat": fallback_reason == "budget_empty",
                 "data": serializer.data,
                 "pagination": {
                     "current_page": 1,
@@ -1765,6 +1850,101 @@ class AiSearchView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+    def post(self, request):
+        message = request.data.get("message", "").strip() or request.data.get("query", "").strip()
+        history = request.data.get("history", [])
+        if not message:
+            return Response(
+                {"status": "error", "message": "Message or query is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return self._run_search(request, message, history)
+
+# ── Gemini helper (module-level so both views can use it) ─────────────
+
+def _call_gemini(message, gemini_key, user_context="", history=None):
+    history_block = ""
+    if history:
+        history_block = "\nRecent conversation:\n" + "\n".join(history[-6:]) + "\n"
+
+    system_prompt = f"""You are Zuri, a warm, personal fashion companion for Urbana Africa, a pan-African fashion marketplace. Speak like a friendly human stylist — not a robot. Use "I", "me", and "my" naturally. Avoid stiff or overly formal language.
+
+{user_context}{history_block}
+Available product fields:
+- occasion: "wedding" | "work" | "casual" | "party" | "traditional" | "other"
+- print_type: "ankara" | "adire" | "kente" | "bogolan" | "other"
+- availability_type: "ready_to_ship" | "made_to_order" | "pre_order" | "rentable"
+- is_sustainable: true | false
+- min_price: number in USD (only if user explicitly mentions a minimum price)
+- max_price: number in USD (only if user mentions a budget or maximum)
+- search: 1-3 keywords describing the clothing type (e.g. "dress", "agbada", "jumpsuit", "headpiece")
+- style_note: The response text to display to the user.
+
+Rules:
+- Only set fields clearly implied by the query — do not guess.
+- If price is vague ("affordable", "cheap"), do NOT set min_price/max_price.
+- style_note must always be present.
+- If the user mentions gender (male/female) in their query, respect it. Otherwise use the user profile context provided above.
+
+Respond ONLY with valid JSON. No markdown, no extra text.
+
+Example for support: {{"is_support": true, "is_chat": true, "style_note": "To return a product, navigate to your Profile, go to 'Orders', select the item, and click 'Return Item' within 14 days of delivery.", "search": null}}
+Example for advice: {{"is_support": true, "is_chat": true, "style_note": "This season's top trends:\n1. Modern Ankara Power Suits\n2. Adire Minimalist Dresses\n3. Kente Statement Jackets\n4. Bogolan Streetwear\n5. Sustainable Capsule Wardrobes\n\nWould you like me to find specific pieces?", "search": null}}
+Example for off-topic: {{"is_support": true, "is_chat": true, "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?", "search": null}}
+Example for shopping: {{"is_support": false, "is_chat": false, "occasion": "wedding", "print_type": "ankara", "max_price": 500, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under USD 500 — here's what our designers have for you."}}
+
+CRITICAL CLASSIFICATION INSTRUCTIONS — READ CAREFULLY:
+1. If the user asks about returns, refunds, order tracking, wallet balance, or custom tailoring → classify as SUPPORT (is_support=true, is_chat=true).
+2. If the user asks for fashion advice, trending styles, or "what should I wear" → classify as ADVICE (is_support=true, is_chat=true).
+3. If the user is looking for clothing, outfits, dresses, shoes, accessories, or ANY fashion product → classify as SHOPPING (is_support=false, is_chat=false). Extract search fields.
+4. ONLY classify as OFF-TOPIC if the query is completely unrelated to fashion, shopping, or Urbana (e.g. weather, politics, math homework).
+
+NEVER classify a fashion-related product request as off-topic. This includes:
+- "find me some cloths for wedding" → SHOPPING ("cloths" = casual spelling of "clothes")
+- "dress for work" → SHOPPING
+- "shoes for a party" → SHOPPING
+- "ankara outfit" → SHOPPING
+- "wedding guest look" → SHOPPING
+- "yes" after suggesting a search → SHOPPING (use conversation context)
+
+ALWAYS classify the above examples as SHOPPING, not off-topic."""
+
+    # Cache key: hash of message + user_context + history snippet
+    # Version v3 bumps cache to invalidate stale misclassifications from old prompt
+    cache_input = message + user_context + (history[-1] if history else "")
+    cache_key = f"ai_search:gemini:v3:{hashlib.sha256(cache_input.encode()).hexdigest()}"
+    try:
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+    except Exception:
+        pass  # Redis down → skip cache, call Gemini directly
+
+    client = genai.Client(api_key=gemini_key)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            client.models.generate_content,
+            model="gemini-1.5-flash-latest",
+            contents=message,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.1,
+                response_mime_type="application/json",
+            ),
+        )
+        try:
+            response = future.result(timeout=8)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError("Gemini response timed out")
+
+    parsed = json.loads(response.text)
+    try:
+        cache.set(cache_key, parsed, timeout=300)  # 5 minutes
+    except Exception:
+        pass  # Redis down → still return parsed result
+    return parsed
 
 
 class AiSuggestionsView(APIView):
@@ -2151,23 +2331,13 @@ class AiPersonalizedSearchView(APIView):
 
     def post(self, request):
         query = request.data.get("query", "").strip()
+        history = request.data.get("history", [])
         if not query:
             return Response({"status": "error", "message": "Query is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         # --- Reuse AiSearchView for guardrails + fallback logic ---
-        # Build a synthetic request so AiSearchView can do its full pipeline
-        from rest_framework.request import Request as DRFRequest
         ai_view = AiSearchView()
-        ai_view.request = request
-        ai_view.format_kwarg = None
-
-        # Temporarily override request.data so AiSearchView sees the query as 'message'
-        original_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
-        request.data = {"message": query}
-        try:
-            response = ai_view.post(request)
-        finally:
-            request.data = original_data
+        response = ai_view._run_search(request, query, history)
 
         # If AiSearchView returned a support/off-topic response, pass it through
         if response.status_code != status.HTTP_200_OK:
@@ -2230,6 +2400,11 @@ class AiPersonalizedSearchView(APIView):
 
         is_personalized = bool(lookbook_ids or review_designers or user_sizes)
 
+        # Safeguard: if we have products, ensure the style_note isn't the off-topic message
+        off_topic_snippet = "I'm Zuri, and I only help with fashion"
+        if results and off_topic_snippet in style_note:
+            style_note = "Here are the pieces I found for you."
+
         if is_fallback:
             style_note = (
                 "I couldn't find exact matches for that right now, "
@@ -2247,6 +2422,8 @@ class AiPersonalizedSearchView(APIView):
             "data": results,
             "personalized": is_personalized,
             "is_fallback": is_fallback,
+            "is_chat": resp_data.get("is_chat", False),
+            "parsed_filters": resp_data.get("parsed_filters", {}),
         }, status=status.HTTP_200_OK)
 
 

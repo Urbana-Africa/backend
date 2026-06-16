@@ -36,17 +36,22 @@ def get_country_from_ip(ip_address: str) -> str:
         return 'US'
         
     cache_key = f"geoip:{ip_address}"
-    cached_country = cache.get(cache_key)
-    if cached_country:
-        return cached_country
+    try:
+        cached_country = cache.get(cache_key)
+        if cached_country:
+            return cached_country
+    except Exception:
+        pass  # Redis down → skip cache
         
     try:
         resp = requests.get(f"http://ip-api.com/json/{ip_address}", timeout=3)
         if resp.status_code == 200:
             data = resp.json()
             country_code = data.get('countryCode', 'US').upper().strip()
-            # Cache for 24 hours
-            cache.set(cache_key, country_code, 86400)
+            try:
+                cache.set(cache_key, country_code, 86400)
+            except Exception:
+                pass  # Redis down → still return result
             return country_code
     except Exception as e:
         print(f"[GeoIP Warning] Could not resolve IP {ip_address}: {e}")
@@ -177,7 +182,11 @@ def calculate_product_price_breakdown(product, buyer_country_code: str) -> dict:
     # Cache key: ship_cost:{designer_id}:{from_country}:{to_country}:{weight_in_100g_buckets}
     weight_bucket = int(weight * 10)
     cache_key = f"ship_cost:{designer_id}:{designer_country}:{buyer_country_code}:{weight_bucket}"
-    cached_ship_cost = cache.get(cache_key)
+    cached_ship_cost = None
+    try:
+        cached_ship_cost = cache.get(cache_key)
+    except Exception:
+        pass  # Redis down → skip cache
     
     if cached_ship_cost is not None:
         shipping_cost = Decimal(str(cached_ship_cost))
@@ -187,7 +196,10 @@ def calculate_product_price_breakdown(product, buyer_country_code: str) -> dict:
         if rates_res.get('status') == 'success' and rates_res.get('rates'):
             shipping_cost = Decimal(str(rates_res['rates'][0]['amount']))
         # Cache for 6 hours
-        cache.set(cache_key, float(shipping_cost), 21600)
+        try:
+            cache.set(cache_key, float(shipping_cost), 21600)
+        except Exception:
+            pass  # Redis down → still return result
         
     # 3. Duties & Taxes Buffer Surcharge
     surcharge_percent = get_duties_surcharge_percent(designer_country, buyer_country_code, base_price)

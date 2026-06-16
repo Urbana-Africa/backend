@@ -187,6 +187,17 @@ else:
 
 REDIS_URL = config("REDIS_URL", default="redis://127.0.0.1:6379/0")
 
+# Use Redis for Django cache so AI query results are shared across workers / restarts
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+    }
+}
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",

@@ -503,7 +503,7 @@ def send_verification_email(user:User):
         code = VerificationCode.objects.create(user=user)
     except ObjectDoesNotExist:
         code = VerificationCode.objects.create(user=user)
-    code_digits = str(round(9999999 * random()))[0:6]
+    code_digits = ''.join(secrets.choice(string.digits) for _ in range(6))
     code.code= make_password(code_digits)
     code.save()
     print(code_digits)

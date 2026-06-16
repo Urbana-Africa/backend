@@ -619,19 +619,23 @@ class AdminDesignerViewSet(AdminBaseViewSet):
                 link=link,
             )
 
-        # Send email notification
-        try:
-            subject = f"Urbana Studio: Account Status Updated ({new_status.title()})"
-            context = {"designer": designer}
-            message = render_to_string("administrator/status_update.html", context)
-            
-            threading.Thread(
-                target=resend_sendmail,
-                args=(subject, [designer.user.email], message),
-            ).start()
-        except Exception as e:
-            # We don't want to fail the request if email fails, but we should log it
-            print(f"Error sending designer status update email: {str(e)}")
+        # Send email notification (async, failures are logged not raised)
+        def _send_status_email():
+            try:
+                subject = f"Urbana Studio: Account Status Updated ({new_status.title()})"
+                context = {"designer": designer}
+                message = render_to_string("administrator/status_update.html", context)
+                resend_sendmail(
+                    subject=subject,
+                    recipient_list=[designer.user.email],
+                    message=message,
+                    from_email="hello@accounts.urbanaafrica.com",
+                    from_name="Urbana Studio",
+                )
+            except Exception as e:
+                print(f"[Email Error] Designer status update email failed for {designer.user.email}: {e}")
+
+        threading.Thread(target=_send_status_email, daemon=True).start()
 
         serializer = self.get_serializer(designer)
         return Response({

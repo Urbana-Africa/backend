@@ -732,3 +732,29 @@ class UserSubscription(models.Model):
 
     def __str__(self):
         return f"{self.user.email} — {self.plan.name if self.plan else 'None'}"
+
+
+# ---------------------------
+# AI Query Result Cache
+# ---------------------------
+class AiQueryCache(models.Model):
+    """
+    Cross-user persistent cache for AI search results.
+    Maps a canonical query fingerprint to a list of product IDs,
+    so repeated (or semantically equivalent) queries skip
+    the Gemini API and DB fallback tiers.
+    """
+    canonical_key = models.CharField(max_length=255, unique=True, db_index=True)
+    raw_query = models.TextField()
+    parsed_filters = models.JSONField(default=dict)
+    product_ids = models.JSONField(default=list, help_text="Ordered list of product UUID strings")
+    result_count = models.PositiveIntegerField(default=0)
+    hit_count = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-hit_count", "-updated_at"]
+
+    def __str__(self):
+        return f"AiQueryCache({self.canonical_key}, hits={self.hit_count})"

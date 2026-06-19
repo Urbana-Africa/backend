@@ -33,6 +33,8 @@ from .views import (
     SupportTicketCreateView,
     SupportTicketListView,
     SupportTicketDetailView,
+    AdminSupportTicketListView,
+    SupportTicketReplyView,
     SmartCollectionListView,
     SmartCollectionDetailView,
     TrackEventsView,
@@ -123,6 +125,8 @@ urlpatterns += [
     path("support/tickets", SupportTicketListView.as_view(), name="support-ticket-list"),
     path("support/tickets/create", SupportTicketCreateView.as_view(), name="support-ticket-create"),
     path("support/tickets/<str:ticket_id>", SupportTicketDetailView.as_view(), name="support-ticket-detail"),
+    path("support/tickets/<str:ticket_id>/reply", SupportTicketReplyView.as_view(), name="support-ticket-reply"),
+    path("admin/support/tickets", AdminSupportTicketListView.as_view(), name="admin-support-ticket-list"),
     # 🧠 Smart Collections
     path("smart-collections", SmartCollectionListView.as_view(), name="smart-collections"),
     path("smart-collections/<slug:slug>", SmartCollectionDetailView.as_view(), name="smart-collection-detail"),

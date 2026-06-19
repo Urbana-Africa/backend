@@ -1213,19 +1213,77 @@ class SupportTicketListView(APIView):
 class SupportTicketDetailView(APIView):
     """
     GET /core/support/tickets/<id>
-    Returns a single ticket belonging to the logged-in designer.
+    Returns a single ticket.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request, ticket_id):
         try:
-            ticket = SupportTicket.objects.get(id=ticket_id, user=request.user)
+            ticket = SupportTicket.objects.get(id=ticket_id)
+            is_admin = getattr(request.user, 'admin_role', None) in ['support_agent', 'superadmin']
+            if ticket.user != request.user and not is_admin:
+                return Response({"status": "error", "message": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
         except SupportTicket.DoesNotExist:
             return Response(
                 {"status": "error", "message": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
         serializer = SupportTicketSerializer(ticket)
+        return Response(
+            {"status": "success", "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
+from apps.administrator.permissions import IsSupportAgent
+from .models import TicketMessage
+from .serializers import TicketMessageSerializer
+
+class SupportTicketReplyView(APIView):
+    """
+    POST /core/support/tickets/<id>/reply
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, ticket_id):
+        try:
+            ticket = SupportTicket.objects.get(id=ticket_id)
+            is_admin = getattr(request.user, 'admin_role', None) in ['support_agent', 'superadmin']
+            if ticket.user != request.user and not is_admin:
+                return Response({"status": "error", "message": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+        except SupportTicket.DoesNotExist:
+            return Response({"status": "error", "message": "Ticket not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        body = request.data.get("body")
+        if not body:
+            return Response({"status": "error", "message": "Message body is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Admin can update status alongside reply
+        if is_admin and "status" in request.data:
+            ticket.status = request.data["status"]
+            ticket.save(update_fields=["status"])
+
+        msg = TicketMessage.objects.create(
+            ticket=ticket,
+            sender=request.user,
+            body=body,
+            is_internal=request.data.get("is_internal", False) if is_admin else False
+        )
+        return Response({"status": "success", "data": TicketMessageSerializer(msg).data}, status=status.HTTP_201_CREATED)
+
+
+class AdminSupportTicketListView(APIView):
+    """
+    GET /core/admin/support/tickets
+    Returns all tickets for support agents and superadmins.
+    """
+    permission_classes = [IsSupportAgent]
+
+    def get(self, request):
+        tickets = SupportTicket.objects.all()
+        status_filter = request.GET.get("status")
+        if status_filter:
+            tickets = tickets.filter(status=status_filter)
+        serializer = SupportTicketSerializer(tickets, many=True)
         return Response(
             {"status": "success", "data": serializer.data},
             status=status.HTTP_200_OK,

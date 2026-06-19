@@ -81,6 +81,20 @@ class User(AbstractUser, PermissionsMixin):
         help_text=_("Defines the role of the user on Urbana platform.")
     )
 
+    ADMIN_ROLE_CHOICES = (
+        ('superadmin', _('Super Admin')),
+        ('support_agent', _('Support Agent')),
+        ('product_manager', _('Product Manager')),
+    )
+
+    admin_role = models.CharField(
+        max_length=20,
+        choices=ADMIN_ROLE_CHOICES,
+        blank=True,
+        null=True,
+        help_text=_("Defines the granular role if the user_type is 'admin'.")
+    )
+
     phone_number = models.CharField(
         max_length=15,
         blank=True,

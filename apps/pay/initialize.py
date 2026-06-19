@@ -28,13 +28,7 @@ def get_exchange_rate(from_currency, to_currency):
 
 
 def get_invoice_currency(invoice):
-    """Derive invoice currency from linked order items. Defaults to USD."""
-    from apps.customers.models import Order
-    order = Order.objects.filter(invoice=invoice).first()
-    if order:
-        first_item = order.items.select_related("product__currency").first()
-        if first_item and first_item.product.currency:
-            return first_item.product.currency.code
+    """All Urbana invoices are currently priced and stored in USD via dynamic pricing."""
     return "USD"
 
 
@@ -125,20 +119,17 @@ class InitializePaystackPayment(BaseInitializeInvoicePayment):
         # Log attempt and use its reference instead of invoice ID
         attempt = self.log_attempt(invoice)
 
-        # Convert to NGN for Paystack (Nigerian processor)
-        invoice_currency = get_invoice_currency(invoice)
-        ngn_amount = convert_to_ngn(invoice.amount, invoice_currency)
-
-        # Return data needed by Paystack modal
+        # Invoices are in USD, charge directly in USD
+        # Frontend does amount * 100 for Paystack, so we send the float amount
         return Response({
             "status": "success",
             "processor": "paystack",
             "public_key": public_key,
             "reference": attempt.reference,  # ✅ Use PaymentAttempt reference
             "invoice_id": invoice.id,
-            "amount": int(ngn_amount),         # NGN amount as integer
+            "amount": float(invoice.amount),
             "email": email,
-            "currency": "NGN",
+            "currency": "USD",
         })
 
 
@@ -164,19 +155,15 @@ class InitializeFlutterwavePayment(BaseInitializeInvoicePayment):
         # Log attempt and use its reference
         attempt = self.log_attempt(invoice)
 
-        # Convert to NGN for Flutterwave (Nigerian processor)
-        invoice_currency = get_invoice_currency(invoice)
-        ngn_amount = convert_to_ngn(invoice.amount, invoice_currency)
-
-        # Return values for Flutterwave modal
+        # Return values for Flutterwave modal (charge in USD)
         return Response({
             "status": "success",
             "processor": "flutterwave",
             "public_key": public_key,
             "reference": attempt.reference,  # ✅ Use PaymentAttempt reference
             "invoice_id": invoice.id,
-            "amount": str(ngn_amount),
-            "currency": "NGN",
+            "amount": str(invoice.amount),
+            "currency": "USD",
             "email": email,
             "customer_name": request.user.get_full_name(),
             "description": invoice.purpose or "Invoice Payment",
@@ -216,7 +203,7 @@ class InitializeStripePayment(BaseInitializeInvoicePayment):
                     "attempt_reference": attempt.reference,
                     "user_id": str(request.user.id),
                 },
-                idempotency_key=f"invoice-{invoice.id}",
+                idempotency_key=attempt.reference,
             )
 
         except stripe.error.StripeError as e:
@@ -228,8 +215,8 @@ class InitializeStripePayment(BaseInitializeInvoicePayment):
             )
 
         # 🔗 Persist Stripe intent ID
-        attempt.external_reference = intent.id
-        attempt.save(update_fields=["external_reference"])
+        attempt.processor_payment_id = intent.id
+        attempt.save(update_fields=["processor_payment_id"])
 
         return Response(
             {

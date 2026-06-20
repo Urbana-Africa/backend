@@ -711,6 +711,33 @@ class CustomerProfileView(APIView):
             "data": serializer.data
         })
 
+class DashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        customer, _ = Customer.objects.get_or_create(user=request.user)
+        total_orders = Order.objects.filter(customer=customer).count()
+        pending_orders = Order.objects.filter(customer=customer, status__in=['pending', 'processing']).count()
+        wishlist_count = Wishlist.objects.filter(customer=customer).count()
+        
+        # Calculate total spent
+        from django.db.models import Sum
+        total_spent_aggr = Order.objects.filter(
+            customer=customer, 
+            status__in=['delivered', 'shipped', 'processing']
+        ).aggregate(total=Sum('total_amount'))
+        total_spent = total_spent_aggr['total'] or 0.0
+
+        return Response({
+            "status": "success",
+            "data": {
+                "totalSpent": float(total_spent),
+                "totalOrders": total_orders,
+                "pendingOrders": pending_orders,
+                "wishlistCount": wishlist_count
+            }
+        })
+
 
 # ---------------- Addresses ----------------
 class AddressView(APIView):

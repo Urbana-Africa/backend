@@ -83,7 +83,8 @@ INSTALLED_APPS = [
     "apps.pay",
     "apps.core",
     "apps.aps",
-    "apps.newsletter"
+    "apps.newsletter",
+    "apps.marketing"
 ]
 
 # =====================================================

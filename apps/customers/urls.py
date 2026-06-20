@@ -3,7 +3,7 @@ from .views import (
     CheckoutView, CheckoutPreviewView, CustomerProfileView, AddressView, OrderDetailView, OrderTrackingView,
     ShippingMethodListView, ShippingRatesView, WishlistView, CartView,
     OrderListView, ReturnRequestView, ReturnResolveView, ReturnDetailView, DisputeView,
-    CustomerSearchView
+    CustomerSearchView, DashboardView
 )
 
 urlpatterns = [
@@ -23,4 +23,5 @@ urlpatterns = [
     path('checkout/preview', CheckoutPreviewView.as_view(), name='checkout-preview'),
     path('checkout', CheckoutView.as_view(), name='checkout'),
     path('search', CustomerSearchView.as_view(), name='customer-search'),
+    path('dashboard', DashboardView.as_view(), name='customer-dashboard'),
 ]

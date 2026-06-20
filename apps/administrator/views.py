@@ -1,5 +1,6 @@
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from .permissions import IsCLevel
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -939,3 +940,151 @@ class AdminGlobalSearchView(APIView):
             })
 
         return Response({"status": "success", "query": q, "results": results})
+
+
+class CLevelDashboardAnalyticsView(APIView):
+    """
+    High-level overview for C-Suite executives.
+    Provides aggregated GMV, Growth Metrics, User Growth, and Designer Analytics.
+    """
+    permission_classes = [IsCLevel]
+
+    def get(self, request):
+        from django.db.models import Sum, Count, F, Q
+        from django.db.models.functions import TruncDate, TruncMonth, TruncWeek
+        from django.utils import timezone
+        import datetime
+
+        now = timezone.now()
+        thirty_days_ago = now - datetime.timedelta(days=30)
+        six_months_ago = now - datetime.timedelta(days=180)
+
+        # ---------------------------------------------------------
+        # 1. Financial Analytics (Revenue & Expenses)
+        # ---------------------------------------------------------
+        
+        # Current Top Level Totals
+        total_gmv = OrderItem.objects.filter(
+            status__in=['delivered', 'processing', 'shipped']
+        ).aggregate(total=Sum('amount'))['total'] or 0
+
+        # Revenue is GMV. Expenses are Payouts to Designers via Escrow.
+        total_payouts = Escrow.objects.aggregate(
+            payouts=Sum(F('amount') - F('platform_commission'))
+        )['payouts'] or 0
+
+        # Time-Series Revenue vs Expenses (Daily for the last 30 days)
+        daily_financials_qs = Escrow.objects.filter(created_at__gte=thirty_days_ago).annotate(
+            date=TruncDate('created_at')
+        ).values('date').annotate(
+            revenue=Sum('amount'),
+            expenses=Sum(F('amount') - F('platform_commission'))
+        ).order_by('date')
+
+        daily_financials = [
+            {
+                "date": entry['date'].strftime('%Y-%m-%d'),
+                "revenue": float(entry['revenue'] or 0),
+                "expenses": float(entry['expenses'] or 0)
+            }
+            for entry in daily_financials_qs
+        ]
+
+        # Monthly Financials (Last 6 months)
+        monthly_financials_qs = Escrow.objects.filter(created_at__gte=six_months_ago).annotate(
+            month=TruncMonth('created_at')
+        ).values('month').annotate(
+            revenue=Sum('amount'),
+            expenses=Sum(F('amount') - F('platform_commission'))
+        ).order_by('month')
+
+        monthly_financials = [
+            {
+                "date": entry['month'].strftime('%b %Y'),
+                "revenue": float(entry['revenue'] or 0),
+                "expenses": float(entry['expenses'] or 0)
+            }
+            for entry in monthly_financials_qs
+        ]
+
+        # ---------------------------------------------------------
+        # 2. Growth & Logistics Analytics
+        # ---------------------------------------------------------
+        
+        total_users = Customer.objects.count()
+        new_users_last_month = Customer.objects.filter(user__date_joined__gte=thirty_days_ago).count()
+
+        total_designers = Designer.objects.count()
+        active_designers = Designer.objects.filter(status='approved').count()
+
+        # Monthly User Growth
+        monthly_users_qs = Customer.objects.filter(user__date_joined__gte=six_months_ago).annotate(
+            month=TruncMonth('user__date_joined')
+        ).values('month').annotate(count=Count('id')).order_by('month')
+
+        monthly_user_growth = [
+            {
+                "date": entry['month'].strftime('%b %Y'),
+                "customers": entry['count']
+            }
+            for entry in monthly_users_qs
+        ]
+
+        # Monthly Designer Growth
+        monthly_designers_qs = Designer.objects.filter(user__date_joined__gte=six_months_ago).annotate(
+            month=TruncMonth('user__date_joined')
+        ).values('month').annotate(count=Count('id')).order_by('month')
+
+        # Merge them
+        growth_dict = {item['date']: {"date": item['date'], "customers": item['customers'], "designers": 0} for item in monthly_user_growth}
+        for entry in monthly_designers_qs:
+            month_str = entry['month'].strftime('%b %Y')
+            if month_str not in growth_dict:
+                growth_dict[month_str] = {"date": month_str, "customers": 0, "designers": 0}
+            growth_dict[month_str]["designers"] = entry['count']
+        
+        monthly_growth = sorted(list(growth_dict.values()), key=lambda x: datetime.datetime.strptime(x['date'], '%b %Y'))
+
+        # Shipping Costs (Revenue from shipping)
+        total_shipping_revenue = Order.objects.aggregate(total=Sum('shipping_amount'))['total'] or 0
+
+        # Top Products
+        top_products_qs = OrderItem.objects.filter(
+            status__in=['delivered', 'processing', 'shipped']
+        ).values('product__name').annotate(
+            units_sold=Sum('quantity'),
+            revenue=Sum('sub_total')
+        ).order_by('-units_sold')[:5]
+
+        top_products = [
+            {
+                "name": entry['product__name'] or "Unknown",
+                "units": entry['units_sold'] or 0,
+                "revenue": float(entry['revenue'] or 0)
+            }
+            for entry in top_products_qs
+        ]
+
+        data = {
+            "financials": {
+                "total_gmv": float(total_gmv),
+                "total_payouts": float(total_payouts),
+                "total_shipping": float(total_shipping_revenue),
+                "daily_series": daily_financials,
+                "monthly_series": monthly_financials,
+            },
+            "growth": {
+                "total_users": total_users,
+                "new_users_last_month": new_users_last_month,
+                "monthly_series": monthly_growth,
+            },
+            "designers": {
+                "total_designers": total_designers,
+                "active_designers": active_designers,
+            },
+            "products": {
+                "top_products": top_products
+            }
+        }
+
+        return Response(data, status=status.HTTP_200_OK)

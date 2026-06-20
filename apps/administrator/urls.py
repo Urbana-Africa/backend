@@ -63,4 +63,5 @@ urlpatterns = router.urls + [
     path("category-balance", CategoryBalanceView.as_view(), name="admin-category-balance"),
     path("anomalies", AnomalyLogView.as_view(), name="admin-anomalies"),
     path("search", AdminGlobalSearchView.as_view(), name="admin-global-search"),
+    path("c-level-dashboard", CLevelDashboardAnalyticsView.as_view(), name="admin-clevel-dashboard"),
 ]

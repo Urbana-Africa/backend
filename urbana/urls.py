@@ -30,6 +30,7 @@ urlpatterns = [
     path('newsletters/',include('apps.newsletter.urls')),
     path('customers/',include('apps.customers.urls')),
     path('designers/',include('apps.designers.urls')),
+    path('marketing/',include('apps.marketing.urls')),
     re_path(r'^oauth/', include('drf_social_oauth2.urls', namespace='drf'))
 
 ]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

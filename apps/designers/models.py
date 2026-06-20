@@ -228,11 +228,18 @@ class InventoryAlert(BaseModel):
 # Promotions / Discounts
 # -------------------------------
 class Promotion(BaseModel):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
     designer = models.ForeignKey('Designer', on_delete=models.CASCADE, related_name='promotions')
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     discount_percentage = models.DecimalField(max_digits=5, decimal_places=2)
     active = models.BooleanField(default=True)
+    approval_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     start_date = models.DateTimeField()
     end_date = models.DateTimeField()
 

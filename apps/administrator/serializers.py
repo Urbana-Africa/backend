@@ -317,3 +317,15 @@ class AdminInventoryAlertSerializer(AdminBaseSerializer):
 class AdminPromotionSerializer(AdminBaseSerializer):
     class Meta(AdminBaseSerializer.Meta):
         model = Promotion
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        try:
+            data['designer'] = {
+                "id": instance.designer.id,
+                "brand_name": instance.designer.brand_name,
+                "email": instance.designer.user.email,
+            }
+        except:
+            data['designer'] = None
+        return data

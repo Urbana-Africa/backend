@@ -55,7 +55,7 @@ class InventoryAlertSerializer(serializers.ModelSerializer):
 class PromotionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Promotion
-        fields = ['id', 'title', 'description', 'discount_percentage', 'active', 'start_date', 'end_date']
+        fields = ['id', 'title', 'description', 'discount_percentage', 'active', 'approval_status', 'start_date', 'end_date']
 
 class ShipmentTrackingSerializer(serializers.ModelSerializer):
     class Meta:

@@ -11,6 +11,7 @@ from .views import (
     DesignerReturnRequestViewSet,
     NotificationViewSet,
     DesignerSearchView,
+    PromotionViewSet,
 )
 
 router = DefaultRouter(trailing_slash=False)
@@ -25,6 +26,7 @@ router.register(r"profile", DesignerProfileViewSet, basename="designer-profile")
 router.register(r"dashboard", DesignerDashboardViewSet, basename="designer-dashboard")
 router.register(r"returns", DesignerReturnRequestViewSet, basename="designer-returns")
 router.register(r"notifications", NotificationViewSet, basename="designer-notifications")
+router.register(r"promotions", PromotionViewSet, basename="designer-promotions")
 
 
 urlpatterns = router.urls + [

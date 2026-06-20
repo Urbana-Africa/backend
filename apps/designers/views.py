@@ -21,8 +21,8 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 import csv
 from io import StringIO
-from .models import InventoryAlert
-from .serializers import InventoryAlertSerializer
+from .models import InventoryAlert, Promotion
+from .serializers import InventoryAlertSerializer, PromotionSerializer
 from django.utils import timezone
 from django.template.loader import render_to_string
 import threading
@@ -46,6 +46,15 @@ class DesignerBaseViewSet(viewsets.ModelViewSet):
         OrderingFilter,
     ]
     
+class PromotionViewSet(DesignerBaseViewSet):
+    serializer_class = PromotionSerializer
+
+    def get_queryset(self):
+        return Promotion.objects.filter(designer__user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(designer=self.request.user.designer_profile, approval_status='pending')
+
 class DesignerStoryListView(APIView):
     """List all stories for the authenticated designer or create new story."""
     permission_classes = [IsAuthenticated]

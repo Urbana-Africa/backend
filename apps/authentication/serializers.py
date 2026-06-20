@@ -11,7 +11,7 @@ class UserSerializer(serializers.ModelSerializer):
             'email', 'password', 'id', 'first_name', 'gender', 'last_name',
             'username', 'is_active', 'phone_number', 'user_type', 'date_of_birth',
             'is_superuser', 'is_staff', 'date_joined', 'is_verified',
-            'profile_picture', 'role', 'avatar', 'height', 'size',
+            'profile_picture', 'role', 'admin_role', 'avatar', 'height', 'size',
         )
         extra_kwargs = {'password': {'write_only': True}}
 

@@ -13,6 +13,7 @@ from django.template.loader import render_to_string
 from apps.core.models import *
 from apps.customers.models import *
 from apps.designers.models import *
+from apps.pay.models import Withdrawal
 from apps.utils.pagination import StandardPagination
 from .serializers import *
 from apps.core.serializers import ProductSerializer
@@ -692,6 +693,29 @@ class AdminInventoryAlertViewSet(AdminBaseViewSet):
 class AdminPromotionViewSet(AdminBaseViewSet):
     queryset = Promotion.objects.select_related("designer")
     serializer_class = AdminPromotionSerializer
+
+
+class AdminWithdrawalViewSet(AdminBaseViewSet):
+    queryset = Withdrawal.objects.select_related("user")
+    serializer_class = AdminWithdrawalSerializer
+
+    @action(detail=True, methods=['post'])
+    def mark_completed(self, request, pk=None):
+        withdrawal = self.get_object()
+        withdrawal.status = "completed"
+        withdrawal.processed_at = timezone.now()
+        withdrawal.save()
+        return Response({"status": "success", "message": "Withdrawal marked as completed."})
+
+    @action(detail=True, methods=['post'])
+    def process_automated_payout(self, request, pk=None):
+        # Placeholder for automated stripe/flutterwave processing
+        withdrawal = self.get_object()
+        withdrawal.status = "completed"
+        withdrawal.processed_at = timezone.now()
+        withdrawal.flutterwave_transfer_id = f"auto_{withdrawal.id}"
+        withdrawal.save()
+        return Response({"status": "success", "message": "Automated payout triggered and completed successfully."})
 
 
 

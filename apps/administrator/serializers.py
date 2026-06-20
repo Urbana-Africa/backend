@@ -21,6 +21,8 @@ from apps.customers.models import (
     ReturnRequest, OrderTracking, Dispute
 )
 
+from apps.pay.models import Withdrawal
+
 
 
 
@@ -313,6 +315,20 @@ class AdminInventoryAlertSerializer(AdminBaseSerializer):
     class Meta(AdminBaseSerializer.Meta):
         model = InventoryAlert
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        try:
+            data['product_name'] = instance.designer_product.product.name
+            data['stock'] = instance.designer_product.stock
+            data['designer_brand'] = instance.designer_product.designer.brand_name
+            data['designer_email'] = instance.designer_product.designer.user.email
+        except:
+            data['product_name'] = None
+            data['stock'] = None
+            data['designer_brand'] = None
+            data['designer_email'] = None
+        return data
+
 
 class AdminPromotionSerializer(AdminBaseSerializer):
     class Meta(AdminBaseSerializer.Meta):
@@ -328,4 +344,21 @@ class AdminPromotionSerializer(AdminBaseSerializer):
             }
         except:
             data['designer'] = None
+        return data
+
+class AdminWithdrawalSerializer(AdminBaseSerializer):
+    class Meta(AdminBaseSerializer.Meta):
+        model = Withdrawal
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['designer'] = {
+            "id": instance.user.id,
+            "email": instance.user.email,
+            "full_name": f"{instance.user.first_name} {instance.user.last_name}",
+        }
+        try:
+            data['brand_name'] = instance.user.designer_profile.brand_name
+        except:
+            data['brand_name'] = "Unknown"
         return data

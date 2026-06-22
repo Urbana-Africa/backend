@@ -15,6 +15,7 @@ from .views import (
     MediaAssetUploadView,
     MediaAssetViewSet,
     ProductDetailView,
+    DesignerProductDetailView,
     SearchSuggestions,
     SizesListView,
     StoryListView,
@@ -99,9 +100,9 @@ urlpatterns += [
     # 🛍 Products
     path("products", ProductListView.as_view(), name="core-products"),
     path("trending-products", TrendingProducts.as_view(), name="trending-products"),
-    path("products/<str:id>", ProductDetailView.as_view(), name="core-product-detail"),
+    path("products/<str:id>/", ProductDetailView.as_view(), name="core-product-detail"),
     path("products/featured", FeaturedProductsView.as_view(), name="featured-products"),
-    path("product/<int:product_id>", ProductDetailView.as_view(), name="product-detail"),
+    path("product/<int:product_id>/", DesignerProductDetailView.as_view(), name="product-detail"),
 
     # ✍ Reviews
     path("reviews", ReviewListView.as_view(), name="core-reviews"),

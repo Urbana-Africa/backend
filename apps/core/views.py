@@ -276,7 +276,7 @@ class CollectionDetailView(APIView):
 # Product Views
 # -------------------------------
 
-class ProductDetailView(APIView):
+class DesignerProductDetailView(APIView):
     """Retrieve a single product with images and designer info."""
     permission_classes = [AllowAny]
 
@@ -1728,8 +1728,50 @@ class AiSearchView(APIView):
                     else:
                         parsed_filters["search"] = "fashion"
 
-        # Handle support response from Gemini
-        if parsed_filters.get("is_support") is True:
+        action = parsed_filters.get("action")
+        
+        # Handle Order Tracking
+        if action == "track_order":
+            if not request.user.is_authenticated:
+                style_note = "Please log in to your account to track your orders."
+            else:
+                from apps.customers.models import Order
+                order_id = parsed_filters.get("order_id")
+                orders_qs = Order.objects.filter(customer__user=request.user)
+                if order_id:
+                    orders_qs = orders_qs.filter(order_id__icontains=order_id)
+                orders = orders_qs.order_by('-created_at')[:3]
+                if orders:
+                    lines = ["Here are the details for your recent order(s):"]
+                    for o in orders:
+                        lines.append(f"• Order #{o.order_id}: {o.get_status_display()}")
+                    style_note = "\n".join(lines)
+                else:
+                    style_note = f"I couldn't find any recent orders{' matching #'+order_id if order_id else ''}."
+            return Response({"status": "success", "is_chat": True, "style_note": style_note, "data": []}, status=status.HTTP_200_OK)
+
+        # Handle Ticket Checking
+        if action == "check_ticket":
+            if not request.user.is_authenticated:
+                style_note = "Please log in to your account to check your support tickets."
+            else:
+                from apps.core.models import SupportTicket
+                ticket_id = parsed_filters.get("ticket_id")
+                tickets_qs = SupportTicket.objects.filter(user=request.user)
+                if ticket_id:
+                    tickets_qs = tickets_qs.filter(reference__icontains=ticket_id)
+                tickets = tickets_qs.order_by('-created_at')[:3]
+                if tickets:
+                    lines = ["Here is the status of your recent support ticket(s):"]
+                    for t in tickets:
+                        lines.append(f"• Ticket {t.reference}: {t.get_status_display()}")
+                    style_note = "\n".join(lines)
+                else:
+                    style_note = f"I couldn't find any recent support tickets{' matching '+ticket_id if ticket_id else ''}."
+            return Response({"status": "success", "is_chat": True, "style_note": style_note, "data": []}, status=status.HTTP_200_OK)
+
+        # Handle support/advice responses from Gemini
+        if parsed_filters.get("is_support") is True or action in ["general_support", "advice", "off_topic"]:
             return Response(
                 {
                     "status": "success",
@@ -1906,30 +1948,20 @@ class AiSearchView(APIView):
                     "has_next": page_obj.has_next(),
                 },
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_200_OK
         )
 
-    def post(self, request):
-        message = request.data.get("message", "").strip() or request.data.get("query", "").strip()
-        history = request.data.get("history", [])
-        if not message:
-            return Response(
-                {"status": "error", "message": "Message or query is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return self._run_search(request, message, history)
+    def _call_gemini(self, message, user=None, history=None):
+        user_context = f"\nUser Context: {user.first_name} ({user.email})" if user else ""
+        history_block = f"\nRecent Chat History:\n{history}" if history else ""
 
-# ── Gemini helper (module-level so both views can use it) ─────────────
-
-def _call_gemini(message, gemini_key, user_context="", history=None):
-    history_block = ""
-    if history:
-        history_block = "\nRecent conversation:\n" + "\n".join(history[-6:]) + "\n"
-
-    system_prompt = f"""You are Zuri, a warm, personal fashion companion for Urbana Africa, a pan-African fashion marketplace. Speak like a friendly human stylist — not a robot. Use "I", "me", and "my" naturally. Avoid stiff or overly formal language.
+        system_prompt = f"""You are Zuri, a warm, personal fashion companion for Urbana Africa, a pan-African fashion marketplace. Speak like a friendly human stylist — not a robot. Use "I", "me", and "my" naturally. Avoid stiff or overly formal language.
 
 {user_context}{history_block}
 Available product fields:
+- action: "shopping" | "advice" | "track_order" | "check_ticket" | "general_support" | "off_topic"
+- order_id: Extracted order ID if action is "track_order" (e.g. "1234")
+- ticket_id: Extracted ticket reference if action is "check_ticket" (e.g. "TKT-123")
 - occasion: "wedding" | "work" | "casual" | "party" | "traditional" | "other"
 - print_type: "ankara" | "adire" | "kente" | "bogolan" | "other"
 - availability_type: "ready_to_ship" | "made_to_order" | "pre_order" | "rentable"
@@ -1947,19 +1979,30 @@ Rules:
 
 Respond ONLY with valid JSON. No markdown, no extra text.
 
-Example for support: {{"is_support": true, "is_chat": true, "style_note": "To return a product, navigate to your Profile, go to 'Orders', select the item, and click 'Return Item' within 14 days of delivery.", "search": null}}
-Example for advice: {{"is_support": true, "is_chat": true, "style_note": "This season's top trends:\n1. Modern Ankara Power Suits\n2. Adire Minimalist Dresses\n3. Kente Statement Jackets\n4. Bogolan Streetwear\n5. Sustainable Capsule Wardrobes\n\nWould you like me to find specific pieces?", "search": null}}
-Example for off-topic: {{"is_support": true, "is_chat": true, "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?", "search": null}}
-Example for shopping: {{"is_support": false, "is_chat": false, "occasion": "wedding", "print_type": "ankara", "max_price": 500, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under USD 500 — here's what our designers have for you."}}
+Example for track_order: {{"action": "track_order", "is_support": true, "is_chat": true, "order_id": "12345", "style_note": "Let me check the status of your order #12345...", "search": null}}
+Example for check_ticket: {{"action": "check_ticket", "is_support": true, "is_chat": true, "ticket_id": "TKT-999", "style_note": "I'll pull up the details for ticket TKT-999 right away.", "search": null}}
+Example for support: {{"action": "general_support", "is_support": true, "is_chat": true, "style_note": "To return a product, navigate to your Profile, go to 'Orders', select the item, and click 'Return Item' within 14 days of delivery.", "search": null}}
+Example for advice: {{"action": "advice", "is_support": true, "is_chat": true, "style_note": "This season's top trends:\n1. Modern Ankara Power Suits\n2. Adire Minimalist Dresses\n\nWould you like me to find specific pieces?", "search": null}}
+Example for off-topic: {{"action": "off_topic", "is_support": true, "is_chat": true, "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?", "search": null}}
+Example for off_topic: {{"action": "off_topic", "is_support": true, "is_chat": true, "style_note": "I'm Zuri, and I only help with fashion, shopping, and Urbana marketplace questions. Ask me about African fashion, outfits, orders, or tailoring — I'd love to help with that. What are we looking for today?", "search": null}}
+Example for shopping: {{"action": "shopping", "is_support": false, "is_chat": false, "occasion": "wedding", "print_type": "ankara", "max_price": 500, "search": "dress", "style_note": "Looking for bold Ankara wedding guest dresses under USD 500 — here's what our designers have for you."}}
 
 CRITICAL CLASSIFICATION INSTRUCTIONS — READ CAREFULLY:
-1. If the user asks about returns, refunds, order tracking, wallet balance, or custom tailoring → classify as SUPPORT (is_support=true, is_chat=true).
-2. If the user asks for fashion advice, trending styles, or "what should I wear" → classify as ADVICE (is_support=true, is_chat=true).
-3. If the user is looking for clothing, outfits, dresses, shoes, accessories, or ANY fashion product → classify as SHOPPING (is_support=false, is_chat=false). Extract search fields.
-4. ONLY classify as OFF-TOPIC if the query is completely unrelated to fashion, shopping, or Urbana (e.g. weather, politics, math homework).
+1. If the user asks about order tracking, finding an order, or "where is my order" → classify as action="track_order" (is_support=true, is_chat=true). Extract order_id if present.
+2. If the user asks about checking a support ticket, "my ticket", or a ticket status → classify as action="check_ticket" (is_support=true, is_chat=true). Extract ticket_id if present.
+3. If the user asks about returns, refunds, wallet balance, or custom tailoring → classify as action="general_support" (is_support=true, is_chat=true).
+4. If the user asks for fashion advice, trending styles, or "what should I wear" → classify as action="advice" (is_support=true, is_chat=true).
+5. If the user is looking for clothing, outfits, dresses, shoes, accessories, or ANY fashion product → classify as action="shopping" (is_support=false, is_chat=false). Extract search fields.
+6. ONLY classify as action="off_topic" if the query is completely unrelated to fashion, shopping, or Urbana (e.g. weather, politics, math homework).
 
 NEVER classify a fashion-related product request as off-topic. This includes:
-- "find me some cloths for wedding" → SHOPPING ("cloths" = casual spelling of "clothes")
+- "find me some cloths for wedding" → action="shopping" ("cloths" = casual spelling of "clothes")
+- "dress for work" → action="shopping"
+- "shoes for a party" → action="shopping"
+- "ankara outfit" → action="shopping"
+- "wedding guest look" → action="shopping"
+- "yes" after suggesting a search → action="shopping" (use conversation context)
+
 - "dress for work" → SHOPPING
 - "shoes for a party" → SHOPPING
 - "ankara outfit" → SHOPPING
@@ -1968,41 +2011,41 @@ NEVER classify a fashion-related product request as off-topic. This includes:
 
 ALWAYS classify the above examples as SHOPPING, not off-topic."""
 
-    # Cache key: hash of message + user_context + history snippet
-    # Version v3 bumps cache to invalidate stale misclassifications from old prompt
-    cache_input = message + user_context + (history[-1] if history else "")
-    cache_key = f"ai_search:gemini:v3:{hashlib.sha256(cache_input.encode()).hexdigest()}"
-    try:
-        cached = cache.get(cache_key)
-        if cached:
-            return cached
-    except Exception:
-        pass  # Redis down → skip cache, call Gemini directly
-
-    client = genai.Client(api_key=gemini_key)
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(
-            client.models.generate_content,
-            model="gemini-1.5-flash-latest",
-            contents=message,
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.1,
-                response_mime_type="application/json",
-            ),
-        )
+        # Cache key: hash of message + user_context + history snippet
+        # Version v3 bumps cache to invalidate stale misclassifications from old prompt
+        cache_input = message + user_context + (history[-1] if history else "")
+        cache_key = f"ai_search:gemini:v3:{hashlib.sha256(cache_input.encode()).hexdigest()}"
         try:
-            response = future.result(timeout=8)
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError("Gemini response timed out")
+            cached = cache.get(cache_key)
+            if cached:
+                return cached
+        except Exception:
+            pass  # Redis down → skip cache, call Gemini directly
 
-    parsed = json.loads(response.text)
-    try:
-        cache.set(cache_key, parsed, timeout=300)  # 5 minutes
-    except Exception:
-        pass  # Redis down → still return parsed result
-    return parsed
+        client = genai.Client(api_key=gemini_key)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                client.models.generate_content,
+                model="gemini-1.5-flash-latest",
+                contents=message,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
+            )
+            try:
+                response = future.result(timeout=8)
+            except concurrent.futures.TimeoutError:
+                raise TimeoutError("Gemini response timed out")
+
+        parsed = json.loads(response.text)
+        try:
+            cache.set(cache_key, parsed, timeout=300)  # 5 minutes
+        except Exception:
+            pass  # Redis down → still return parsed result
+        return parsed
 
 
 class AiSuggestionsView(APIView):
@@ -2210,7 +2253,11 @@ class AiOutfitBuilderView(APIView):
             "skirt": ["top", "shoes", "bag"],
         }
         cat_name = (primary.category.name if primary.category else "").lower()
-        target_complements = complement_map.get(cat_name, ["shoes", "bag", "jewelry"])
+        target_complements = ["shoes", "bag", "jewelry"]
+        for key, comps in complement_map.items():
+            if key in cat_name:
+                target_complements = comps
+                break
 
         # 3. Fetch complementary products
         complements = []
@@ -2221,7 +2268,7 @@ class AiOutfitBuilderView(APIView):
                 avg_rating=Avg("reviews__rating", filter=Q(reviews__is_approved=True))
             )
             # Prioritize same designer, then by popularity/rating
-            same_designer = qs.filter(user=primary.user).order_by("-avg_rating").first()
+            same_designer = qs.filter(user=primary.user).order_by("-avg_rating").first() if primary.user else None
             if same_designer:
                 complements.append(same_designer)
             else:
@@ -2412,8 +2459,8 @@ class AiPersonalizedSearchView(APIView):
         user = request.user
         lookbook_ids = set(Product.objects.filter(lookbooks__user=user).values_list("id", flat=True))
         review_designers = set(Review.objects.filter(customer__user=user).values_list("product__user", flat=True))
-        size_recs = SizeRecommendation.objects.filter(user=user).first()
-        user_sizes = set(filter(None, [size_recs.top_size, size_recs.bottom_size, size_recs.shoe_size])) if size_recs else set()
+        size_recs = SizeRecommendation.objects.filter(user=user).values_list("recommended_size", flat=True)
+        user_sizes = set(filter(None, size_recs))
 
         product_ids = [p["id"] for p in products]
         db_products = Product.objects.filter(id__in=product_ids).select_related("user__designer_profile", "category").prefetch_related("sizes").annotate(

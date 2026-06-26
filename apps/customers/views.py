@@ -620,6 +620,7 @@ class ShippingRatesView(APIView):
                     )
             combined_rates = list(service_levels.values())
             combined_rates.sort(key=lambda r: r['amount'])
+            combined_rates = combined_rates[:3]
 
         return Response({
             "status": "success",

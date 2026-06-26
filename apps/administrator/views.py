@@ -595,13 +595,24 @@ class AdminDesignerViewSet(AdminBaseViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Require at least 5 products before approving
+        if new_status == Designer.Status.APPROVED and designer.products.count() < 5:
+            return Response(
+                {
+                    "detail": "This designer must upload at least 5 products before their profile can be approved.",
+                    "products_count": designer.products.count(),
+                    "required_products": 5,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         designer.status = new_status
         designer.status_reasons = status_reasons
-        
+
         # If approved, we also mark as verified if not already
         if new_status == Designer.Status.APPROVED:
             designer.is_verified = True
-            
+
         designer.save()
 
         # In-app notification

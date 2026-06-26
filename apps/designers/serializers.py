@@ -213,6 +213,7 @@ class DesignerSerializer(serializers.ModelSerializer):
     banner_image = serializers.ImageField(read_only=True)
     full_name = serializers.SerializerMethodField()
     email = serializers.CharField(source="user.email")
+    products_count = serializers.SerializerMethodField()
     class Meta:
         model = Designer
         fields = [
@@ -251,6 +252,7 @@ class DesignerSerializer(serializers.ModelSerializer):
             'production_type',
             'ships_internationally',
             'local_shipping_fee',
+            'products_count',
         ]
         read_only_fields = [
             'id',
@@ -266,6 +268,9 @@ class DesignerSerializer(serializers.ModelSerializer):
 
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
+
+    def get_products_count(self, obj):
+        return obj.products.count()
 
 
 

@@ -497,8 +497,69 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
         })
 
     @action(detail=True, methods=["post"])
+    def upload_packaging_media(self, request, item_id=None):
+        order_item = self.get_object()
+        
+        images = request.FILES.getlist("packaging_images[]")
+        video = request.FILES.get("packaging_video")
+        
+        if not images and not video:
+            return Response({"error": "No media uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from apps.core.models import MediaAsset
+        
+        for img in images:
+            asset = MediaAsset.objects.create(
+                file=img,
+                media_type=MediaAsset.MediaType.IMAGE
+            )
+            order_item.packaging_images.add(asset)
+            
+        if video:
+            video_asset = MediaAsset.objects.create(
+                file=video,
+                media_type=MediaAsset.MediaType.VIDEO
+            )
+            order_item.packaging_video = video_asset
+            
+        order_item.packaging_approval_status = 'submitted'
+        order_item.save()
+        
+        # Trigger email to admin
+        from apps.utils.email_sender import sendmail
+        import threading
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        admin_emails = list(User.objects.filter(is_superuser=True).values_list('email', flat=True))
+        if not admin_emails:
+            admin_emails = ['admin@urbanaafrica.com']
+            
+        try:
+            message = f"Designer {request.user.email} has uploaded packaging media for Order Item {order_item.item_id}. Please review in the admin dashboard."
+            threading.Thread(target=sendmail, args=(
+                f"Urbana - Packaging Media Review Required for {order_item.item_id}",
+                admin_emails,
+                message
+            )).start()
+        except Exception as e:
+            print("Failed to send admin email:", e)
+            
+        return Response({
+            "status": "success", 
+            "message": "Packaging media uploaded successfully. Waiting for admin approval.",
+            "data": OrderItemSerializer(order_item).data
+        })
+
+    @action(detail=True, methods=["post"])
     def generate_shipping_label(self, request, item_id=None):
         order_item = self.get_object()
+        
+        if order_item.packaging_approval_status != 'approved':
+            return Response({
+                "status": "error",
+                "message": "Packaging media must be approved by an administrator before you can generate a shipping label."
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         # Check if shipping label has already been generated
         props = order_item.properties or {}
@@ -688,6 +749,26 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
                     profile.save(update_fields=["welcome_email_sent_at"])
                 except Exception as e:
                     print(f"Error sending designer welcome email: {str(e)}")
+
+        # Send admin notification about profile update
+        try:
+            from django.contrib.auth import get_user_model
+            from apps.utils.email_sender import sendmail
+            import threading
+            User = get_user_model()
+            admin_emails = list(User.objects.filter(is_superuser=True).values_list('email', flat=True))
+            if not admin_emails:
+                admin_emails = ['admin@urbanaafrica.com']
+                
+            action_word = "signed up and submitted" if created else "updated"
+            subject = f"Urbana Admin: Designer profile {action_word}"
+            message = f"Designer {request.user.email} has {action_word} their profile. Please review in the admin dashboard."
+            threading.Thread(
+                target=sendmail,
+                args=(subject, admin_emails, message),
+            ).start()
+        except Exception as e:
+            print(f"Error sending admin notification email: {str(e)}")
 
         return Response({
             "status": "success",

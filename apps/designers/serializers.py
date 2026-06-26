@@ -126,6 +126,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
     order = OrderSerializer(read_only=True)
     shipment = ShipmentSerializer(read_only=True)
+    packaging_images = MediaAssetSerializer(many=True, read_only=True)
+    packaging_video = MediaAssetSerializer(read_only=True)
 
     class Meta:
         model = OrderItem

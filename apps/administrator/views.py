@@ -294,6 +294,47 @@ class AdminOrderItemViewSet(AdminBaseViewSet):
     queryset = OrderItem.objects.select_related("order", "product")
     serializer_class = AdminOrderItemSerializer
 
+    @action(detail=True, methods=["post"])
+    def review_packaging_media(self, request, pk=None):
+        order_item = self.get_object()
+        status_val = request.data.get("status")
+        reason = request.data.get("reason", "")
+        
+        if status_val not in ['approved', 'rejected']:
+            return Response({"error": "Invalid status. Must be 'approved' or 'rejected'."}, status=400)
+            
+        order_item.packaging_approval_status = status_val
+        if status_val == 'rejected':
+            order_item.packaging_rejection_reason = reason
+        else:
+            order_item.packaging_rejection_reason = ""
+            
+        order_item.save()
+        
+        # Trigger email to designer
+        from apps.utils.email_sender import sendmail
+        import threading
+        
+        try:
+            if status_val == 'approved':
+                message = f"Your packaging media for Order Item {order_item.item_id} has been approved. You may now generate a shipping label."
+            else:
+                message = f"Your packaging media for Order Item {order_item.item_id} has been rejected. Reason: {reason}. Please update your packaging and re-upload."
+                
+            threading.Thread(target=sendmail, args=(
+                f"Urbana - Packaging Media {status_val.capitalize()}",
+                [order_item.designer.email],
+                message
+            )).start()
+        except Exception as e:
+            print("Failed to send designer email:", e)
+            
+        return Response({
+            "status": "success",
+            "message": f"Packaging media marked as {status_val}.",
+            "data": self.get_serializer(order_item).data
+        })
+
 
 class AdminOrderTrackingViewSet(AdminBaseViewSet):
     queryset = OrderTracking.objects.select_related("order")

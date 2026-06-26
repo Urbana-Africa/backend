@@ -4,7 +4,7 @@ from apps.authentication.serializers import UserSerializer
 from apps.pay.models import Invoice
 from apps.pay.serializers import PaymentSerializer
 from .models import Customer, Address, OrderTracking, Wishlist, CartItem, Order, OrderItem, ReturnRequest, Dispute
-from apps.core.serializers import ColorSerializer, DesignerSerializer, ProductSerializer, SizesSerializer
+from apps.core.serializers import ProductSerializer, SizesSerializer, ColorSerializer, MediaAssetSerializer
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -89,6 +89,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
     color = ColorSerializer(read_only=True)
     size = SizesSerializer(read_only=True)
+    packaging_images = MediaAssetSerializer(many=True, read_only=True)
+    packaging_video = MediaAssetSerializer(read_only=True)
     # subtotal = serializers.SerializerMethodField()
 
     class Meta:

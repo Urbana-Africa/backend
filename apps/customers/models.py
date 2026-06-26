@@ -128,6 +128,12 @@ class OrderItem(models.Model):
         ('cancelled', 'Cancelled'),
         ('returned', 'Returned'),
     ]
+    PACKAGING_APPROVAL_CHOICES = [
+        ('unsubmitted', 'Unsubmitted'),
+        ('submitted', 'Submitted'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
     designer = models.ForeignKey(User, on_delete=models.CASCADE, null=True,default=None, related_name='order_items')
     escrow = models.OneToOneField(Escrow, on_delete=models.CASCADE, null=True,default=None, related_name='order_item')
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
@@ -149,6 +155,10 @@ class OrderItem(models.Model):
     masked_phone = models.CharField(max_length=50, blank=True, null=True, help_text="Masked customer phone number for designer view.")
     created_at = models.DateTimeField(auto_now_add=True, null= True)
     delivered_at = models.DateTimeField(null=True, blank=True)
+    packaging_images = models.ManyToManyField('core.MediaAsset', related_name='order_packaging_images', blank=True)
+    packaging_video = models.ForeignKey('core.MediaAsset', related_name='order_packaging_video', on_delete=models.SET_NULL, null=True, blank=True)
+    packaging_approval_status = models.CharField(max_length=20, choices=PACKAGING_APPROVAL_CHOICES, default='unsubmitted')
+    packaging_rejection_reason = models.TextField(blank=True, null=True)
     
     def subtotal(self):
         return self.quantity * self.amount

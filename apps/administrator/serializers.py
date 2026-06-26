@@ -167,6 +167,9 @@ class AdminCountrySerializer(AdminBaseSerializer):
 # =====================================================
 
 class AdminOrderItemSerializer(AdminBaseSerializer):
+    packaging_images = MediaAssetSerializer(many=True, read_only=True)
+    packaging_video = MediaAssetSerializer(read_only=True)
+
     class Meta(AdminBaseSerializer.Meta):
         model = OrderItem
 

@@ -1238,6 +1238,9 @@ from apps.administrator.permissions import IsSupportAgent
 from .models import TicketMessage
 from .serializers import TicketMessageSerializer
 
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+
 class SupportTicketReplyView(APIView):
     """
     POST /core/support/tickets/<id>/reply
@@ -1268,7 +1271,55 @@ class SupportTicketReplyView(APIView):
             body=body,
             is_internal=request.data.get("is_internal", False) if is_admin else False
         )
-        return Response({"status": "success", "data": TicketMessageSerializer(msg).data}, status=status.HTTP_201_CREATED)
+        msg_data = TicketMessageSerializer(msg).data
+        
+        # Broadcast message via WebSockets
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f'ticket_{ticket.id}',
+            {
+                'type': 'ticket_message',
+                'message': msg_data
+            }
+        )
+        
+        return Response({"status": "success", "data": msg_data}, status=status.HTTP_201_CREATED)
+
+class SupportTicketJoinView(APIView):
+    """
+    POST /core/support/tickets/<id>/join
+    """
+    permission_classes = [IsSupportAgent]
+
+    def post(self, request, ticket_id):
+        try:
+            ticket = SupportTicket.objects.get(id=ticket_id)
+        except SupportTicket.DoesNotExist:
+            return Response({"status": "error", "message": "Ticket not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        if request.user not in ticket.assigned_agents.all():
+            ticket.assigned_agents.add(request.user)
+            
+            # Create internal join message
+            msg = TicketMessage.objects.create(
+                ticket=ticket,
+                sender=request.user,
+                body=f"Agent {request.user.get_full_name() or request.user.username} has joined the chat.",
+                is_internal=True
+            )
+            msg_data = TicketMessageSerializer(msg).data
+            
+            # Broadcast join event via WebSockets
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f'ticket_{ticket.id}',
+                {
+                    'type': 'ticket_join',
+                    'message': msg_data
+                }
+            )
+            
+        return Response({"status": "success"}, status=status.HTTP_200_OK)
 
 
 class AdminSupportTicketListView(APIView):
@@ -2046,6 +2097,13 @@ ALWAYS classify the above examples as SHOPPING, not off-topic."""
         except Exception:
             pass  # Redis down → still return parsed result
         return parsed
+
+    def post(self, request):
+        query = request.data.get("query", "").strip()
+        history = request.data.get("history", [])
+        if not query:
+            return Response({"status": "error", "message": "Query is required."}, status=status.HTTP_400_BAD_REQUEST)
+        return self._run_search(request, query, history)
 
 
 class AiSuggestionsView(APIView):

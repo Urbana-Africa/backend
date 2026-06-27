@@ -399,6 +399,11 @@ class SupportTicket(BaseModel):
         blank=True,
         related_name="support_tickets",
     )
+    assigned_agents = models.ManyToManyField(
+        User,
+        related_name="assigned_tickets",
+        blank=True
+    )
     # Allow unauthenticated guests to submit tickets too
     guest_name = models.CharField(max_length=150, blank=True, null=True)
     guest_email = models.EmailField(blank=True, null=True)

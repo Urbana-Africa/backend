@@ -425,3 +425,23 @@ REPLICATE_API_TOKEN = config("REPLICATE_API_TOKEN", default="")
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
 STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="")
 SHIPPO_API_KEY = config("SHIPPO_API_KEY", default="")
+# =====================================================
+# WebSockets (Channels) Setup
+# =====================================================
+_redis_url = config('REDIS_URL', default='')
+if _redis_url or IS_PRODUCTION:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                'hosts': [_redis_url or 'redis://127.0.0.1:6379'],
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer"
+        }
+    }
+

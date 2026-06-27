@@ -401,13 +401,25 @@ class SupportTicketSerializer(serializers.ModelSerializer):
             "user",
             "user_type",
             "messages",
+            "assigned_agents",
             # write-only guest fields (for unauthenticated submissions)
             "guest_name",
             "guest_email",
         ]
         read_only_fields = [
             "id", "reference", "status", "admin_reply",
-            "resolved_at", "created_at", "updated_at", "messages",
+            "resolved_at", "created_at", "updated_at", "messages", "assigned_agents"
+        ]
+
+    assigned_agents = serializers.SerializerMethodField()
+
+    def get_assigned_agents(self, obj):
+        return [
+            {
+                "id": agent.id,
+                "name": agent.get_full_name() or agent.username,
+            }
+            for agent in obj.assigned_agents.all()
         ]
 
     def get_submitter_name(self, obj):

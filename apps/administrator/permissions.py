@@ -50,12 +50,12 @@ class IsMarketer(BasePermission):
 
 class IsCLevel(BasePermission):
     """
-    Allows access EXCLUSIVELY to c_level users. Superadmin is blocked.
+    Allows access to c_level users and superadmin (for view-as capabilities).
     """
     def has_permission(self, request, view):
         return bool(
             request.user and
             request.user.is_authenticated and
             request.user.user_type == 'admin' and
-            request.user.admin_role == 'c_level'
+            request.user.admin_role in ['c_level', 'superadmin']
         )

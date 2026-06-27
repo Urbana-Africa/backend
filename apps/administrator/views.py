@@ -713,8 +713,8 @@ class AdminSmartCollectionViewSet(AdminBaseViewSet):
     serializer_class = AdminSmartCollectionSerializer
     filterset_fields = ["collection_type", "is_active"]
     search_fields = ["name", "description"]
-    ordering_fields = ["sort_order", "created_at"]
-    ordering = ["sort_order", "-created_at"]
+    ordering_fields = ["display_order", "created_at"]
+    ordering = ["display_order", "-created_at"]
 
 
 class AdminDesignerAnalyticsViewSet(AdminBaseViewSet):

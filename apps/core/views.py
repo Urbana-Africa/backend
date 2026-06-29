@@ -580,11 +580,11 @@ class ProductListView(APIView):
         # -----------------------
         subcategory = request.GET.get("subcategory")
         if subcategory:
-            queryset = queryset.filter(subcategory__slug=subcategory)
+            queryset = queryset.filter(categories__slug=subcategory)
 
         category = request.GET.get("category")
         if category:
-            queryset = queryset.filter(category__slug=category)
+            queryset = queryset.filter(categories__slug=category)
 
         designer = request.GET.get("designer")
         if designer:

@@ -16,13 +16,15 @@ def _delivery_timeline(product):
     if not product:
         return "As agreed"
     lead = getattr(product, "lead_time_days", 0) or 0
-    avail = getattr(product, "availability_type", "ready_to_ship")
+    avail = getattr(product, "availability_type", "ready_to_ship") or ""
     if lead <= 0:
         return "As agreed"
-    if avail == "made_to_order":
+    if "made_to_order" in avail:
         return f"Made to order · {lead} days"
-    if avail == "pre_order":
+    if "pre_order" in avail:
         return f"Pre-order · {lead} days"
+    if "custom_order" in avail:
+        return f"Custom order · {lead} days"
     return f"Ships in {lead} days"
 
 # ============================================================

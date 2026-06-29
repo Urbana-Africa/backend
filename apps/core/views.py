@@ -388,6 +388,17 @@ class SizesListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
+        # Ensure standard clothes sizes exist
+        for name, desc in [("XS", "Extra Small"), ("S", "Small"), ("M", "Medium"), ("L", "Large"), ("XL", "Extra Large"), ("XXL", "Double Extra Large")]:
+            Sizes.objects.get_or_create(name=name, defaults={"description": desc})
+
+        # Ensure standard shoe sizes exist
+        for size_num in range(36, 46):
+            Sizes.objects.get_or_create(name=f"EU {size_num}", defaults={"description": f"Shoe Size EU {size_num}"})
+
+        # Ensure standard accessory sizes exist
+        Sizes.objects.get_or_create(name="One Size", defaults={"description": "One Size Fits All"})
+
         sizes = Sizes.objects.all()
         serializer = SizesSerializer(sizes, many=True)
         return Response({"status": "success", "data": serializer.data}, status=status.HTTP_200_OK)
@@ -608,7 +619,7 @@ class ProductListView(APIView):
         # -----------------------
         availability = request.GET.get("availability")
         if availability:
-            queryset = queryset.filter(availability_type=availability)
+            queryset = queryset.filter(availability_type__icontains=availability)
 
         print_type = request.GET.get("print_type")
         if print_type:
@@ -1579,7 +1590,7 @@ class AiSearchView(APIView):
         if f.get("print_type"):
             qs = qs.filter(print_type=f["print_type"])
         if f.get("availability_type"):
-            qs = qs.filter(availability_type=f["availability_type"])
+            qs = qs.filter(availability_type__icontains=f["availability_type"])
         if f.get("is_sustainable") is True:
             qs = qs.filter(is_sustainable=True)
         if f.get("min_price"):
@@ -2910,3 +2921,54 @@ class SubscribeView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class AiSuggestDescriptionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        desc_type = request.data.get("type", "product")
+        name = request.data.get("name", "")
+        subject = request.data.get("subject", "")
+        category = request.data.get("category", "")
+        title = request.data.get("title", "")
+        discount = request.data.get("discount_percentage", "")
+
+        gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
+        if not gemini_key:
+            if desc_type == "product":
+                suggestion = f"Presenting our brand new {name or 'stylish African design'}. Handcrafted using premium materials, this piece showcases authentic African heritage blended with modern aesthetics. Perfect for weddings, parties, or special cultural occasions."
+            elif desc_type == "promotion":
+                suggestion = f"Get ready for our special promotion: {title or 'Exclusive Offers'}. Enjoy up to {discount or 'limited-time'} discounts on our top designer collections. Elevate your wardrobe today!"
+            else:
+                suggestion = f"Hello support team, I am writing to request assistance regarding {subject or 'Urbana marketplace features'} under the category {category or 'General Enquiry'}. Looking forward to your guidance."
+            return Response({"status": "success", "suggestion": suggestion})
+
+        try:
+            client = genai.Client(api_key=gemini_key)
+            model_name = "gemini-2.5-flash"
+
+            if desc_type == "product":
+                prompt = f"Write a captivating product description for a fashion item named '{name}'. Focus on celebrating African craftsmanship, premium quality, and style versatility. Keep it under 100 words and make it engaging for international buyers."
+            elif desc_type == "promotion":
+                prompt = f"Write an exciting promotion description for a marketing campaign titled '{title}' with a discount of '{discount}%'. Keep it under 60 words and create a sense of urgency."
+            else:
+                prompt = f"Write a concise support ticket description explaining an issue with the subject '{subject}' and category '{category}'. Write it from a designer's perspective seeking help from support. Keep it under 60 words."
+
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            suggestion = response.text.strip()
+            return Response({"status": "success", "suggestion": suggestion})
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to generate description: {e}")
+            if desc_type == "product":
+                suggestion = f"A beautiful {name or 'garment'} handcrafted by Urbana designers."
+            elif desc_type == "promotion":
+                suggestion = f"Special sale: {title or 'Campaign'}!"
+            else:
+                suggestion = f"Support request regarding {subject or 'issue'}."
+            return Response({"status": "success", "suggestion": suggestion})

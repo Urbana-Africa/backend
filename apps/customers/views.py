@@ -23,6 +23,17 @@ from django.core.paginator import Paginator
 from rest_framework import status
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q
+
+def check_promo_qualifies(product, promotion):
+    if not promotion:
+        return False
+    if not (product.user and hasattr(product.user, 'designer_profile') and product.user.designer_profile == promotion.designer):
+        return False
+    if promotion.applies_to == 'all':
+        return True
+    elif promotion.applies_to == 'specific':
+        return promotion.products.filter(id=product.id).exists()
+    return False
 # ---------------- Checkout Preview ----------------
 class CheckoutPreviewView(APIView):
     """Calculates checkout preview totals (subtotal, shipping cost, duties/taxes, total) based on country/address."""
@@ -78,11 +89,39 @@ class CheckoutPreviewView(APIView):
             from apps.pay.services.pricing import calculate_product_price_breakdown
             from apps.core.models import ShippingMethod
 
+            promo_code = request.data.get('promo_code')
+            promotion = None
+            if promo_code:
+                from apps.designers.models import Promotion
+                now = timezone.now()
+                try:
+                    promotion = Promotion.objects.get(
+                        code__iexact=promo_code.strip(),
+                        active=True,
+                        approval_status='approved',
+                        start_date__lte=now,
+                        end_date__ge=now
+                    )
+                except Promotion.DoesNotExist:
+                    return Response({'status': 'error', 'message': 'Invalid or expired promotion code.'}, status=400)
+
             sub_total = Decimal("0.00")
             duties_amount = Decimal("0.00")
+            promo_savings = Decimal("0.00")
+            promo_applied = False
+            promo_discount_percentage = float(promotion.discount_percentage) if promotion else 0.0
 
             for item in cart_items:
-                breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                item_promo_discount = None
+                if promotion and check_promo_qualifies(item.product, promotion):
+                    item_promo_discount = promotion.discount_percentage
+                    promo_applied = True
+
+                breakdown = calculate_product_price_breakdown(
+                    item.product,
+                    buyer_country,
+                    promo_discount=item_promo_discount
+                )
                 qty = Decimal(str(item.quantity))
 
                 item_base = breakdown['base_price'] * qty
@@ -90,6 +129,12 @@ class CheckoutPreviewView(APIView):
 
                 sub_total += item_base
                 duties_amount += item_duties
+
+                if item_promo_discount is not None:
+                    normal_breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                    savings_per_unit = normal_breakdown['total_price'] - breakdown['total_price']
+                    if savings_per_unit > 0:
+                        promo_savings += savings_per_unit * qty
 
             # Resolve shipping amount from selected rate or fallback
             shipping_rate = request.data.get('shipping_rate')
@@ -99,7 +144,14 @@ class CheckoutPreviewView(APIView):
                 # Fallback to dynamic shipping calculation
                 shipping_amount = Decimal("0.00")
                 for item in cart_items:
-                    breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                    item_promo_discount = None
+                    if promotion and check_promo_qualifies(item.product, promotion):
+                        item_promo_discount = promotion.discount_percentage
+                    breakdown = calculate_product_price_breakdown(
+                        item.product,
+                        buyer_country,
+                        promo_discount=item_promo_discount
+                    )
                     qty = Decimal(str(item.quantity))
                     shipping_amount += breakdown['shipping_cost'] * qty
 
@@ -120,6 +172,9 @@ class CheckoutPreviewView(APIView):
                     "total_amount": float(total_amount),
                     "buyer_country": buyer_country,
                     "shipping_method_name": shipping_method_name,
+                    "promo_applied": promo_applied,
+                    "promo_discount_percentage": promo_discount_percentage,
+                    "promo_savings": float(promo_savings),
                 }
             })
         except Exception as e:
@@ -208,12 +263,35 @@ class CheckoutView(APIView):
                 if item.product.stock < item.quantity:
                     return Response({"status":"error", "message":f'{item.product.name} is out of stock'}, status=400)
 
+            promo_code = request.data.get('promo_code')
+            promotion = None
+            if promo_code:
+                from apps.designers.models import Promotion
+                now = timezone.now()
+                try:
+                    promotion = Promotion.objects.get(
+                        code__iexact=promo_code.strip(),
+                        active=True,
+                        approval_status='approved',
+                        start_date__lte=now,
+                        end_date__ge=now
+                    )
+                except Promotion.DoesNotExist:
+                    return Response({'status': 'error', 'message': 'Invalid or expired promotion code.'}, status=400)
+
             sub_total = Decimal("0.00")
             duties_amount = Decimal("0.00")
             item_breakdowns = []
             for item in cart_items:
-                # Calculate the dynamic pricing breakdown in USD
-                breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                item_promo_discount = None
+                if promotion and check_promo_qualifies(item.product, promotion):
+                    item_promo_discount = promotion.discount_percentage
+
+                breakdown = calculate_product_price_breakdown(
+                    item.product,
+                    buyer_country,
+                    promo_discount=item_promo_discount
+                )
                 qty = Decimal(str(item.quantity))
 
                 item_base = breakdown['base_price'] * qty
@@ -244,7 +322,14 @@ class CheckoutView(APIView):
                 shipping_method = request.data.get('shipping_method', 'Designer Fulfilled')
                 shipping_amount = Decimal("0.00")
                 for item in cart_items:
-                    breakdown = calculate_product_price_breakdown(item.product, buyer_country)
+                    item_promo_discount = None
+                    if promotion and check_promo_qualifies(item.product, promotion):
+                        item_promo_discount = promotion.discount_percentage
+                    breakdown = calculate_product_price_breakdown(
+                        item.product,
+                        buyer_country,
+                        promo_discount=item_promo_discount
+                    )
                     qty = Decimal(str(item.quantity))
                     shipping_amount += breakdown['shipping_cost'] * qty
 

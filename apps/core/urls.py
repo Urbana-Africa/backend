@@ -47,6 +47,7 @@ from .views import (
     UserLookbookViewSet,
     AiSearchView,
     AiSuggestionsView,
+    AiSuggestDescriptionView,
     AiOutfitBuilderView,
     AiTrendingView,
     AiSmartCollectionView,
@@ -136,6 +137,7 @@ urlpatterns += [
 
     # 🤖 AI Search
     path("ai-search", AiSearchView.as_view(), name="core-ai-search"),
+    path("ai-suggest-description", AiSuggestDescriptionView.as_view(), name="core-ai-suggest-description"),
     path("ai-suggestions", AiSuggestionsView.as_view(), name="core-ai-suggestions"),
     path("ai-outfit-builder", AiOutfitBuilderView.as_view(), name="core-ai-outfit-builder"),
     path("ai-trending", AiTrendingView.as_view(), name="core-ai-trending"),

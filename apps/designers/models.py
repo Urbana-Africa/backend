@@ -242,6 +242,21 @@ class Promotion(BaseModel):
     approval_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     start_date = models.DateTimeField()
     end_date = models.DateTimeField()
+    code = models.CharField(max_length=50, blank=True, null=True, unique=True, db_index=True)
+    applies_to = models.CharField(
+        max_length=20,
+        choices=[('all', 'All Products'), ('specific', 'Specific Products')],
+        default='all'
+    )
+    products = models.ManyToManyField('core.Product', blank=True, related_name='promotions')
+
+    def save(self, *args, **kwargs):
+        if self.code:
+            self.code = self.code.strip().upper()
+        else:
+            import uuid
+            self.code = f"PROMO_{uuid.uuid4().hex[:6].upper()}"
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.title} ({self.designer.user.username})"

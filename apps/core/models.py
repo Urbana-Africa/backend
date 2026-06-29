@@ -195,9 +195,9 @@ class Product(BaseModel):
         OTHER = "other", "Other"
 
     availability_type = models.CharField(
-        max_length=20,
-        choices=AvailabilityType.choices,
+        max_length=100,
         default=AvailabilityType.READY_TO_SHIP,
+        blank=True,
     )
     print_type = models.CharField(
         max_length=20,

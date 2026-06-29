@@ -98,6 +98,7 @@ class ProductSerializer(serializers.ModelSerializer):
     # Allow custom values beyond model choices for "Other" selections
     print_type = serializers.CharField(max_length=20, required=False, allow_blank=True)
     occasion = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    availability_type = serializers.CharField(max_length=100, required=False, allow_blank=True)
 
     class Meta:
         model = Product
@@ -247,6 +248,15 @@ class ProductSerializer(serializers.ModelSerializer):
             )
             product.media.add(asset)
 
+        # Handle product video clip (max 1)
+        video_file = request.FILES.get("video")
+        if video_file:
+            video_asset = MediaAsset.objects.create(
+                file=video_file,
+                media_type=MediaAsset.MediaType.VIDEO,
+            )
+            product.media.add(video_asset)
+
         return product
 
     def update(self, instance, validated_data):
@@ -297,6 +307,25 @@ class ProductSerializer(serializers.ModelSerializer):
                     media_type=MediaAsset.MediaType.IMAGE,
                 )
                 instance.media.add(asset)
+
+        # Handle product video clip (max 1) update or deletion
+        video_file = request.FILES.get("video")
+        video_sent = "video" in raw_data or "video_deleted" in raw_data
+        video_deleted = raw_data.get("video") == "null" or raw_data.get("video_deleted") == "true"
+
+        if video_file:
+            for asset in instance.media.filter(media_type=MediaAsset.MediaType.VIDEO):
+                instance.media.remove(asset)
+                asset.delete()
+            video_asset = MediaAsset.objects.create(
+                file=video_file,
+                media_type=MediaAsset.MediaType.VIDEO,
+            )
+            instance.media.add(video_asset)
+        elif video_deleted or (video_sent and not raw_data.get("video")):
+            for asset in instance.media.filter(media_type=MediaAsset.MediaType.VIDEO):
+                instance.media.remove(asset)
+                asset.delete()
 
         return instance
 

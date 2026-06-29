@@ -130,7 +130,7 @@ def get_duties_surcharge_percent(from_country: str, to_country: str, total_usd_v
     return Decimal("0.15")
 
 
-def calculate_product_price_breakdown(product, buyer_country_code: str) -> dict:
+def calculate_product_price_breakdown(product, buyer_country_code: str, promo_discount=None) -> dict:
     """
     Calculates the complete visible price and breakdown for a product in USD.
     
@@ -141,7 +141,14 @@ def calculate_product_price_breakdown(product, buyer_country_code: str) -> dict:
     product_currency_code = product.currency.code if hasattr(product, 'currency') and product.currency else "USD"
     raw_price = Decimal(str(product.price))
     from apps.pay.services.pricing import convert_currency_with_buffer
-    base_price = convert_currency_with_buffer(raw_price, product_currency_code, "USD")
+    original_base_price = convert_currency_with_buffer(raw_price, product_currency_code, "USD")
+    
+    if promo_discount is not None:
+        discount_pct = Decimal(str(promo_discount))
+    else:
+        discount_pct = Decimal(str(product.discount)) if getattr(product, "discount", 0) else Decimal("0.00")
+        
+    base_price = original_base_price * (1 - discount_pct / 100)
     
     # Resolve Designer's Origin Country
     designer_country = 'NG'
@@ -213,6 +220,15 @@ def calculate_product_price_breakdown(product, buyer_country_code: str) -> dict:
     # 5. Total Visible Price (USD)
     total_price = base_price + shipping_cost + duties_buffer + platform_margin
     total_price = total_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    # 6. Original (MSRP) totals
+    original_surcharge_percent = get_duties_surcharge_percent(designer_country, buyer_country_code, original_base_price)
+    original_duties_buffer = (original_base_price + shipping_cost) * original_surcharge_percent
+    original_duties_buffer = original_duties_buffer.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    original_platform_margin = original_base_price * Decimal("0.10")
+    original_platform_margin = original_platform_margin.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    original_total_price = original_base_price + shipping_cost + original_duties_buffer + original_platform_margin
+    original_total_price = original_total_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     
     return {
         "base_price": base_price,
@@ -220,6 +236,8 @@ def calculate_product_price_breakdown(product, buyer_country_code: str) -> dict:
         "duties_buffer": duties_buffer,
         "platform_margin": platform_margin,
         "total_price": total_price,
+        "original_base_price": original_base_price,
+        "original_total_price": original_total_price,
         "designer_country": designer_country,
         "buyer_country": buyer_country_code
     }

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.authentication.serializers import UserSerializer
-from apps.core.models import MediaAsset, Sizes
+from apps.core.models import MediaAsset, Sizes, Product
 from apps.customers.models import Order, OrderItem, ReturnRequest
 from apps.customers.serializers import AddressSerializer, CustomerSerializer
 from .models import (
@@ -53,9 +53,11 @@ class InventoryAlertSerializer(serializers.ModelSerializer):
         fields = ['id', 'designer_product', 'threshold', 'notified']
 
 class PromotionSerializer(serializers.ModelSerializer):
+    products = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), many=True, required=False)
+
     class Meta:
         model = Promotion
-        fields = ['id', 'title', 'description', 'discount_percentage', 'active', 'approval_status', 'start_date', 'end_date']
+        fields = ['id', 'title', 'description', 'discount_percentage', 'active', 'approval_status', 'start_date', 'end_date', 'code', 'applies_to', 'products']
 
 class ShipmentTrackingSerializer(serializers.ModelSerializer):
     class Meta:

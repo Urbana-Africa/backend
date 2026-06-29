@@ -8,11 +8,32 @@ from django.core.mail import EmailMessage, get_connection
 from django.conf import settings
 
 
+def _append_social_links(html_content):
+    if not html_content:
+        return html_content
+    social_footer = """
+    <div style="margin-top: 30px; border-top: 1px solid #e3dbd3; padding-top: 15px; text-align: center; font-size: 12px; color: #8c7561; font-family: sans-serif;">
+        <p style="margin: 0 0 10px 0;">Follow Urbana Africa:</p>
+        <p style="margin: 0 0 10px 0;">
+            <a href="https://instagram.com/urbanaafrica" style="margin: 0 10px; color: #ec6d13; text-decoration: none; font-weight: bold;">Instagram</a> |
+            <a href="https://facebook.com/urbanaafrica" style="margin: 0 10px; color: #ec6d13; text-decoration: none; font-weight: bold;">Facebook</a> |
+            <a href="https://twitter.com/urbanaafrica" style="margin: 0 10px; color: #ec6d13; text-decoration: none; font-weight: bold;">Twitter</a> |
+            <a href="https://pinterest.com/urbanaafrica" style="margin: 0 10px; color: #ec6d13; text-decoration: none; font-weight: bold;">Pinterest</a>
+        </p>
+        <p style="margin: 0; font-size: 10px; color: #a69282;">&copy; 2026 Urbana Africa. Connecting African creators with the world.</p>
+    </div>
+    """
+    if "</body>" in html_content:
+        return html_content.replace("</body>", f"{social_footer}</body>")
+    return f"{html_content}{social_footer}"
+
 
 def resend_sendmail(subject, recipient_list, message, from_email=None, from_name=None):
     from_email = from_email or "hello@accounts.urbanaafrica.com"
     if from_name:
         from_email = f"{from_name} <{from_email}>"
+
+    message = _append_social_links(message)
 
     with get_connection(
         host=settings.RESEND_SMTP_HOST,
@@ -46,8 +67,9 @@ def sendmail(subject,recipient_list,message,customize = None,**kwargs):
     msg['Subject'] = subject
     msg['From'] = email.utils.formataddr((SENDERNAME, SENDER))
     msg['To'] = RECIPIENT
-    part1 = MIMEText(message, 'plain')
-    part2 = MIMEText(message, 'html')
+    plain_footer = "\n\nFollow Urbana Africa:\nInstagram: https://instagram.com/urbanaafrica\nFacebook: https://facebook.com/urbanaafrica\nTwitter: https://twitter.com/urbanaafrica\nPinterest: https://pinterest.com/urbanaafrica"
+    part1 = MIMEText(message + plain_footer, 'plain')
+    part2 = MIMEText(_append_social_links(message), 'html')
     msg.attach(part1)
     msg.attach(part2)
 
@@ -115,8 +137,9 @@ def prepare_message(RECIPIENT,BODY_TEXT,BODY_HTML,SUBJECT,CREDENTIALS, customize
     msg['Subject'] = SUBJECT
     msg['From'] = email.utils.formataddr((SENDERNAME, SENDER))
     msg['To'] = RECIPIENT
-    part1 = MIMEText(BODY_TEXT, 'plain')
-    part2 = MIMEText(BODY_HTML, 'html')
+    plain_footer = "\n\nFollow Urbana Africa:\nInstagram: https://instagram.com/urbanaafrica\nFacebook: https://facebook.com/urbanaafrica\nTwitter: https://twitter.com/urbanaafrica\nPinterest: https://pinterest.com/urbanaafrica"
+    part1 = MIMEText(BODY_TEXT + plain_footer, 'plain')
+    part2 = MIMEText(_append_social_links(BODY_HTML), 'html')
     msg.attach(part1)
     msg.attach(part2)
 

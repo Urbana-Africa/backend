@@ -7,26 +7,20 @@ django.setup()
 from apps.core.models import Category
 from django.utils.text import slugify
 
-SPECIALTIES = [
-  { "value": "womenswear", "label": "Womenswear" },
-  { "value": "menswear", "label": "Menswear" },
-  { "value": "unisex", "label": "Unisex" },
-  { "value": "bridal", "label": "Bridal" },
+MAIN_CATEGORIES = [
+  { "value": "clothing", "label": "Clothing" },
+  { "value": "shoes", "label": "Shoes" },
   { "value": "accessories", "label": "Accessories" },
-  { "value": "footwear", "label": "Footwear" },
-  { "value": "bags", "label": "Bags" },
-  { "value": "jewellery", "label": "Jewellery" },
-  { "value": "kidswear", "label": "Kidswear" },
-  { "value": "luxury_couture", "label": "Luxury / Couture" },
-  { "value": "streetwear", "label": "Streetwear" },
 ]
 
-for item in SPECIALTIES:
-    Category.objects.update_or_create(
+# Clear existing categories to keep it clean
+Category.objects.all().delete()
+
+for item in MAIN_CATEGORIES:
+    Category.objects.create(
         id=item["value"],
-        defaults={
-            "name": item["label"],
-            "slug": slugify(item["label"])
-        }
+        name=item["label"],
+        slug=slugify(item["label"])
     )
-print("Categories seeded successfully.")
+
+print("Main categories seeded successfully.")

@@ -752,21 +752,9 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
 
         # Send admin notification about profile update
         try:
-            from django.contrib.auth import get_user_model
-            from apps.utils.email_sender import sendmail
-            import threading
-            User = get_user_model()
-            admin_emails = list(User.objects.filter(is_superuser=True).values_list('email', flat=True))
-            if not admin_emails:
-                admin_emails = ['admin@urbanaafrica.com']
-                
+            from apps.utils.notifications import send_admin_designer_notification
             action_word = "signed up and submitted" if created else "updated"
-            subject = f"Urbana Admin: Designer profile {action_word}"
-            message = f"Designer {request.user.email} has {action_word} their profile. Please review in the admin dashboard."
-            threading.Thread(
-                target=sendmail,
-                args=(subject, admin_emails, message),
-            ).start()
+            send_admin_designer_notification(request.user, action_word)
         except Exception as e:
             print(f"Error sending admin notification email: {str(e)}")
 

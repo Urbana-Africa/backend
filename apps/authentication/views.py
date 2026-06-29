@@ -944,6 +944,13 @@ class Signup(APIView):
                 user.user_type = user_type
             user.save()
             
+            if user.user_type == 'designer':
+                try:
+                    from apps.utils.notifications import send_admin_designer_notification
+                    send_admin_designer_notification(user, "signed up")
+                except Exception as e:
+                    print(f"Error sending admin designer signup notification: {e}")
+
             serialized_data = UserSerializer(user)
             send_verification_email(user)
 

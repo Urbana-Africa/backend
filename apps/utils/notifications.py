@@ -294,3 +294,39 @@ def send_customer_review_request(order_item: OrderItem):
         ).start()
     except Exception as e:
         print(f"[EMAIL] Customer review request failed: {e}")
+
+
+def send_admin_designer_notification(designer_user, action_word):
+    """Notify all C-suite, superadmin, and support agent users of designer signup/profile updates."""
+    from apps.authentication.models import User
+    from apps.utils.email_sender import resend_sendmail
+    from django.db.models import Q
+    import threading
+
+    try:
+        # Fetch matching admin emails:
+        # C-suite (c_level), superadmin (superadmin), support agent (support_agent)
+        # also include is_superuser=True just in case
+        admins = User.objects.filter(
+            Q(user_type="admin", admin_role__in=["c_level", "superadmin", "support_agent"]) | Q(is_superuser=True),
+            is_active=True,
+            is_deleted=False
+        )
+        recipient_list = list(admins.values_list("email", flat=True))
+        # Ensure list is unique and clean
+        recipient_list = list(set([email for email in recipient_list if email]))
+
+        if not recipient_list:
+            recipient_list = ["admin@urbanaafrica.com"]
+
+        subject = f"Urbana Admin: Designer profile {action_word}"
+        message = f"<p>Designer <strong>{designer_user.email}</strong> has {action_word} their profile.</p>"
+        message += "<p>Please review the details in the admin dashboard.</p>"
+
+        threading.Thread(
+            target=resend_sendmail,
+            args=(subject, recipient_list, message),
+            kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Africa Notification"},
+        ).start()
+    except Exception as e:
+        print(f"[EMAIL] Admin designer notification failed: {e}")

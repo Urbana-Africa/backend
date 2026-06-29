@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from apps.authentication.models import DeletedUser, Security, User, VerificationCode
+from apps.utils.files import generate_email_avatar
 
 class UserSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
@@ -28,7 +29,8 @@ class UserSerializer(serializers.ModelSerializer):
     def get_avatar(self, obj):
         if obj.profile_picture:
             return obj.profile_picture.url
-        return None
+        name_or_email = obj.first_name or obj.email
+        return generate_email_avatar(name_or_email)
 
     def create(self, validated_data):
         user = User.objects.create(**validated_data)

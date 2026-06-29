@@ -83,12 +83,6 @@ class Designer(BaseModel):
         help_text="Yes, No, Not yet but I want to"
     )
 
-    local_shipping_fee = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=0.00,
-        help_text="Local shipping fee for domestic orders in designer's country"
-    )
 
     # ✅ Single lifecycle field
     status = models.CharField(

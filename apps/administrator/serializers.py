@@ -60,7 +60,8 @@ class AdminCustomerSerializer(AdminBaseSerializer):
             return obj.avatar.url
         if obj.user.profile_picture:
             return obj.user.profile_picture.url
-        return None
+        name_or_email = obj.user.first_name or obj.user.email
+        return generate_email_avatar(name_or_email)
 
     def get_country(self, obj):
         default = obj.addresses.filter(is_default=True).first()

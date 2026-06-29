@@ -152,7 +152,7 @@ def calculate_product_price_breakdown(product, buyer_country_code: str, promo_di
     
     # Resolve Designer's Origin Country
     designer_country = 'NG'
-    local_shipping_fee = None
+
     designer_id = 'default'
     
     is_mock = lambda x: type(x).__name__ in ('MagicMock', 'Mock', 'NonCallableMagicMock', 'NonCallableMock')
@@ -161,8 +161,6 @@ def calculate_product_price_breakdown(product, buyer_country_code: str, promo_di
         profile = product.user.designer_profile
         if not is_mock(profile) or (hasattr(profile, 'country') and not is_mock(profile.country)):
             designer_country = str(profile.country) if profile.country else 'NG'
-            if hasattr(profile, 'local_shipping_fee') and not is_mock(profile.local_shipping_fee):
-                local_shipping_fee = profile.local_shipping_fee
             if hasattr(profile, 'id') and not is_mock(profile.id):
                 designer_id = profile.id
                 
@@ -198,7 +196,7 @@ def calculate_product_price_breakdown(product, buyer_country_code: str, promo_di
     if cached_ship_cost is not None:
         shipping_cost = Decimal(str(cached_ship_cost))
     else:
-        rates_res = get_shipping_rates(from_address, to_address, weight, dims, local_shipping_fee=local_shipping_fee)
+        rates_res = get_shipping_rates(from_address, to_address, weight, dims)
         shipping_cost = Decimal("30.00")  # default fallback
         if rates_res.get('status') == 'success' and rates_res.get('rates'):
             shipping_cost = Decimal(str(rates_res['rates'][0]['amount']))

@@ -191,7 +191,7 @@ def create_or_fetch_tracking(carrier: str, tracking_number: str) -> dict:
 
 from shippo.models.components import ShipmentCreateRequest, AddressCreateRequest, ParcelCreateRequest, TransactionCreateRequest
 
-def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, dimensions: dict = None, local_shipping_fee: float = None) -> dict:
+def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, dimensions: dict = None) -> dict:
     """
     Creates a shipment object on Shippo to fetch rates.
     If Shippo API fails (e.g. 401 unauthorized, invalid key, or network issue),
@@ -201,19 +201,7 @@ def get_shipping_rates(from_address: dict, to_address: dict, weight_kg: float, d
     from_country = _normalise_country(from_address.get('country') or 'GH')
     to_country = _normalise_country(to_address.get('country') or 'US')
     
-    # If domestic shipping and a custom local shipping fee is specified, use it immediately
-    if from_country == to_country and local_shipping_fee is not None and float(local_shipping_fee) > 0:
-        return {
-            "status": "success",
-            "rates": [{
-                "amount": float(local_shipping_fee),
-                "currency": "USD",
-                "provider": "Local Carrier",
-                "service_level": "Domestic Custom",
-                "estimated_days": 2,
-                "source": "designer_custom"
-            }]
-        }
+
     
     # Defaults for dimensions if not provided
     dims = dimensions or {'length': '30.00', 'width': '20.00', 'height': '10.00'}

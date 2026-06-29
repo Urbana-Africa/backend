@@ -3,6 +3,7 @@ from django.conf import settings
 from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import timedelta
+from django.core.cache import cache
 
 from apps.utils.email_sender import resend_sendmail
 from apps.authentication.models import User
@@ -33,6 +34,11 @@ def _delivery_timeline(product):
 
 def send_designer_welcome_email(user: User):
     """Email 1: Founder welcome email — immediately after vendor signs up"""
+    cache_key = f"welcome_email_sent_{user.id}"
+    if cache.get(cache_key):
+        return
+    cache.set(cache_key, True, 60 * 60 * 24 * 365)
+
     try:
         designer = user.designer_profile
         context = {
@@ -162,6 +168,11 @@ def send_designer_order_shipped(order_item: OrderItem):
 
 def send_customer_welcome_email(user: User):
     """Email 1: Customer welcome — immediately after signup"""
+    cache_key = f"welcome_email_sent_{user.id}"
+    if cache.get(cache_key):
+        return
+    cache.set(cache_key, True, 60 * 60 * 24 * 365)
+
     try:
         context = {
             "first_name": user.first_name or "there",

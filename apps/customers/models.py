@@ -14,6 +14,7 @@ class Customer(models.Model):
     phone = models.CharField(max_length=20, blank=True, null=True)
     avatar = models.ImageField(upload_to='customers/avatars/', blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    browse_reminder_sent_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
@@ -155,6 +156,7 @@ class OrderItem(models.Model):
     masked_phone = models.CharField(max_length=50, blank=True, null=True, help_text="Masked customer phone number for designer view.")
     created_at = models.DateTimeField(auto_now_add=True, null= True)
     delivered_at = models.DateTimeField(null=True, blank=True)
+    review_request_sent_at = models.DateTimeField(null=True, blank=True)
     packaging_images = models.ManyToManyField('core.MediaAsset', related_name='order_packaging_images', blank=True)
     packaging_video = models.ForeignKey('core.MediaAsset', related_name='order_packaging_video', on_delete=models.SET_NULL, null=True, blank=True)
     packaging_approval_status = models.CharField(max_length=20, choices=PACKAGING_APPROVAL_CHOICES, default='unsubmitted')

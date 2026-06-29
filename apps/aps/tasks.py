@@ -233,12 +233,15 @@ def send_delayed_customer_emails():
     customers_no_order = Customer.objects.filter(
         created_at__lte=day_ago,
         created_at__gte=day_ago - timedelta(hours=2),
+        browse_reminder_sent_at__isnull=True,
     )
     for customer in customers_no_order:
         has_order = Order.objects.filter(customer=customer).exists()
         if not has_order:
             try:
                 send_customer_browse_reminder(customer.user)
+                customer.browse_reminder_sent_at = now
+                customer.save(update_fields=["browse_reminder_sent_at"])
             except Exception as e:
                 print(f"[SCHEDULED] Customer browse reminder failed: {e}")
 
@@ -250,9 +253,12 @@ def send_delayed_customer_emails():
         status="delivered",
         delivered_at__lte=two_days_after,
         delivered_at__gte=three_days_after,
+        review_request_sent_at__isnull=True,
     )
     for item in delivered_items:
         try:
             send_customer_review_request(item)
+            item.review_request_sent_at = now
+            item.save(update_fields=["review_request_sent_at"])
         except Exception as e:
             print(f"[SCHEDULED] Customer review request failed: {e}")

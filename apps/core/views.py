@@ -580,7 +580,10 @@ class ProductListView(APIView):
         # -----------------------
         subcategory = request.GET.get("subcategory")
         if subcategory:
-            queryset = queryset.filter(categories__slug=subcategory)
+            queryset = queryset.filter(
+                Q(categories__slug=subcategory) |
+                Q(categories__slug__endswith=f"-{subcategory}")
+            )
 
         category = request.GET.get("category")
         if category:

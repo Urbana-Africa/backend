@@ -83,7 +83,11 @@ class BrandSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     media = MediaAssetSerializer(many=True, read_only=True)
     colors = ColorSerializer(many=True, read_only=True)
-    sizes = SizesSerializer(many=True, read_only=True)
+    sizes = serializers.PrimaryKeyRelatedField(
+        queryset=Sizes.objects.all(),
+        many=True,
+        required=False
+    )
     country_of_origin = CountrySerializer(read_only=True)
     fit_me_image = serializers.ImageField(required=False, allow_null=True)
     avg_rating = serializers.SerializerMethodField(read_only=True)
@@ -173,29 +177,72 @@ class ProductSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         raw = getattr(request, "data", {}) if request else {}
 
-        # Require sizes and colors on create; on update they are optional if not sent
-        is_create = self.instance is None
-        if is_create:
-            # JSON: "sizes", FormData/MultiPart: "sizes" or legacy "sizes[]"
-            sizes = raw.getlist("sizes") or raw.getlist("sizes[]")
+        def get_list_from_raw(key):
+            if hasattr(raw, "getlist"):
+                return raw.getlist(key) or raw.getlist(f"{key}[]")
+            val = raw.get(key) or raw.get(f"{key}[]")
+            if isinstance(val, list):
+                return val
+            if val:
+                return [val]
+            return []
 
-            # JSON: "colors_input", FormData: JSON string under "colors_input"
-            colors_input = raw.get("colors_input") or raw.get("colors")
-            if not colors_input:
-                colors_input = any(
-                    k.startswith("colors_input[") for k in raw.keys()
-                )
+        # 1. Resolve category IDs
+        categories_ids = get_list_from_raw("categories")
+        if not categories_ids and self.instance:
+            categories_ids = [c.id for c in self.instance.categories.all()]
 
+        # 2. Check if the categories belong to clothing or shoes
+        from apps.core.models import Category
+        cats = Category.objects.filter(id__in=categories_ids)
+        is_clothing_or_shoes = False
+        for c in cats:
+            if c.slug in ["clothing", "shoes"]:
+                is_clothing_or_shoes = True
+                break
+            p = c.parent
+            while p:
+                if p.slug in ["clothing", "shoes"]:
+                    is_clothing_or_shoes = True
+                    break
+                p = p.parent
+            if is_clothing_or_shoes:
+                break
+
+        # 3. Enforce sizes and colors if under clothing or shoes
+        if is_clothing_or_shoes:
+            sizes = get_list_from_raw("sizes")
+            if not sizes and self.instance:
+                sizes = [s.id for s in self.instance.sizes.all()]
+            
             if not sizes or len(sizes) == 0:
-                raise serializers.ValidationError({"sizes": "At least one size is required."})
+                raise serializers.ValidationError({"sizes": "At least one size is required for clothing/shoes."})
+
+            colors_input = raw.get("colors_input") or raw.get("colors")
+            if not colors_input and self.instance:
+                colors_input = self.instance.colors.exists()
+
             if not colors_input:
-                raise serializers.ValidationError({"colors": "At least one color is required."})
+                has_nested = any(k.startswith("colors_input[") or k.startswith("colors[") for k in raw.keys())
+                if not has_nested:
+                    raise serializers.ValidationError({"colors": "At least one color is required for clothing/shoes."})
 
         return super().validate(attrs)
 
     def _handle_colors(self, product, colors_data):
         if colors_data is None:
             return
+
+        if isinstance(colors_data, str):
+            import json
+            try:
+                colors_data = json.loads(colors_data)
+            except (TypeError, ValueError):
+                colors_data = []
+
+        if not isinstance(colors_data, list):
+            return
+
         # clear existing and recreate
         product.colors.all().delete()
         for c in colors_data:
@@ -203,7 +250,6 @@ class ProductSerializer(serializers.ModelSerializer):
                 name = c.get("name", "").strip()
                 hex_code = c.get("hex_code", "").strip() or None
             else:
-                # fallback if it arrives as a string or ID somehow
                 continue
             if name:
                 Color.objects.create(product=product, name=name, hex_code=hex_code)

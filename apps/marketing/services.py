@@ -1,6 +1,7 @@
 import json
 import logging
 import requests
+import time
 from bs4 import BeautifulSoup
 from django.conf import settings
 from .models import DesignerLead
@@ -105,7 +106,7 @@ def extract_lead_from_url(url: str):
         """
 
         client = genai.Client(api_key=gemini_key)
-        chat_model = getattr(settings, "CHAT_GEMINI_MODEL", "gemini-2.0-flash")
+        chat_model = getattr(settings, "CHAT_GEMINI_MODEL", "gemini-2.0-flash-lite")
         
         gen_response = client.models.generate_content(
             model=chat_model,
@@ -147,6 +148,7 @@ def run_scraping_job(query: str, max_results: int = 5):
     for url in urls:
         logger.info(f"Scraping {url}")
         extracted_data = extract_lead_from_url(url)
+        time.sleep(4)  # Sleep to respect API rate limits
         if extracted_data and extracted_data.get("brand_name"):
             # Check if brand already exists to avoid duplicates
             if not DesignerLead.objects.filter(brand_name__iexact=extracted_data["brand_name"]).exists():

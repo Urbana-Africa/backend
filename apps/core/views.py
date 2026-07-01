@@ -2092,7 +2092,7 @@ ALWAYS classify the above examples as SHOPPING, not off-topic."""
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
                 client.models.generate_content,
-                model="gemini-1.5-flash-latest",
+                model="gemini-2.0-flash",
                 contents=message,
                 config=genai.types.GenerateContentConfig(
                     system_instruction=system_prompt,
@@ -2189,7 +2189,7 @@ Example: ["Show me elegant Adire outfits for work", "Ankara wedding guest dress 
         try:
             client = genai.Client(api_key=gemini_key)
             response = client.models.generate_content(
-                model="gemini-1.5-flash-latest",
+                model="gemini-2.0-flash",
                 contents="Generate 5 search prompt suggestions.",
                 config=genai.types.GenerateContentConfig(
                     system_instruction=system_prompt,
@@ -2422,7 +2422,7 @@ Trending designers: {designer_context}
 Respond ONLY with a valid JSON array of 5 strings.""" 
                 client = genai.Client(api_key=gemini_key)
                 response = client.models.generate_content(
-                    model="gemini-1.5-flash-latest",
+                    model="gemini-2.0-flash",
                     contents="Generate trending search prompts.",
                     config=genai.types.GenerateContentConfig(
                         system_instruction=system_prompt,
@@ -2695,7 +2695,7 @@ Respond ONLY with valid JSON in this exact structure:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(
                         client.models.generate_content,
-                        model="gemini-1.5-flash-latest",
+                        model="gemini-2.0-flash",
                         contents=[
                             types.Part.from_bytes(data=photo_bytes, mime_type=mime),
                             prompt,

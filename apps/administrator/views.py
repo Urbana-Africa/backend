@@ -1164,3 +1164,85 @@ class CLevelDashboardAnalyticsView(APIView):
         }
 
         return Response(data, status=status.HTTP_200_OK)
+
+
+# =====================================================
+# NEWSLETTER MANAGEMENT
+# =====================================================
+from .permissions import IsMarketer
+from apps.newsletter.models import Newsletter, NewsletterSubscriber
+
+class AdminNewsletterSubscriberViewSet(viewsets.ModelViewSet):
+    queryset = NewsletterSubscriber.objects.all()
+    serializer_class = AdminNewsletterSubscriberSerializer
+    permission_classes = [IsMarketer]
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ["is_active"]
+    search_fields = ["email", "full_name"]
+    ordering_fields = ["subscribed_at"]
+    ordering = ["-subscribed_at"]
+
+
+class AdminNewsletterViewSet(viewsets.ModelViewSet):
+    queryset = Newsletter.objects.all()
+    serializer_class = AdminNewsletterSerializer
+    permission_classes = [IsMarketer]
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ["is_draft"]
+    search_fields = ["title", "subject", "content"]
+    ordering_fields = ["created_at", "sent_at"]
+    ordering = ["-created_at"]
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="send")
+    def send_newsletter(self, request, pk=None):
+        newsletter = self.get_object()
+
+        if not newsletter.is_draft:
+            return Response(
+                {"detail": "This newsletter has already been sent."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        active_subscribers = NewsletterSubscriber.objects.filter(is_active=True)
+        if not active_subscribers.exists():
+            return Response(
+                {"detail": "No active subscribers found."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        def _send_emails():
+            try:
+                for subscriber in active_subscribers:
+                    context = {
+                        "subject": newsletter.subject,
+                        "content": newsletter.content,
+                        "subscriber_name": subscriber.full_name,
+                        "site_url": settings.STORE_URL,
+                    }
+                    message = render_to_string("emails/newsletter.html", context)
+                    
+                    resend_sendmail(
+                        subject=newsletter.subject,
+                        recipient_list=[subscriber.email],
+                        message=message,
+                        from_email="marketing@accounts.urbanaafrica.com",
+                        from_name="Urbana Africa",
+                    )
+            except Exception as e:
+                print(f"[Newsletter Error] Failed to send newsletter {newsletter.title}: {e}")
+
+        # Send asynchronously via threading
+        threading.Thread(target=_send_emails, daemon=True).start()
+
+        # Update newsletter status
+        newsletter.mark_as_sent()
+
+        return Response({
+            "status": "success",
+            "message": f"Newsletter is being dispatched to {active_subscribers.count()} subscribers."
+        }, status=status.HTTP_200_OK)

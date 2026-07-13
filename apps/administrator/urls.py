@@ -58,6 +58,12 @@ router.register(r"promotions", AdminPromotionViewSet, basename="admin-promotions
 router.register(r"withdrawals", AdminWithdrawalViewSet, basename="admin-withdrawals")
 router.register(r"tickets", AdminTicketViewSet, basename="admin-tickets")
 
+# =====================================================
+# NEWSLETTER MANAGEMENT
+# =====================================================
+router.register(r"newsletters", AdminNewsletterViewSet, basename="admin-newsletters")
+router.register(r"newsletter-subscribers", AdminNewsletterSubscriberViewSet, basename="admin-newsletter-subscribers")
+
 urlpatterns = router.urls + [
     # Algorithm Admin Endpoints
     path("algorithm-config", AlgorithmConfigView.as_view(), name="admin-algo-config"),

@@ -366,3 +366,21 @@ class AdminWithdrawalSerializer(AdminBaseSerializer):
         except:
             data['brand_name'] = "Unknown"
         return data
+
+
+# =====================================================
+# NEWSLETTER MANAGEMENT
+# =====================================================
+
+from apps.newsletter.models import Newsletter, NewsletterSubscriber
+
+class AdminNewsletterSerializer(AdminBaseSerializer):
+    class Meta(AdminBaseSerializer.Meta):
+        model = Newsletter
+        read_only_fields = ["created_at", "updated_at", "sent_at"]
+
+
+class AdminNewsletterSubscriberSerializer(AdminBaseSerializer):
+    class Meta(AdminBaseSerializer.Meta):
+        model = NewsletterSubscriber
+        read_only_fields = ["subscribed_at", "unsubscribed_at"]

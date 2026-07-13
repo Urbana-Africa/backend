@@ -1,59 +1,98 @@
 {% extends "emails/base.html" %}
 
 {% block content %}
-<p>Hi {{ first_name }},</p>
-
-<p>Thank you for shopping with Urbana Africa.</p>
-
-<p>Your order has been confirmed, and the designer will begin preparing your piece.</p>
-
-<p>Please find your order details below:</p>
-
-<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
-  <tr style="border-bottom:1px solid #e6e0db;">
-    <td style="padding:8px 0; color:#666;">Order number</td>
-    <td style="padding:8px 0; font-weight:600;">{{ order_number }}</td>
-  </tr>
-  <tr style="border-bottom:1px solid #e6e0db;">
-    <td style="padding:8px 0; color:#666;">Designer</td>
-    <td style="padding:8px 0; font-weight:600;">{{ designer_name }}</td>
-  </tr>
-  <tr style="border-bottom:1px solid #e6e0db;">
-    <td style="padding:8px 0; color:#666;">Product</td>
-    <td style="padding:8px 0; font-weight:600;">{{ product_name }}</td>
-  </tr>
-  <tr style="border-bottom:1px solid #e6e0db;">
-    <td style="padding:8px 0; color:#666;">Size</td>
-    <td style="padding:8px 0; font-weight:600;">{{ size }}</td>
-  </tr>
-  <tr style="border-bottom:1px solid #e6e0db;">
-    <td style="padding:8px 0; color:#666;">Colour</td>
-    <td style="padding:8px 0; font-weight:600;">{{ colour }}</td>
-  </tr>
-  <tr style="border-bottom:1px solid #e6e0db;">
-    <td style="padding:8px 0; color:#666;">Quantity</td>
-    <td style="padding:8px 0; font-weight:600;">{{ quantity }}</td>
-  </tr>
-  <tr style="border-bottom:1px solid #e6e0db;">
-    <td style="padding:8px 0; color:#666;">Total</td>
-    <td style="padding:8px 0; font-weight:600;">{{ order_total }}</td>
-  </tr>
+<!-- Hero Section -->
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 32px; text-align: center;">
   <tr>
-    <td style="padding:8px 0; color:#666;">Estimated delivery timeline</td>
-    <td style="padding:8px 0; font-weight:600;">{{ delivery_timeline }}</td>
+    <td align="center">
+      <div style="display: inline-block; background-color: #ffdcc3; color: #8d4b00; padding: 16px; border-radius: 50%; margin-bottom: 24px;">
+        <span style="font-size: 24px;">&#127881;</span>
+      </div>
+      <h1 style="font-size: 32px; font-weight: 800; margin-bottom: 16px; color: #1b1c1a;">Order Confirmed.</h1>
+      <p style="font-size: 16px; color: #41606e; margin-bottom: 24px; max-width: 400px; margin-left: auto; margin-right: auto;">
+        Hi {{ first_name }},<br><br>
+        Thank you for supporting African craftsmanship. Your purchase directly empowers independent artisans across the continent.
+      </p>
+    </td>
   </tr>
 </table>
 
-<p style="margin:20px 0;"><a href="{{ order_url }}" class="btn">View order details</a></p>
+<!-- Summary CTA Card -->
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="background-color: #1b1c1a; border-radius: 12px; margin-bottom: 32px;">
+  <tr>
+    <td style="padding: 32px; text-align: center;">
+      <h3 style="font-size: 20px; font-weight: 700; color: #ffffff; margin-bottom: 12px;">Track Your Heritage</h3>
+      <p style="color: #e4e2de; font-size: 14px; margin-bottom: 24px;">Follow your hand-crafted piece as it makes its way from the artisan workshop to your door. We will notify you when the designer begins preparing your piece.</p>
+      <a href="{{ order_url }}" class="btn-primary" style="display: inline-block;">View Order Details &rarr;</a>
+    </td>
+  </tr>
+</table>
 
-<p>We'll keep you updated as your order moves through the next steps.</p>
+<!-- Order Details -->
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 32px;">
+  <tr>
+    <td>
+      <h2 style="font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: #8d4b00; margin-bottom: 16px;">Your Selection</h2>
+    </td>
+  </tr>
+  <tr>
+    <td class="card-low" style="padding: 24px;">
+      <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="padding-bottom: 16px; border-bottom: 1px solid #eae8e4; width: 50%;">
+            <p style="font-size: 12px; color: #41606e; margin-bottom: 4px;">Item</p>
+            <p style="font-size: 16px; font-weight: 700; color: #1b1c1a; margin: 0;">{{ product_name }}</p>
+          </td>
+          <td align="right" style="padding-bottom: 16px; border-bottom: 1px solid #eae8e4; width: 50%;">
+            <p style="font-size: 12px; color: #41606e; margin-bottom: 4px;">Order Number</p>
+            <p style="font-size: 14px; font-weight: 700; color: #1b1c1a; margin: 0;">{{ order_number }}</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 16px 0; border-bottom: 1px solid #eae8e4;">
+            <p style="font-size: 12px; color: #41606e; margin-bottom: 4px;">Designer</p>
+            <p style="font-size: 14px; font-weight: 600; color: #8d4b00; margin: 0;">{{ designer_name }}</p>
+          </td>
+          <td align="right" style="padding: 16px 0; border-bottom: 1px solid #eae8e4;">
+            <p style="font-size: 12px; color: #41606e; margin-bottom: 4px;">Timeline</p>
+            <p style="font-size: 14px; font-weight: 600; color: #1b1c1a; margin: 0;">{{ delivery_timeline }}</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 16px 0;">
+            <p style="font-size: 12px; color: #41606e; margin-bottom: 4px;">Size &amp; Colour</p>
+            <p style="font-size: 14px; color: #1b1c1a; margin: 0;">{{ size }} | {{ colour }}</p>
+            <p style="font-size: 12px; color: #41606e; margin-top: 4px; margin-bottom: 0;">Qty: {{ quantity }}</p>
+          </td>
+          <td align="right" style="padding: 16px 0;">
+            <p style="font-size: 12px; color: #41606e; margin-bottom: 4px;">Total</p>
+            <p style="font-size: 18px; font-weight: 800; color: #1b1c1a; margin: 0;">{{ order_total }}</p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
 
-<p>Every purchase on Urbana helps support African designers and brings their work closer to customers around the world.</p>
-
-<p>Thank you for being part of that journey.</p>
+<!-- Promotional Support Section -->
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="background-color: #ffdcc3; border-radius: 12px;">
+  <tr>
+    <td style="padding: 32px; text-align: center;">
+      <h3 style="font-size: 20px; font-weight: 700; color: #2f1500; margin-bottom: 8px;">Need assistance?</h3>
+      <p style="color: #6e3900; font-size: 14px; margin-bottom: 24px;">Our concierge is here to help with any questions regarding your order or the artisans who made it.</p>
+      <a href="mailto:support@urbana.africa" style="display: inline-block; background-color: #ffffff; color: #8d4b00; font-family: 'Manrope', Arial, sans-serif; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; text-decoration: none; padding: 12px 24px; border-radius: 50px;">Email Concierge</a>
+    </td>
+  </tr>
+</table>
 {% endblock %}
 
 {% block signature %}
-<p>Warm regards,</p>
-<p>Urbana Africa Support</p>
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-top: 32px;">
+  <tr>
+    <td style="padding-top: 24px; border-top: 1px solid #eae8e4;">
+      <p style="margin-bottom: 4px; color: #41606e;">Warm regards,</p>
+      <p style="font-weight: 700; color: #1b1c1a;">Urbana Africa Support</p>
+    </td>
+  </tr>
+</table>
 {% endblock %}

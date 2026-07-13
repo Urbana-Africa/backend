@@ -50,7 +50,7 @@ def send_designer_welcome_email(user: User):
         threading.Thread(
             target=resend_sendmail,
             args=("Welcome to Urbana Africa", [user.email], message),
-            kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Michael Lan, Founder of Urbana Africa"},
+            kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Africa Team"},
         ).start()
     except Exception as e:
         print(f"[EMAIL] Designer welcome failed: {e}")

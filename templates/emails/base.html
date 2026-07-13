@@ -1,50 +1,173 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ subject }}</title>
-  <style>
-    body { margin: 0; padding: 0; background-color: #f4f2f0; font-family: Georgia, 'Times New Roman', serif; }
-    .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
-    .header { background: #1b140d; padding: 32px 24px; text-align: center; }
-    .header h1 { color: #f3ede7; font-size: 22px; margin: 0; letter-spacing: 1px; }
-    .content { padding: 32px 28px; color: #333333; font-size: 15px; line-height: 1.7; }
-    .content p { margin: 0 0 16px; }
-    .signature { margin-top: 28px; padding-top: 20px; border-top: 1px solid #e6e0db; }
-    .signature p { margin: 0 0 4px; color: #666; font-size: 14px; }
-    .btn { display: inline-block; padding: 12px 28px; background: #9a6c4c; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 12px 0; }
-    .footer { background: #f7f5f4; padding: 20px 28px; text-align: center; font-size: 12px; color: #999; }
+  <style type="text/css">
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+    
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100% !important;
+      background-color: #fbf9f5; /* surface */
+      font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+      color: #1b1c1a; /* on-surface */
+      line-height: 1.6;
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+      font-family: 'Manrope', Arial, sans-serif;
+      margin-top: 0;
+      margin-bottom: 12px;
+      color: #1b1c1a;
+    }
+
+    p {
+      margin-top: 0;
+      margin-bottom: 16px;
+      color: #41606e; /* tertiary */
+    }
+
+    .container {
+      max-width: 600px !important;
+      margin: 0 auto !important;
+      background-color: #fbf9f5;
+    }
+
+    .header-nav {
+      background-color: #fbf9f5;
+      padding: 24px 32px;
+      text-align: center;
+      border-bottom: 1px solid #eae8e4;
+    }
+
+    .brand-name {
+      font-family: 'Manrope', Arial, sans-serif;
+      font-size: 24px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: -0.05em;
+      color: #1b1c1a;
+      text-decoration: none;
+    }
+
+    .content-wrapper {
+      padding: 32px;
+    }
+
+    /* Common Components */
+    .btn-primary {
+      display: inline-block;
+      background-color: #8d4b00; /* primary fallback */
+      background: linear-gradient(135deg, #8d4b00 0%, #b15f00 100%); /* terracotta-gradient */
+      color: #ffffff !important;
+      font-family: 'Manrope', Arial, sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      text-decoration: none;
+      padding: 14px 28px;
+      border-radius: 50px;
+      text-align: center;
+    }
+
+    .card {
+      background-color: #ffffff; /* surface-container-lowest */
+      border-radius: 12px;
+      padding: 32px;
+      margin-bottom: 24px;
+      box-shadow: 0 8px 24px rgba(27, 28, 26, 0.04); /* soft-ambient-glow */
+    }
+
+    .card-low {
+      background-color: #f5f3ef; /* surface-container-low */
+      border-radius: 12px;
+      padding: 32px;
+      margin-bottom: 24px;
+    }
+
+    /* Footer */
+    .footer {
+      background-color: #e4e2de; /* surface-container-highest */
+      padding: 40px 32px;
+      text-align: center;
+    }
+
+    .footer p {
+      font-size: 12px;
+      color: #41606e;
+      margin-bottom: 8px;
+    }
+    
+    .footer a {
+      color: #8d4b00;
+      text-decoration: none;
+    }
+
+    .footer-brand {
+      font-family: 'Manrope', Arial, sans-serif;
+      font-weight: 700;
+      font-size: 18px;
+      color: #1b1c1a;
+      margin-bottom: 16px;
+      display: block;
+    }
+
+    .text-sm { font-size: 14px; }
+    .text-xs { font-size: 12px; }
+    .text-center { text-align: center; }
+    .uppercase { text-transform: uppercase; }
+    .tracking-widest { letter-spacing: 2px; }
+    .font-bold { font-weight: 700; }
+    .text-primary { color: #8d4b00; }
+    .mb-24 { margin-bottom: 24px; }
+    
   </style>
 </head>
-<body>
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-    <tr>
-      <td align="center" style="padding: 24px 0;">
-        <table role="presentation" class="container" width="600" cellspacing="0" cellpadding="0">
-          <tr>
-            <td class="header">
-              <img src="https://www.urbanaafrica.com/urbana-icon.png" alt="Urbana Africa" width="48" height="48" style="display:block;margin:0 auto 12px;border-radius:8px;">
-              <h1>URBANA</h1>
-            </td>
-          </tr>
-          <tr>
-            <td class="content">
-              {% block content %}{% endblock %}
-              <div class="signature">
-                {% block signature %}{% endblock %}
-              </div>
-            </td>
-          </tr>
-          <tr>
-            <td class="footer">
-              Urbana Africa &mdash; Where African fashion meets the world.<br>
-              <a href="https://www.urbanaafrica.com" style="color:#9a6c4c;">www.urbanaafrica.com</a>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
+<body style="margin:0; padding:0; background-color:#fbf9f5;">
+  <center style="width: 100%; background-color: #fbf9f5;">
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #fbf9f5; max-width: 600px; margin: 0 auto;" class="container">
+      <!-- Header -->
+      <tr>
+        <td class="header-nav" align="center">
+          <a href="{{ site_url|default:'https://www.urbanaafrica.com' }}" class="brand-name">Urbana Africa</a>
+        </td>
+      </tr>
+
+      <!-- Main Content -->
+      <tr>
+        <td class="content-wrapper">
+          {% block content %}{% endblock %}
+          
+          <!-- Signature area if needed -->
+          {% block signature %}{% endblock %}
+        </td>
+      </tr>
+
+      <!-- Footer -->
+      <tr>
+        <td class="footer">
+          <span class="footer-brand">Urbana Africa</span>
+          <p>Connecting global homes with authentic African craftsmanship.<br>Each piece tells a story of heritage, skill, and sustainable creation.</p>
+          <p style="margin-top: 24px;">
+            <a href="#">Privacy Policy</a> &nbsp;|&nbsp; 
+            <a href="#">Terms of Service</a> &nbsp;|&nbsp; 
+            <a href="#">Contact Us</a>
+          </p>
+          <p style="margin-top: 24px; font-size: 11px; opacity: 0.7;">
+            &copy; 2024 Urbana Africa. Celebrating African Excellence.<br>
+            Designed in Lagos &bull; Crafted for the World
+          </p>
+        </td>
+      </tr>
+    </table>
+  </center>
 </body>
 </html>

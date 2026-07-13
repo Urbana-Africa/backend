@@ -1,24 +1,78 @@
 {% extends "emails/base.html" %}
 
 {% block content %}
-<p>Hi {{ first_name }},</p>
+<!-- Hero Section -->
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 32px;">
+  <tr>
+    <td>
+      <h1 style="font-size: 32px; font-weight: 800; line-height: 1.1; margin-bottom: 16px; color: #1b1c1a;">
+        Welcome to the vanguard of African <span style="color: #8d4b00; font-style: italic;">excellence</span>.
+      </h1>
+      <p style="font-size: 16px; color: #41606e; margin-bottom: 24px;">
+        Hi {{ first_name }},<br><br>
+        Urbana Africa is a new home for African fashion &mdash; a curated marketplace where you can discover beautiful pieces from talented African designers. Every collection on Urbana is connected to culture, creativity, identity, and modern African style.
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuBWKqrrRLFV-eYpQWDoAL8FdyRwmD-hhspvJaii1Dc3MyM3rI5QEKSQhMkHp2VB046ijpM4kexonEIa8q1Ts8vWEYkZbXla_Jz-HJTmD5B3dR6BYeZXXqxmwrQJDaD99P35L2uLBL2EBbqp5RWNv7NOwAsLtcX-e4OGSHKBN2oTuJFyLl0Yoo7oR2BwvMHLiBIHo5RQWb_rMlKcJS8uSa37ly8XNJWSI1YS0oUBmFBFTCxUmhxGOYo7" alt="African Fashion Editorial" width="100%" style="border-radius: 12px; display: block; max-width: 100%;">
+    </td>
+  </tr>
+</table>
 
-<p>Welcome to Urbana Africa.</p>
+<!-- Welcome Gift -->
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" class="card-low">
+  <tr>
+    <td align="center">
+      <span style="display:inline-block; font-family: 'Manrope', Arial, sans-serif; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: #8d4b00; border: 1px solid rgba(136,115,100,0.2); border-radius: 20px; padding: 6px 16px; margin-bottom: 16px; background-color: #ffffff;">
+        New Member Exclusive
+      </span>
+      <h2 style="font-size: 24px; font-weight: 700; margin-bottom: 16px;">Your Welcome Gift</h2>
+      <p style="color: #41606e; margin-bottom: 24px; text-align: center;">As a member of Urbana Africa, enjoy a special discount on your first piece of authentic African luxury.</p>
+      
+      <div style="background-color: #ffffff; border: 2px dashed #dbc2b0; border-radius: 8px; padding: 20px; display: inline-block; margin-bottom: 24px;">
+        <span style="font-family: 'Manrope', Arial, sans-serif; font-size: 28px; font-weight: 800; letter-spacing: 4px; color: #1b1c1a;">URBANA15</span>
+      </div>
+      <br>
+      <a href="{{ site_url|default:'https://www.urbanaafrica.com' }}" class="btn-primary">Redeem Your Gift</a>
+      <p style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #41606e; opacity: 0.6; margin-top: 24px;">Terms apply. Valid for 30 days from registration.</p>
+    </td>
+  </tr>
+</table>
 
-<p>We're so happy to have you here.</p>
-
-<p>Urbana Africa is a new home for African fashion — a curated marketplace where you can discover beautiful pieces from talented African designers.</p>
-
-<p>Every collection on Urbana is connected to culture, creativity, identity, and modern African style. Our goal is to make African fashion easier to discover, easier to trust, and easier to shop from anywhere in the world.</p>
-
-<p>As we grow, you'll be able to explore new designers, shop unique pieces, and discover fashion that tells a deeper story.</p>
-
-<p>Thank you for joining us at the beginning of this journey.</p>
-
-<p>Welcome to Urbana Africa — where African fashion meets the world.</p>
+<!-- Start Your Journey -->
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-top: 32px; margin-bottom: 32px;">
+  <tr>
+    <td style="padding-bottom: 16px;">
+      <h2 style="font-size: 24px; font-weight: 700; margin-bottom: 8px;">Start Your Journey</h2>
+      <p style="font-family: 'Manrope', Arial, sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: 2px; color: #41606e; margin-bottom: 0;">Select your entry point</p>
+    </td>
+  </tr>
+  <tr>
+    <td class="card" style="margin-bottom: 16px; display: block;">
+      <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 12px;">Shop Collections</h3>
+      <p style="color: #41606e; margin-bottom: 16px;">Discover curated pieces from Lagos to Cape Town, celebrating the diversity of African craftsmanship.</p>
+      <a href="{{ site_url|default:'https://www.urbanaafrica.com' }}/collections" style="font-family: 'Manrope', Arial, sans-serif; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: #8d4b00; text-decoration: none;">Explore &rarr;</a>
+    </td>
+  </tr>
+  <tr>
+    <td class="card" style="margin-bottom: 0; display: block;">
+      <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 12px;">Meet the Artisans</h3>
+      <p style="color: #41606e; margin-bottom: 16px;">Step inside the studios. Learn the stories behind the stitches and the heritage behind the hues.</p>
+      <a href="{{ site_url|default:'https://www.urbanaafrica.com' }}/designers" style="font-family: 'Manrope', Arial, sans-serif; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: #8d4b00; text-decoration: none;">View Profiles &rarr;</a>
+    </td>
+  </tr>
+</table>
 {% endblock %}
 
 {% block signature %}
-<p>Warm regards,</p>
-<p>The Urbana Africa Team</p>
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">
+  <tr>
+    <td style="padding-top: 24px; border-top: 1px solid #eae8e4;">
+      <p style="margin-bottom: 4px; color: #41606e;">Warm regards,</p>
+      <p style="font-weight: 700; color: #1b1c1a;">The Urbana Africa Team</p>
+    </td>
+  </tr>
+</table>
 {% endblock %}

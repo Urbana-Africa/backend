@@ -2936,6 +2936,7 @@ class AiSuggestDescriptionView(APIView):
         category = request.data.get("category", "")
         title = request.data.get("title", "")
         discount = request.data.get("discount_percentage", "")
+        tagline = request.data.get("tagline", "")
 
         gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
         if not gemini_key:
@@ -2943,6 +2944,8 @@ class AiSuggestDescriptionView(APIView):
                 suggestion = f"Presenting our brand new {name or 'stylish African design'}. Handcrafted using premium materials, this piece showcases authentic African heritage blended with modern aesthetics. Perfect for weddings, parties, or special cultural occasions."
             elif desc_type == "promotion":
                 suggestion = f"Get ready for our special promotion: {title or 'Exclusive Offers'}. Enjoy up to {discount or 'limited-time'} discounts on our top designer collections. Elevate your wardrobe today!"
+            elif desc_type == "brand_story":
+                suggestion = f"Welcome to {name or 'our brand'}. {tagline + ' ' if tagline else ''}We are passionate about bringing authentic African fashion to the world, creating unique pieces that blend traditional craftsmanship with contemporary style."
             else:
                 suggestion = f"Hello support team, I am writing to request assistance regarding {subject or 'Urbana marketplace features'} under the category {category or 'General Enquiry'}. Looking forward to your guidance."
             return Response({"status": "success", "suggestion": suggestion})
@@ -2955,6 +2958,11 @@ class AiSuggestDescriptionView(APIView):
                 prompt = f"Write a captivating product description for a fashion item named '{name}'. Focus on celebrating African craftsmanship, premium quality, and style versatility. Keep it under 100 words and make it engaging for international buyers."
             elif desc_type == "promotion":
                 prompt = f"Write an exciting promotion description for a marketing campaign titled '{title}' with a discount of '{discount}%'. Keep it under 60 words and create a sense of urgency."
+            elif desc_type == "brand_story":
+                prompt = f"Write a captivating short brand story and bio for a fashion brand named '{name}'. "
+                if tagline:
+                    prompt += f"The brand's tagline is '{tagline}'. "
+                prompt += "Focus on celebrating African fashion, unique design identity, and the brand's vision. Keep it engaging, professional, and under 150 words."
             else:
                 prompt = f"Write a concise support ticket description explaining an issue with the subject '{subject}' and category '{category}'. Write it from a designer's perspective seeking help from support. Keep it under 60 words."
 
@@ -2972,6 +2980,8 @@ class AiSuggestDescriptionView(APIView):
                 suggestion = f"A beautiful {name or 'garment'} handcrafted by Urbana designers."
             elif desc_type == "promotion":
                 suggestion = f"Special sale: {title or 'Campaign'}!"
+            elif desc_type == "brand_story":
+                suggestion = f"Welcome to {name or 'our brand'}. Discover our unique collection of African-inspired fashion."
             else:
                 suggestion = f"Support request regarding {subject or 'issue'}."
             return Response({"status": "success", "suggestion": suggestion})

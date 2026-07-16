@@ -99,6 +99,8 @@ def extract_lead_from_url(url: str):
         - followers_count: Integer (if mentioned).
         - category_tags: A list of strings describing the style (e.g., ["Streetwear", "Luxury"]).
 
+        IMPORTANT: If the text does not contain their email, phone_number, or social_media_links, you MUST use your internal knowledge base to fill in these missing contact details. Please provide their official email address and social profiles if you know them.
+
         Return ONLY a raw JSON object matching the fields exactly. No markdown formatting, no code blocks, just raw JSON.
         
         Text to analyze:
@@ -106,7 +108,7 @@ def extract_lead_from_url(url: str):
         """
 
         client = genai.Client(api_key=gemini_key)
-        chat_model = getattr(settings, "CHAT_GEMINI_MODEL", "gemini-2.0-flash-lite")
+        chat_model = getattr(settings, "CHAT_GEMINI_MODEL", "gemini-2.5-flash")
         
         gen_response = client.models.generate_content(
             model=chat_model,

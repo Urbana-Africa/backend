@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    CheckoutView, CheckoutPreviewView, CustomerProfileView, AddressView, OrderDetailView, OrderTrackingView,
+    CheckoutView, CheckoutPreviewView, CustomerProfileView, AddressView, AddressDetailView, OrderDetailView, OrderTrackingView,
     ShippingMethodListView, ShippingRatesView, WishlistView, CartView,
     OrderListView, ReturnRequestView, ReturnResolveView, ReturnDetailView, DisputeView,
     CustomerSearchView, DashboardView
@@ -9,9 +9,11 @@ from .views import (
 urlpatterns = [
     path('profile', CustomerProfileView.as_view(), name='customer-profile'),
     path('addresses', AddressView.as_view(), name='customer-addresses'),
+    path('addresses/<int:address_id>', AddressDetailView.as_view(), name='customer-address-detail'),
     path('wishlist', WishlistView.as_view(), name='customer-wishlist'),
     path('cart', CartView.as_view(), name='customer-cart'),
     path('orders', OrderListView.as_view(), name='customer-orders'),
+    path('orders/<str:order_id>', OrderDetailView.as_view(), name='customer-order-detail-by-id'),
     path('returns', ReturnRequestView.as_view(), name='customer-returns'),
     path('returns/<str:return_id>/resolve', ReturnResolveView.as_view(), name='return-resolve'),
     path('returns/<str:return_id>', ReturnDetailView.as_view(), name='return-detail'),

@@ -87,12 +87,17 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         access_token = str(refresh.access_token)
         refresh_token = str(refresh)
 
-        # Prepare response (no tokens in body → more secure)
+        # Prepare response (cookies for browser, token in body for mobile/API clients)
         response = Response(
             {
                 "status": "success",
                 "message": "Login successful",
                 "user": UserSerializer(user).data,
+                "token": access_token,
+                "tokens": {
+                    "access": access_token,
+                    "refresh": refresh_token,
+                },
             },
             status=status.HTTP_200_OK,
         )
@@ -129,19 +134,21 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 class CustomTokenRefreshView(TokenRefreshView):
     """
-    Refresh access token using HttpOnly refresh cookie.
-    Returns new access + refresh tokens via cookies (not response body).
+    Refresh access token using HttpOnly refresh cookie or JSON body.
+    Returns new access + refresh tokens via cookies (for web) and response body (for mobile/API clients).
     Also rotates the refresh token cookie when ROTATE_REFRESH_TOKENS is True.
     """
 
     def post(self, request, *args, **kwargs):
-        refresh_token = request.COOKIES.get(
-            settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"]
+        refresh_token = (
+            request.COOKIES.get(settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"])
+            or request.data.get("refresh")
+            or request.data.get("refresh_token")
         )
 
         if not refresh_token:
             return Response(
-                {"message": "No refresh token", "status": "error"},
+                {"message": "No refresh token provided", "status": "error"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
@@ -156,14 +163,19 @@ class CustomTokenRefreshView(TokenRefreshView):
             )
 
         access_token = serializer.validated_data.get("access")
-        # When ROTATE_REFRESH_TOKENS=True, a new refresh token is issued.
-        # We MUST update the cookie, otherwise the next refresh will fail.
-        new_refresh_token = serializer.validated_data.get("refresh")
+        new_refresh_token = serializer.validated_data.get("refresh") or refresh_token
 
         res = Response(
             {
                 "status": "success",
                 "refreshed": True,
+                "access": access_token,
+                "refresh": new_refresh_token,
+                "token": access_token,
+                "tokens": {
+                    "access": access_token,
+                    "refresh": new_refresh_token,
+                },
             },
             status=status.HTTP_200_OK,
         )
@@ -404,17 +416,29 @@ class ChangePassword(APIView):
     queryset = Security.objects.all()
     serializer_class = SecuritySerializer
 
-
     def post(self, request):
         try:
             user = request.user
-            user.set_password(request.data['password'].strip())
+            current_password = request.data.get('current_password')
+            new_password = (request.data.get('new_password') or request.data.get('password') or '').strip()
+
+            if not new_password or len(new_password) < 8:
+                return Response(
+                    {'status': 'error', 'message': 'New password must be at least 8 characters long.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if current_password and not user.check_password(current_password):
+                return Response(
+                    {'status': 'error', 'message': 'Current password is incorrect.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            user.set_password(new_password)
             user.save()
-            response = {}       
-            response['status'] = 'success'              
-            return Response(response,status=status.HTTP_202_ACCEPTED)
+            return Response({'status': 'success', 'message': 'Password updated successfully.'}, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({'status':'error','message':str(e)},status=status.HTTP_400_BAD_REQUEST)
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 
@@ -478,22 +502,88 @@ class LoginView(APIView):
     authentication_classes = ()
     serializer_class = UserSerializer
 
+    def post(self, request):
+        email_or_username = str(request.data.get("email", request.data.get("username", ""))).lower().strip()
+        password = str(request.data.get("password", "")).strip()
 
-    def post(self, request,):
-        email = str(request.data["email"]).lower().strip()
-        password = str(request.data["password"]).strip()
+        if not email_or_username or not password:
+            return Response(
+                {"status": "error", "message": "Email and password are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            user = User.objects.get(email = email)
-        except ObjectDoesNotExist:
-            return Response({'status':'error','message':'Invalid credentials'},status=status.HTTP_404_NOT_FOUND)
-        if check_password(password,user.password):
-            response = {}
-            serialized_user = UserSerializer(user)
-            response['data'] = serialized_user.data
-            response['status'] = 'success'
-            return Response(response,status=status.HTTP_202_ACCEPTED)
-        else:
-            return Response({'status':'error','message':'Invalid credentials'},status=status.HTTP_404_NOT_FOUND)
+            user = User.objects.get(email=email_or_username, is_deleted=False)
+        except User.DoesNotExist:
+            try:
+                user = User.objects.get(username=email_or_username, is_deleted=False)
+            except User.DoesNotExist:
+                return Response(
+                    {"status": "error", "message": "Invalid credentials"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+        if not check_password(password, user.password):
+            return Response(
+                {"status": "error", "message": "Invalid credentials"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not user.is_active or not user.is_verified:
+            # Resend verification code if unverified
+            send_verification_email(user)
+            return Response(
+                {
+                    "status": "success",
+                    "inactive": True,
+                    "in_active": True,
+                    "message": "Account requires email verification. A verification code has been dispatched to your email.",
+                    "user": UserSerializer(user).data,
+                    "data": UserSerializer(user).data,
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        refresh = RefreshToken.for_user(user)
+        access_token = str(refresh.access_token)
+        refresh_token = str(refresh)
+
+        response = Response(
+            {
+                "status": "success",
+                "message": "Login successful",
+                "user": UserSerializer(user).data,
+                "data": UserSerializer(user).data,
+                "token": access_token,
+                "tokens": {
+                    "access": access_token,
+                    "refresh": refresh_token,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+        response.set_cookie(
+            key=settings.SIMPLE_JWT["AUTH_COOKIE"],
+            value=access_token,
+            max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            path="/",
+            domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+        )
+        response.set_cookie(
+            key=settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+            value=refresh_token,
+            max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+            httponly=True,
+            secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+            samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+            path="/",
+            domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+        )
+        return response
 
 
 
@@ -560,8 +650,6 @@ class VerifyEmail(APIView):
                     user.is_verified = True
                     user.save()
                     code.delete()
-                    data['data'] = UserSerializer(user,many=False).data
-                    data['status'] = 'success'
 
                     # Create appropriate profile
                     if user.user_type == 'designer':
@@ -569,13 +657,52 @@ class VerifyEmail(APIView):
                     else:
                         Customer.objects.get_or_create(user=user)
 
+                    # Generate SimpleJWT tokens
+                    refresh = RefreshToken.for_user(user)
+                    access_token = str(refresh.access_token)
+                    refresh_token = str(refresh)
+
+                    data['data'] = UserSerializer(user,many=False).data
+                    data['user'] = UserSerializer(user,many=False).data
+                    data['token'] = access_token
+                    data['tokens'] = {
+                        'access': access_token,
+                        'refresh': refresh_token,
+                    }
+                    data['status'] = 'success'
+
                     # Send welcome email after successful verification
                     from apps.utils.notifications import send_customer_welcome_email
                     if user.user_type == 'customer':
                         send_customer_welcome_email(user)
+
+                    response = Response(data, status=status.HTTP_200_OK)
+
+                    # Set HttpOnly cookies for web browsers
+                    response.set_cookie(
+                        key=settings.SIMPLE_JWT["AUTH_COOKIE"],
+                        value=access_token,
+                        max_age=settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds(),
+                        httponly=True,
+                        secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+                        samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+                        path="/",
+                        domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+                    )
+                    response.set_cookie(
+                        key=settings.SIMPLE_JWT["AUTH_COOKIE_REFRESH"],
+                        value=refresh_token,
+                        max_age=settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds(),
+                        httponly=True,
+                        secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+                        samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+                        path="/",
+                        domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+                    )
+                    return response
                 else:
-                    data= {'status':'error','message':'invalid code'}
-                return Response({**data},status=status.HTTP_200_OK)
+                    data = {'status':'error','message':'Invalid verification code'}
+                return Response(data, status=status.HTTP_400_BAD_REQUEST)
 
             except ObjectDoesNotExist:
                 return Response({'status':'error','message':'Invalid code'},status=status.HTTP_404_NOT_FOUND)
@@ -1179,3 +1306,142 @@ def GoogleOneTapLogin(request):
             {"status": "error", "message": f"Google login failed: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+class RequestPhoneVerificationCodeView(APIView):
+    """
+    POST /auth/phone/request-code
+    Generates and dispatches a 6-digit OTP to the specified phone number via Twilio SMS.
+    Supports authenticated user or anonymous registration session.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        phone_number = request.data.get("phone_number", "").strip()
+        country_code = request.data.get("country_code", "").strip()
+
+        if not phone_number:
+            return Response(
+                {"status": "error", "message": "Phone number is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        full_phone = f"{country_code}{phone_number}".strip() if country_code else phone_number
+        if not full_phone.startswith("+") and country_code:
+            full_phone = f"+{full_phone}"
+
+        import random
+        code = f"{random.randint(100000, 999999)}"
+
+        user = request.user if request.user and request.user.is_authenticated else None
+        if not user:
+            email = request.data.get("email", "")
+            if email:
+                user = User.objects.filter(email=email).first()
+
+        if user:
+            VerificationCode.objects.filter(user=user).delete()
+            VerificationCode.objects.create(user=user, code=code)
+        else:
+            request.session[f"phone_otp_{full_phone}"] = code
+
+        # Dispatch via Twilio
+        from .services.twilio_service import send_verification_otp
+        twilio_res = send_verification_otp(full_phone, code)
+
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[PHONE OTP] Verification code for {full_phone} is {code} (Twilio: {twilio_res})")
+
+        return Response(
+            {
+                "status": "success",
+                "message": f"Verification code sent to {full_phone}.",
+                "dev_code": code if getattr(settings, "DEBUG", False) else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class VerifyPhoneCodeView(APIView):
+    """
+    POST /auth/phone/verify-code
+    Validates the 6-digit OTP and verifies the phone number via database and Twilio Verify.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        phone_number = request.data.get("phone_number", "").strip()
+        country_code = request.data.get("country_code", "").strip()
+        code = str(request.data.get("code", "")).strip()
+
+        if not phone_number or not code:
+            return Response(
+                {"status": "error", "message": "Phone number and verification code are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        full_phone = f"{country_code}{phone_number}".strip() if country_code else phone_number
+        if not full_phone.startswith("+") and country_code:
+            full_phone = f"+{full_phone}"
+
+        user = request.user if request.user and request.user.is_authenticated else None
+        if not user:
+            email = request.data.get("email", "")
+            if email:
+                user = User.objects.filter(email=email).first()
+
+        is_valid = False
+
+        # 1. Check Twilio Verify Service if configured
+        from .services.twilio_service import check_verification_otp
+        if check_verification_otp(full_phone, code):
+            is_valid = True
+
+        # 2. Check Database VerificationCode record
+        if not is_valid and user:
+            record = VerificationCode.objects.filter(user=user, code=code).order_by("-created_at").first()
+            if record:
+                is_valid = True
+                record.delete()
+
+        # 3. Check Session OTP
+        if not is_valid:
+            session_code = request.session.get(f"phone_otp_{full_phone}")
+            if session_code and session_code == code:
+                is_valid = True
+                request.session.pop(f"phone_otp_{full_phone}", None)
+
+        # 4. Universal testing code in debug/dev
+        if not is_valid and getattr(settings, "DEBUG", False) and code in ["123456", "000000"]:
+            is_valid = True
+
+        if not is_valid:
+            return Response(
+                {"status": "error", "message": "Invalid or expired verification code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        formatted_phone = f"{country_code} {phone_number}".strip() if country_code else phone_number
+
+        if user:
+            user.phone_number = formatted_phone
+            user.is_verified = True
+            user.save(update_fields=["phone_number", "is_verified"])
+
+            designer = getattr(user, "designer_profile", None)
+            if designer:
+                designer.phone = formatted_phone
+                if country_code:
+                    designer.country_code = country_code
+                designer.save(update_fields=["phone", "country_code"])
+
+        return Response(
+            {
+                "status": "success",
+                "message": "Phone number verified successfully!",
+                "phone_number": formatted_phone,
+            },
+            status=status.HTTP_200_OK,
+        )
+

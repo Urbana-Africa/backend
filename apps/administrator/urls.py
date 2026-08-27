@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import *
 from apps.algorithm.views import (
@@ -65,6 +65,10 @@ router.register(r"newsletters", AdminNewsletterViewSet, basename="admin-newslett
 router.register(r"newsletter-subscribers", AdminNewsletterSubscriberViewSet, basename="admin-newsletter-subscribers")
 
 urlpatterns = router.urls + [
+    # Launch / Waitlist Admin Endpoints
+    path("launch/", include("apps.launch.admin_urls")),
+    # Analytics Admin Endpoints
+    path("analytics/", include("apps.analytics.admin_urls")),
     # Algorithm Admin Endpoints
     path("algorithm-config", AlgorithmConfigView.as_view(), name="admin-algo-config"),
     path("category-balance", CategoryBalanceView.as_view(), name="admin-category-balance"),

@@ -262,3 +262,21 @@ def send_delayed_customer_emails():
             item.save(update_fields=["review_request_sent_at"])
         except Exception as e:
             print(f"[SCHEDULED] Customer review request failed: {e}")
+
+
+def process_scrape_jobs():
+    """Pick up queued ScrapeJobs and run them through the provider engine."""
+    from apps.marketing.models import ScrapeJob
+    from apps.marketing.scraping.engine import run_scrape_engine
+
+    jobs = ScrapeJob.objects.filter(status='queued').order_by('created_at')[:5]
+    for job in jobs:
+        try:
+            run_scrape_engine(job.id)
+        except Exception as e:
+            job.refresh_from_db()
+            job.status = 'failed'
+            job.error_message = str(e)
+            job.completed_at = timezone.now()
+            job.save(update_fields=['status', 'error_message', 'completed_at'])
+            print(f"[SCHEDULED] Scrape job {job.id} failed: {e}")

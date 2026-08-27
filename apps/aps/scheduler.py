@@ -11,6 +11,7 @@ from .tasks import (
     release_escrows_for_received_items,
     send_delayed_customer_emails,
     send_delayed_designer_emails,
+    process_scrape_jobs,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,19 @@ def start():
         trigger="interval",
         minutes=interval_minutes,
         id="send_delayed_customer_emails_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # -------------------------------------------------------
+    # Queued scrape jobs
+    # -------------------------------------------------------
+    scheduler.add_job(
+        process_scrape_jobs,
+        trigger="interval",
+        minutes=1,
+        id="process_scrape_jobs_job",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

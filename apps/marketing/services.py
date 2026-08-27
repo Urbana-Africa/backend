@@ -139,41 +139,20 @@ def extract_lead_from_url(url: str):
         logger.error(f"Error extracting data from {url}: {e}")
         return None
 
-def run_scraping_job(query: str, max_results: int = 5):
+def run_scraping_job(query: str, max_results: int = 5, created_by=None, provider_name: str = ""):
     """
-    Orchestrates the scraping process and saves to DB.
+    Creates a ScrapeJob and queues it for the APScheduler-backed provider engine.
     """
-    logger.info(f"Starting scraping job for query: {query}")
-    urls = discover_urls(query, max_results=max_results)
-    
-    leads_created = 0
-    for url in urls:
-        logger.info(f"Scraping {url}")
-        extracted_data = extract_lead_from_url(url)
-        time.sleep(4)  # Sleep to respect API rate limits
-        if extracted_data and extracted_data.get("brand_name"):
-            # Check if brand already exists to avoid duplicates
-            if not DesignerLead.objects.filter(brand_name__iexact=extracted_data["brand_name"]).exists():
-                try:
-                    # Sanitize integer fields
-                    followers = extracted_data.get("followers_count", 0)
-                    if not isinstance(followers, int):
-                        followers = 0
-                        
-                    DesignerLead.objects.create(
-                        brand_name=extracted_data.get("brand_name", "")[:255],
-                        designer_name=extracted_data.get("designer_name", "")[:255],
-                        email=extracted_data.get("email", "")[:254],
-                        phone_number=extracted_data.get("phone_number", "")[:50],
-                        social_media_links=extracted_data.get("social_media_links", {}),
-                        followers_count=followers,
-                        category_tags=extracted_data.get("category_tags", []),
-                        source="AI Web Scraper",
-                        status="Discovered"
-                    )
-                    leads_created += 1
-                except Exception as e:
-                    logger.error(f"Error saving lead to DB: {e}")
+    from .models import ScrapeJob
 
-    logger.info(f"Scraping job complete. Created {leads_created} new leads.")
-    return leads_created
+    logger.info(f"Queueing scraping job for query: {query}")
+    job = ScrapeJob.objects.create(
+        query=query,
+        max_results=max_results,
+        created_by=created_by,
+        provider_name=provider_name,
+        status='queued'
+    )
+
+    return job
+

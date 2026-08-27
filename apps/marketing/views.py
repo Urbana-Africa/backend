@@ -1,8 +1,24 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
-from .models import DesignerLead, EmailTemplate, EmailCampaign, EmailLog
-from .serializers import DesignerLeadSerializer, EmailTemplateSerializer, EmailCampaignSerializer, EmailLogSerializer
+from .models import (
+    DesignerLead,
+    EmailTemplate,
+    EmailCampaign,
+    EmailLog,
+    ScrapeProviderConfig,
+    ScrapeJob,
+    ScrapeCall,
+)
+from .serializers import (
+    DesignerLeadSerializer,
+    EmailTemplateSerializer,
+    EmailCampaignSerializer,
+    EmailLogSerializer,
+    ScrapeProviderConfigSerializer,
+    ScrapeJobSerializer,
+    ScrapeCallSerializer,
+)
 from apps.administrator.permissions import IsMarketer
 from django.db.models import Count
 
@@ -10,6 +26,20 @@ class DesignerLeadViewSet(viewsets.ModelViewSet):
     queryset = DesignerLead.objects.all().order_by('-date_discovered')
     serializer_class = DesignerLeadSerializer
     permission_classes = [IsMarketer]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        needs_review = self.request.query_params.get('needs_review')
+        if needs_review is not None:
+            value = needs_review.lower()
+            if value in ('true', '1', 'yes'):
+                qs = qs.filter(needs_review=True)
+            elif value in ('false', '0', 'no'):
+                qs = qs.filter(needs_review=False)
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
 
     @action(detail=True, methods=['post'])
     def send_email(self, request, pk=None):
@@ -97,8 +127,8 @@ class EmailLogViewSet(viewsets.ReadOnlyModelViewSet):
 @permission_classes([IsMarketer])
 def scrape_leads_placeholder(request):
     """
-    Endpoint for triggering AI-powered web scraping.
-    Dispatches a background worker task to find and extract leads.
+    Endpoint for triggering third-party API scraping.
+    Creates a ScrapeJob and dispatches the provider engine.
     """
     import threading
     from .services import run_scraping_job
@@ -106,13 +136,21 @@ def scrape_leads_placeholder(request):
     query = request.data.get('query', '')
     if not query:
         return Response({'error': 'Search query is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    # Run the job in the background to avoid blocking
-    threading.Thread(target=run_scraping_job, args=(query,)).start()
+
+    provider_name = request.data.get('provider', '')
+    max_results = request.data.get('max_results', 5)
+
+    job = run_scraping_job(
+        query=query,
+        max_results=int(max_results),
+        created_by=request.user,
+        provider_name=provider_name,
+    )
 
     return Response({
         'message': f'Scraping job started for query: {query}',
-        'status': 'processing'
+        'job_id': job.id,
+        'status': job.status,
     }, status=status.HTTP_202_ACCEPTED)
 
 @api_view(['GET'])
@@ -128,3 +166,21 @@ def funnel_stats(request):
         'total_leads': total_leads,
         'status_breakdown': list(status_breakdown)
     })
+
+
+class ScrapeProviderConfigViewSet(viewsets.ModelViewSet):
+    queryset = ScrapeProviderConfig.objects.all().order_by('priority', 'name')
+    serializer_class = ScrapeProviderConfigSerializer
+    permission_classes = [IsMarketer]
+
+
+class ScrapeJobViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = ScrapeJob.objects.all().order_by('-created_at')
+    serializer_class = ScrapeJobSerializer
+    permission_classes = [IsMarketer]
+
+
+class ScrapeCallViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = ScrapeCall.objects.all().order_by('-created_at')
+    serializer_class = ScrapeCallSerializer
+    permission_classes = [IsMarketer]

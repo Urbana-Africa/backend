@@ -282,7 +282,7 @@ class ProductSerializer(serializers.ModelSerializer):
             product.save(update_fields=["fit_me_image"])
 
         # Handle multiple uploaded images
-        images = request.FILES.getlist("media[]")
+        images = request.FILES.getlist("media[]") or request.FILES.getlist("media")
 
         if len(images) > 6:
             raise serializers.ValidationError("You can upload up to 6 images only.")
@@ -343,7 +343,7 @@ class ProductSerializer(serializers.ModelSerializer):
             instance.save(update_fields=["fit_me_image"])
 
         # Handle new uploaded images on update
-        images = request.FILES.getlist("media[]")
+        images = request.FILES.getlist("media[]") or request.FILES.getlist("media")
         if images:
             if len(images) > 6:
                 raise serializers.ValidationError("You can upload up to 6 images only.")

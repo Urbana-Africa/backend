@@ -1,4 +1,4 @@
-﻿aiohappyeyeballs
+aiohappyeyeballs
 aiohttp
 aiosignal
 annotated-doc
@@ -76,6 +76,7 @@ paystackapi
 paystackease
 phonenumbers
 pillow
+psycopg[binary]>=3.1.8
 propcache
 py-ubjson
 pyasn1
@@ -109,6 +110,7 @@ sqlparse
 stripe
 tenacity
 tqdm
+twilio
 Twisted
 txaio
 typer

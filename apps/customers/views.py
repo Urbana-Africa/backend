@@ -849,6 +849,40 @@ class AddressView(APIView):
         })
 
 
+class AddressDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, address_id):
+        try:
+            address = Address.objects.get(id=address_id, customer=request.user.customer_profile)
+        except Address.DoesNotExist:
+            return Response({"status": "error", "message": "Address not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = AddressSerializer(address, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({
+            "status": "success",
+            "message": "Address updated successfully.",
+            "data": serializer.data
+        })
+
+    def post(self, request, address_id):
+        return self.put(request, address_id)
+
+    def delete(self, request, address_id):
+        try:
+            address = Address.objects.get(id=address_id, customer=request.user.customer_profile)
+        except Address.DoesNotExist:
+            return Response({"status": "error", "message": "Address not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        address.delete()
+        return Response({
+            "status": "success",
+            "message": "Address deleted successfully."
+        })
+
+
 # ---------------- Wishlist ----------------
 class WishlistView(APIView):
     permission_classes = [IsAuthenticated]
@@ -946,8 +980,8 @@ class CartView(APIView):
 
     def post(self, request):
         product_id = request.data.get('product_id')
-        size_id = request.data.get('size')
-        color_id = request.data.get('color')
+        size_id = request.data.get('size_id') or request.data.get('size')
+        color_id = request.data.get('color_id') or request.data.get('color')
         quantity = int(request.data.get('quantity', 1))
 
         customer, _ = Customer.objects.get_or_create(user = request.user)
@@ -1076,10 +1110,25 @@ class OrderListView(APIView):
 class OrderDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        order_id = request.GET.get('order_id')
+    def get(self, request, order_id=None):
+        lookup_id = order_id or request.GET.get('order_id')
+        if not lookup_id:
+            return Response(
+                {"status": "error", "message": "order_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        order = Order.objects.get(order_id=order_id, customer=request.user.customer_profile)
+        try:
+            order = Order.objects.get(order_id=lookup_id, customer=request.user.customer_profile)
+        except Order.DoesNotExist:
+            try:
+                order = Order.objects.get(id=int(lookup_id), customer=request.user.customer_profile)
+            except (Order.DoesNotExist, ValueError):
+                return Response(
+                    {"status": "error", "message": "Order not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
         serializer = OrderSerializer(order)
 
         return Response(

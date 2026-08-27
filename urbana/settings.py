@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
+import dj_database_url
 
 # =====================================================
 # Base Paths & Environment
@@ -41,7 +42,7 @@ else:
 ALLOWED_HOSTS = ["api.urbanaafrica.com"]
 
 if not IS_PRODUCTION:
-    ALLOWED_HOSTS += ["127.0.0.1", "localhost", "api.urbana.local", "*.urbana.local"]
+    ALLOWED_HOSTS = ["*"]
 
 # =====================================================
 # Installed Apps
@@ -84,7 +85,9 @@ INSTALLED_APPS = [
     "apps.core",
     "apps.aps",
     "apps.newsletter",
-    "apps.marketing"
+    "apps.marketing",
+    "apps.launch",
+    "apps.analytics"
 ]
 
 # =====================================================
@@ -158,13 +161,13 @@ TEMPLATES = [
 
 if IS_DEVELOPMENT:
     DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-            "OPTIONS": {
-                "timeout": 20,  # seconds — helps with concurrent access / apscheduler
-            },
-        }
+        "default": dj_database_url.parse(
+            config(
+                "DATABASE_URL",
+                default="postgres://postgres:postgres@localhost:5432/urbana",
+            ),
+            conn_max_age=600,
+        )
     }
 else:
     # MySQL for production / staging (Hetzner)
@@ -186,27 +189,25 @@ else:
 # Redis / Channels
 # =====================================================
 
-REDIS_URL = config("REDIS_URL", default="redis://127.0.0.1:6379/0")
+REDIS_URL = config("REDIS_URL", default="")
 
 # Use Redis for Django cache so AI query results are shared across workers / restarts
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        },
+if REDIS_URL and IS_PRODUCTION:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            },
+        }
     }
-}
-
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [REDIS_URL],
-        },
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        }
     }
-}
 
 # =====================================================
 # Cookie & Security Settings
@@ -337,6 +338,9 @@ else:
         r"^https?://([a-z0-9-]+\.)*urbana\.local(:\d+)?$",
         r"^https?://localhost(:\d+)?$",
         r"^https?://127\.0\.0\.1(:\d+)?$",
+        r"^https?://192\.168\.\d+\.\d+(:\d+)?$",
+        r"^https?://10\.\d+\.\d+\.\d+(:\d+)?$",
+        r"^https?://172\.(1[6-9]|2\d|3[01])\.\d+\.\d+(:\d+)?$",
     ]
     CORS_ALLOW_HEADERS = [
         "accept",
@@ -396,16 +400,25 @@ MEDIA_ROOT = BASE_DIR / "media"
 # Option 2: Resend (recommended for reliability — uncomment if using)
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "smtp.resend.com"
-APPEND_SLASH=False
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = config("RESEND_USERNAME", default="resend")
+EMAIL_HOST_PASSWORD = config("RESEND_API_KEY")
+DEFAULT_FROM_EMAIL = config(
+    "DEFAULT_FROM_EMAIL",
+    default="hello@accounts.urbanaafrica.com",
+)
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+EMAIL_TIMEOUT = 10
+APPEND_SLASH = False
 RESEND_SMTP_PORT = 587
-RESEND_SMTP_USERNAME = 'resend'
-RESEND_SMTP_HOST = 'smtp.resend.com'
-RESEND_API_KEY=config('RESEND_API_KEY')
-SMTP_USER = config('SMTP_USER')
-SMTP_HOST = config('SMTP_HOST')
-SMTP_PASSWORD=config('SMTP_PASSWORD')
-SMTP_PORT=config('SMTP_PORT')
+RESEND_SMTP_USERNAME = config("RESEND_USERNAME", default="resend")
+RESEND_SMTP_HOST = "smtp.resend.com"
+RESEND_API_KEY = config("RESEND_API_KEY")
+SMTP_USER = config("SMTP_USER")
+SMTP_HOST = config("SMTP_HOST")
+SMTP_PASSWORD = config("SMTP_PASSWORD")
+SMTP_PORT = config("SMTP_PORT")
 # =====================================================
 # Misc / Third-party
 # =====================================================
@@ -418,6 +431,15 @@ USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY", default="")
+
+# Scraper provider credentials (DataForSEO + Bright Data)
+DATAFORSEO_LOGIN = config("DATAFORSEO_LOGIN", default="")
+DATAFORSEO_PASSWORD = config("DATAFORSEO_PASSWORD", default="")
+BRIGHTDATA_API_KEY = config("BRIGHTDATA_API_KEY", default="")
+BRIGHTDATA_CUSTOMER_ID = config("BRIGHTDATA_CUSTOMER_ID", default="")
+BRIGHTDATA_ZONE = config("BRIGHTDATA_ZONE", default="")
+BRIGHTDATA_IG_DATASET_ID = config("BRIGHTDATA_IG_DATASET_ID", default="gd_l1vikfch901nx3by4")
+
 # Virtual try-on providers (fal.ai + Replicate are disabled by default; only
 # Gemini is active during testing — see apps/core/services/vton.py)
 FAL_KEY = config("FAL_KEY", default="")
@@ -425,11 +447,20 @@ REPLICATE_API_TOKEN = config("REPLICATE_API_TOKEN", default="")
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
 STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="")
 SHIPPO_API_KEY = config("SHIPPO_API_KEY", default="")
+
+# =====================================================
+# Twilio SMS & OTP Verification
+# =====================================================
+TWILIO_ACCOUNT_SID = config("TWILIO_ACCOUNT_SID", default="")
+TWILIO_AUTH_TOKEN = config("TWILIO_AUTH_TOKEN", default="")
+TWILIO_PHONE_NUMBER = config("TWILIO_PHONE_NUMBER", default="")
+TWILIO_VERIFY_SERVICE_SID = config("TWILIO_VERIFY_SERVICE_SID", default="")
+
 # =====================================================
 # WebSockets (Channels) Setup
 # =====================================================
 _redis_url = config('REDIS_URL', default='')
-if _redis_url or IS_PRODUCTION:
+if _redis_url and IS_PRODUCTION:
     CHANNEL_LAYERS = {
         'default': {
             'BACKEND': 'channels_redis.core.RedisChannelLayer',

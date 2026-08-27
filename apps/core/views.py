@@ -1416,8 +1416,19 @@ class TrackEventsView(APIView):
                 product=product,
                 designer=designer,
                 session_id=session_id,
+                anon_id=ev.get("anon_id", ""),
                 event_type=event_type,
                 source=source,
+                device_type=ev.get("device_type", ev.get("metadata", {}).get("device_type", "")),
+                os=ev.get("os", ev.get("metadata", {}).get("os", "")),
+                browser=ev.get("browser", ev.get("metadata", {}).get("browser", "")),
+                country_code=ev.get("country_code", ev.get("metadata", {}).get("country_code", "")),
+                utm_source=ev.get("utm_source", ev.get("metadata", {}).get("utm_source", "")),
+                utm_medium=ev.get("utm_medium", ev.get("metadata", {}).get("utm_medium", "")),
+                utm_campaign=ev.get("utm_campaign", ev.get("metadata", {}).get("utm_campaign", "")),
+                utm_content=ev.get("utm_content", ev.get("metadata", {}).get("utm_content", "")),
+                referrer=ev.get("referrer", ev.get("metadata", {}).get("referrer", "")),
+                page_path=ev.get("page_path", ev.get("metadata", {}).get("page_path", "")),
                 metadata=ev.get("metadata", {}),
             )
             created += 1
@@ -1444,34 +1455,250 @@ class DesignerAnalyticsView(APIView):
         today = timezone.now().date()
         last_7 = today - timedelta(days=6)
         last_30 = today - timedelta(days=29)
+        prior_7_start = today - timedelta(days=13)
+        prior_7_end = today - timedelta(days=7)
+        prior_30_start = today - timedelta(days=59)
+        prior_30_end = today - timedelta(days=30)
 
-        # Aggregate from raw events
-        views_7d = ProductView.objects.filter(designer=designer, created_at__date__gte=last_7).count()
-        views_30d = ProductView.objects.filter(designer=designer, created_at__date__gte=last_30).count()
+        def _count_q(event_type, start, end=None):
+            qs = ProductView.objects.filter(designer=designer, event_type=event_type, created_at__date__gte=start)
+            if end:
+                qs = qs.filter(created_at__date__lte=end)
+            return qs.count()
+
+        def _unique_q(event_type, start, end=None):
+            qs = ProductView.objects.filter(designer=designer, event_type=event_type, created_at__date__gte=start)
+            if end:
+                qs = qs.filter(created_at__date__lte=end)
+            return qs.values("session_id").distinct().count()
+
+        # Aggregate from raw product_view events (not impressions)
+        views_7d = _count_q("product_view", last_7)
+        views_30d = _count_q("product_view", last_30)
+        views_7d_prior = _count_q("product_view", prior_7_start, prior_7_end)
+        views_30d_prior = _count_q("product_view", prior_30_start, prior_30_end)
 
         # Unique sessions in last 7 days
-        unique_7d = (
-            ProductView.objects.filter(designer=designer, created_at__date__gte=last_7)
-            .values("session_id")
-            .distinct()
-            .count()
-        )
+        unique_7d = _unique_q("product_view", last_7)
+        unique_7d_prior = _unique_q("product_view", prior_7_start, prior_7_end)
+
+        # Funnel events
+        cart_7d = _count_q("add_to_cart", last_7)
+        cart_30d = _count_q("add_to_cart", last_30)
+        purchase_7d = _count_q("purchase", last_7)
+        purchase_30d = _count_q("purchase", last_30)
+
+        # Impressions (funnel top)
+        impressions_7d = _count_q("product_impression", last_7)
+        impressions_30d = _count_q("product_impression", last_30)
+
+        # Conversion rates
+        def _pct(num, den):
+            return round(num / den * 100, 2) if den else 0.0
+
+        view_to_cart_7d = _pct(cart_7d, views_7d)
+        cart_to_purchase_7d = _pct(purchase_7d, cart_7d)
+
+        # Change vs prior period (null if the prior window was effectively empty)
+        def _change(curr, prev):
+            if prev == 0:
+                return None
+            return round(((curr - prev) / prev) * 100, 2)
+
+        views_7d_change_pct = _change(views_7d, views_7d_prior)
+        views_30d_change_pct = _change(views_30d, views_30d_prior)
+        unique_visitors_7d_change_pct = _change(unique_7d, unique_7d_prior)
 
         # Top products by views (last 30d)
         top_products = (
-            ProductView.objects.filter(designer=designer, created_at__date__gte=last_30)
+            ProductView.objects.filter(
+                designer=designer, event_type="product_view", created_at__date__gte=last_30
+            )
             .values("product__name")
-            .annotate(views=models.Count("id"))
+            .annotate(views=Count("id"))
             .order_by("-views")[:5]
         )
 
-        # Daily breakdown (last 7 days)
-        daily = (
-            ProductView.objects.filter(designer=designer, created_at__date__gte=last_7)
+        # Per-product funnel with opportunity score (last 30d)
+        product_funnel = (
+            ProductView.objects.filter(designer=designer, created_at__date__gte=last_30)
+            .values("product__name")
+            .annotate(
+                impressions=Count("id", filter=Q(event_type="product_impression")),
+                views=Count("id", filter=Q(event_type="product_view")),
+                cart_adds=Count("id", filter=Q(event_type="add_to_cart")),
+                purchases=Count("id", filter=Q(event_type="purchase")),
+            )
+        )
+
+        products = []
+        for p in product_funnel:
+            view_to_cart = _pct(p["cart_adds"], p["views"])
+            cart_to_purchase = _pct(p["purchases"], p["cart_adds"])
+            opportunity = round(p["views"] * (1 - view_to_cart / 100), 2)
+            products.append(
+                {
+                    "name": p["product__name"],
+                    "impressions": p["impressions"],
+                    "views": p["views"],
+                    "cart_adds": p["cart_adds"],
+                    "purchases": p["purchases"],
+                    "view_to_cart_rate": view_to_cart,
+                    "cart_to_purchase_rate": cart_to_purchase,
+                    "opportunity_score": opportunity,
+                }
+            )
+
+        products.sort(key=lambda x: x["opportunity_score"], reverse=True)
+
+        # Insights — rule-based findings, ranked by impact
+        insights = []
+
+        # Product-level opportunity warnings
+        for p in products[:3]:
+            if p["views"] >= 2 and p["cart_adds"] == 0:
+                insights.append({
+                    "type": "warning",
+                    "title": f"{p['name']} is losing potential buyers",
+                    "body": f"It was viewed {p['views']} times in the last 30 days but never added to a cart. Consider reviewing the price, photos, or size availability.",
+                    "action": "Review product",
+                    "product": p["name"],
+                })
+
+        # Cart abandonment
+        if cart_7d > 0 and purchase_7d == 0:
+            insights.append({
+                "type": "danger",
+                "title": "Cart adds are not converting",
+                "body": f"You had {cart_7d} add-to-cart events in the last 7 days but no purchases. Check checkout friction, shipping cost, or payment issues.",
+                "action": "View cart data",
+            })
+
+        # Funnel top leak
+        if impressions_7d > 0 and views_7d == 0:
+            insights.append({
+                "type": "danger",
+                "title": "Low click-through from impressions",
+                "body": f"Your products appeared {impressions_7d} times but received no clicks. Review thumbnails, pricing, and titles.",
+                "action": "View products",
+            })
+
+        # Overall trend
+        if views_7d_change_pct is not None:
+            if views_7d_change_pct > 30:
+                insights.append({
+                    "type": "success",
+                    "title": "Views are trending up",
+                    "body": f"Product views increased {views_7d_change_pct}% compared to the previous 7 days.",
+                })
+            elif views_7d_change_pct < -30:
+                insights.append({
+                    "type": "danger",
+                    "title": "Views are down",
+                    "body": f"Product views dropped {abs(views_7d_change_pct)}% compared to the previous 7 days.",
+                })
+
+        # Conversion summary
+        if view_to_cart_7d > 0:
+            insights.append({
+                "type": "info",
+                "title": "View-to-cart rate",
+                "body": f"{view_to_cart_7d}% of product views led to an add-to-cart in the last 7 days.",
+            })
+
+        severity_rank = {"danger": 0, "warning": 1, "success": 2, "info": 3}
+        insights.sort(key=lambda x: severity_rank.get(x["type"], 99))
+
+        # Money (last 30d)
+        from apps.customers.models import OrderItem
+
+        money_items = OrderItem.objects.filter(
+            designer=designer.user, order__created_at__date__gte=last_30
+        )
+        gross_items = money_items.exclude(status__in=["cancelled", "returned"])
+        return_items = money_items.filter(status__in=["returned"])
+
+        gross = gross_items.aggregate(total=Sum("sub_total"))["total"] or 0
+        returns = return_items.aggregate(total=Sum("sub_total"))["total"] or 0
+        net = gross - returns
+        platform_fee = round(net * 0.10, 2)
+        shipping = 0
+        net_payout = round(net - platform_fee - shipping, 2)
+        orders = gross_items.count()
+        aov = round(net / orders, 2) if orders else 0
+
+        money = {
+            "gross_sales": float(gross),
+            "returns": float(returns),
+            "platform_fee": float(platform_fee),
+            "shipping": float(shipping),
+            "net_payout": float(net_payout),
+            "orders": orders,
+            "average_order_value": float(aov),
+        }
+
+        # Audience & traffic (last 30d)
+        pv_30d = ProductView.objects.filter(designer=designer, created_at__date__gte=last_30)
+
+        devices = list(
+            pv_30d.filter(event_type="product_view", device_type__isnull=False)
+            .exclude(device_type="")
+            .values("device_type")
+            .annotate(value=Count("id"))
+            .order_by("-value")[:5]
+        )
+
+        countries = list(
+            pv_30d.filter(event_type="product_view", country_code__isnull=False)
+            .exclude(country_code="")
+            .values("country_code")
+            .annotate(value=Count("id"))
+            .order_by("-value")[:5]
+        )
+
+        # New vs returning (based on anon_id first appearance for this designer)
+        recent_anons = list(
+            pv_30d.values_list("anon_id", flat=True).distinct()
+        )
+        returning = (
+            ProductView.objects.filter(
+                designer=designer, anon_id__in=recent_anons, created_at__date__lt=last_30
+            )
+            .values("anon_id")
+            .distinct()
+            .count()
+        ) if recent_anons else 0
+        new_vs_returning = {"new": len(recent_anons) - returning, "returning": returning}
+
+        utm_sources = list(
+            pv_30d.filter(event_type="product_view", utm_source__isnull=False)
+            .exclude(utm_source="")
+            .values("utm_source")
+            .annotate(value=Count("id"))
+            .order_by("-value")[:5]
+        )
+
+        referrers = list(
+            pv_30d.filter(event_type="product_view", referrer__isnull=False)
+            .exclude(referrer="")
+            .values("referrer")
+            .annotate(value=Count("id"))
+            .order_by("-value")[:5]
+        )
+
+        # Daily breakdown (last 7 days) - include zero days
+        daily_map = {
+            d["created_at__date"]: d["views"]
+            for d in ProductView.objects.filter(
+                designer=designer, event_type="product_view", created_at__date__gte=last_7
+            )
             .values("created_at__date")
             .annotate(views=models.Count("id"))
-            .order_by("created_at__date")
-        )
+        }
+        daily_views = [
+            {"date": str(last_7 + timedelta(days=i)), "views": daily_map.get(last_7 + timedelta(days=i), 0)}
+            for i in range(7)
+        ]
 
         return Response({
             "status": "success",
@@ -1479,11 +1706,32 @@ class DesignerAnalyticsView(APIView):
                 "designer_id": str(designer.id),
                 "views_last_7d": views_7d,
                 "views_last_30d": views_30d,
+                "views_7d_change_pct": views_7d_change_pct,
+                "views_30d_change_pct": views_30d_change_pct,
                 "unique_visitors_7d": unique_7d,
+                "unique_visitors_7d_change_pct": unique_visitors_7d_change_pct,
+                "impressions_7d": impressions_7d,
+                "impressions_30d": impressions_30d,
+                "cart_adds_7d": cart_7d,
+                "cart_adds_30d": cart_30d,
+                "purchases_7d": purchase_7d,
+                "purchases_30d": purchase_30d,
+                "view_to_cart_rate_7d": view_to_cart_7d,
+                "cart_to_purchase_rate_7d": cart_to_purchase_7d,
                 "top_products": list(top_products),
-                "daily_views": [
-                    {"date": str(d["created_at__date"]), "views": d["views"]} for d in daily
-                ],
+                "daily_views": daily_views,
+                "products": products,
+                "insights": insights,
+                "audience": {
+                    "devices": devices,
+                    "countries": countries,
+                    "new_vs_returning": new_vs_returning,
+                },
+                "traffic": {
+                    "utm_sources": utm_sources,
+                    "referrers": referrers,
+                },
+                "money": money,
             },
         })
 
@@ -2985,3 +3233,198 @@ class AiSuggestDescriptionView(APIView):
             else:
                 suggestion = f"Support request regarding {subject or 'issue'}."
             return Response({"status": "success", "suggestion": suggestion})
+
+
+class DesignerAiCopilotView(APIView):
+    """
+    POST /core/designer-ai-copilot
+    Zuri Studio: AI Brand Co-Pilot, Creative Director, and Merchandising Strategist for designers.
+    Handles copywriting, storytelling, multi-currency pricing, trend intelligence, and customer sizing/care notes.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        query = request.data.get("query", "").strip()
+        history = request.data.get("history", [])
+        mode = request.data.get("mode", "general")
+        draft_context = request.data.get("draft_context", {})
+
+        if not query:
+            return Response(
+                {"status": "error", "message": "Query prompt is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        brand_name = "Your Brand"
+        specialty = "Pan-African Fashion"
+        country_name = "Africa"
+        active_products_count = 0
+
+        designer = getattr(user, "designer_profile", None)
+        if designer:
+            brand_name = designer.brand_name or user.get_full_name() or "Your Brand"
+            specialty = getattr(designer, "specialty", "Pan-African Fashion")
+            if getattr(designer, "country", None):
+                country_name = designer.country.name
+            active_products_count = Product.objects.filter(designer=designer, is_active=True).count()
+
+        gemini_key = getattr(settings, "GEMINI_SECRET_KEY", None)
+
+        system_prompt = f"""You are Zuri Studio, an elite AI Fashion Brand Strategist, Creative Director, and Merchandising Co-Pilot for Urbana Africa.
+You work directly with fashion creators, designers, and fashion houses across Africa to help them scale luxury, contemporary, and ready-to-wear brands globally.
+
+DESIGNER CONTEXT:
+- Designer / Brand: {brand_name}
+- Studio Location: {country_name}
+- Specialty: {specialty}
+- Live Catalog Products: {active_products_count}
+- Active Studio Mode: {mode}
+
+YOUR EXPERTISE & BEHAVIOR:
+1. **Creative Copywriting & Cultural Storytelling**: Write captivating, luxury-tier product titles, fabric origin stories (Kente, Adire, Bogolan, Aso-Oke, Maasai beadwork, African silk), style notes, and fabric care guides. Highlight authentic craftsmanship and modern versatility.
+2. **Pricing & Global Margin Strategy**: Provide actionable multi-currency retail recommendations across USD ($), NGN (₦), GHS (GH₵), KES (KSh), ZAR (R), EUR (€), and GBP (£). Always factor in material cost, artisan labor hours, AfCFTA customs benefits, and international shipping buffers.
+3. **Marketplace Trends & Demand Pulse**: Share insights on international diaspora demand, wedding season palettes, silhouette trends, and tips to rank higher on the Urbana Algorithm V2.0.
+4. **Operations, Sizing & Client Care**: Help translate customer custom measurements into standard grading patterns. Draft warm, courteous updates for custom order tailoring, shipment dispatch, or return inquiries.
+
+FORMATTING RULES:
+- Use clean Markdown with headers (`###`), bold highlights, bullet points, and tables where applicable (e.g. for pricing tiers or size charts).
+- Keep your tone inspiring, professional, culturally proud, and commercial-minded.
+- Conclude with 2-3 short, actionable next-step suggestions or follow-up questions."""
+
+        if not gemini_key:
+            fallback_message = f"""### Zuri Studio Brand Advisory for **{brand_name}**
+
+Thank you for consulting Zuri Studio. Here are strategic recommendations tailored for your brand:
+
+- **Collection Storytelling:** Emphasize the authentic handmade heritage and premium natural fibers of your designs. International buyers value cultural provenance and ethical craftsmanship.
+- **Multi-Currency Pricing Guide:**
+  - **Base Retail:** ~$120.00 USD
+  - **West Africa (NGN / GHS):** ₦185,000 / GH₵ 1,800
+  - **East Africa (KES):** KSh 16,500
+  - **UK / Europe (GBP / EUR):** £95.00 / €110.00
+- **Algorithm Optimization:** Ensure all color swatches and complete size ranges (XS–XXL) are filled out to maximize exposure on Urbana's recommendation feed.
+
+*To activate live AI responses with real-time trend intelligence, please configure your Gemini API Key in system settings.*"""
+            return Response({
+                "status": "success",
+                "message": fallback_message,
+                "action_type": mode,
+                "quick_prompts": [
+                    "Write an Adire silk product description",
+                    "Suggest pricing tiers for US export",
+                    "How to optimize for the Urbana algorithm"
+                ]
+            })
+
+        try:
+            client = genai.Client(api_key=gemini_key)
+            model_name = "gemini-2.5-flash"
+
+            contents = []
+            for item in history[-6:]:
+                role = "user" if item.get("role") in ["user", "human"] else "model"
+                contents.append(genai.types.Content(
+                    role=role,
+                    parts=[genai.types.Part.from_text(text=item.get("content", ""))]
+                ))
+
+            user_text = query
+            if draft_context:
+                user_text += f"\n\n[Active Listing Context: {json.dumps(draft_context)}]"
+
+            contents.append(genai.types.Content(
+                role="user",
+                parts=[genai.types.Part.from_text(text=user_text)]
+            ))
+
+            response = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.3,
+                )
+            )
+
+            reply_text = response.text.strip()
+            quick_prompts = [
+                "Draft care instructions for this garment",
+                "Suggest 5 search tags for algorithm ranking",
+                "Convert pricing to NGN, GHS, and KES"
+            ]
+
+            return Response({
+                "status": "success",
+                "message": reply_text,
+                "action_type": mode,
+                "quick_prompts": quick_prompts
+            })
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Designer AI Copilot error: {e}")
+            return Response({
+                "status": "success",
+                "message": f"Here is a quick strategic tip for **{brand_name}**: Focus on showcasing authentic fabric origins, detailed size guides, and clear multi-currency pricing to drive high conversions with global buyers.",
+                "action_type": mode,
+                "quick_prompts": [
+                    "How to price my products for US buyers",
+                    "Tips for listing made-to-order garments"
+                ]
+            })
+
+
+class DesignerAiSuggestionsView(APIView):
+    """
+    GET /core/designer-ai-suggestions
+    Returns curated designer studio prompts grouped by workflow category.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        categories = [
+            {
+                "category": "Storytelling & Copy",
+                "icon": "sparkles",
+                "prompts": [
+                    "Write a luxury description for a Kente bridal ensemble",
+                    "Create an inspiring brand bio highlighting sustainable Adire dyeing",
+                    "Draft Instagram & TikTok launch captions for my new resort collection",
+                    "Write wash & care instructions for handcrafted Aso-Oke fabric"
+                ]
+            },
+            {
+                "category": "Pricing & Margins",
+                "icon": "dollar-sign",
+                "prompts": [
+                    "How should I price a $150 garment in NGN, GHS, and KES?",
+                    "Calculate recommended retail price given $35 fabric and 8 hours labor",
+                    "How to factor AfCFTA duty savings into international prices?",
+                    "Suggest bundling strategy for matching garments and headwraps"
+                ]
+            },
+            {
+                "category": "Marketplace Trends",
+                "icon": "trending-up",
+                "prompts": [
+                    "What African prints and silhouettes are trending for wedding guests?",
+                    "Which diaspora markets (US, UK, Canada) have the highest demand?",
+                    "How do I boost my product ranking on the Urbana V2 Algorithm?",
+                    "What are the best-selling colors for autumn/winter African fashion?"
+                ]
+            },
+            {
+                "category": "Sizing & Client Care",
+                "icon": "scissors",
+                "prompts": [
+                    "Convert custom customer measurements (Bust 38, Waist 30, Hips 42) into tailoring specs",
+                    "Draft a polite message to a customer regarding 3-day tailoring delay",
+                    "Create a size conversion chart between UK, US, and EU standard sizing",
+                    "Draft dispatch note with DHL tracking and styling recommendations"
+                ]
+            }
+        ]
+        return Response({"status": "success", "data": categories})
+

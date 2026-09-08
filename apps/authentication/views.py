@@ -1311,14 +1311,27 @@ def GoogleOneTapLogin(request):
 class RequestPhoneVerificationCodeView(APIView):
     """
     POST /auth/phone/request-code
-    Generates and dispatches a 6-digit OTP to the specified phone number via Twilio SMS.
+    Dispatches a 6-digit OTP to the specified phone number via Termii.
+    Defaults to WhatsApp channel with automatic SMS fallback.
     Supports authenticated user or anonymous registration session.
+
+    Body params:
+      - phone_number (str, required)
+      - country_code (str, optional, e.g. "+234")
+      - email (str, optional — used to look up unauthenticated user)
+      - channel (str, optional — "whatsapp" (default) or "sms")
+
+    Termii generates the code itself; we store the returned pinId in the
+    session so it can be passed to the verify endpoint later.
     """
     permission_classes = [AllowAny]
 
     def post(self, request):
         phone_number = request.data.get("phone_number", "").strip()
         country_code = request.data.get("country_code", "").strip()
+        channel = (request.data.get("channel") or "whatsapp").strip().lower()
+        if channel not in ("whatsapp", "sms"):
+            channel = "whatsapp"
 
         if not phone_number:
             return Response(
@@ -1330,34 +1343,45 @@ class RequestPhoneVerificationCodeView(APIView):
         if not full_phone.startswith("+") and country_code:
             full_phone = f"+{full_phone}"
 
-        import random
-        code = f"{random.randint(100000, 999999)}"
-
         user = request.user if request.user and request.user.is_authenticated else None
         if not user:
             email = request.data.get("email", "")
             if email:
                 user = User.objects.filter(email=email).first()
 
+        # Clear any previous OTP state for this phone / user
         if user:
             VerificationCode.objects.filter(user=user).delete()
-            VerificationCode.objects.create(user=user, code=code)
-        else:
-            request.session[f"phone_otp_{full_phone}"] = code
+        request.session.pop(f"phone_otp_{full_phone}", None)
+        request.session.pop(f"phone_pin_id_{full_phone}", None)
 
-        # Dispatch via Twilio
-        from .services.twilio_service import send_verification_otp
-        twilio_res = send_verification_otp(full_phone, code)
+        # Dispatch via Termii (generates & stores the code server-side)
+        from .services.termii_service import send_verification_otp
+        termii_res = send_verification_otp(full_phone, code="", channel=channel)
 
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"[PHONE OTP] Verification code for {full_phone} is {code} (Twilio: {twilio_res})")
+        logger.info(f"[PHONE OTP] Termii dispatch for {full_phone}: {termii_res}")
+
+        if not termii_res.get("success"):
+            return Response(
+                {
+                    "status": "error",
+                    "message": termii_res.get("error", "Failed to send verification code."),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        # Store the Termii pinId in the session for later verification
+        pin_id = termii_res.get("pin_id")
+        if pin_id:
+            request.session[f"phone_pin_id_{full_phone}"] = pin_id
 
         return Response(
             {
                 "status": "success",
                 "message": f"Verification code sent to {full_phone}.",
-                "dev_code": code if getattr(settings, "DEBUG", False) else None,
+                "channel": termii_res.get("method", channel),
             },
             status=status.HTTP_200_OK,
         )
@@ -1366,7 +1390,8 @@ class RequestPhoneVerificationCodeView(APIView):
 class VerifyPhoneCodeView(APIView):
     """
     POST /auth/phone/verify-code
-    Validates the 6-digit OTP and verifies the phone number via database and Twilio Verify.
+    Validates the 6-digit OTP via the Termii verify endpoint.
+    Falls back to a universal debug code in dev mode.
     """
     permission_classes = [AllowAny]
 
@@ -1393,26 +1418,14 @@ class VerifyPhoneCodeView(APIView):
 
         is_valid = False
 
-        # 1. Check Twilio Verify Service if configured
-        from .services.twilio_service import check_verification_otp
-        if check_verification_otp(full_phone, code):
+        # 1. Check Termii verify endpoint (primary)
+        from .services.termii_service import check_verification_otp
+        pin_id = request.session.get(f"phone_pin_id_{full_phone}")
+        if check_verification_otp(full_phone, code, pin_id=pin_id):
             is_valid = True
+            request.session.pop(f"phone_pin_id_{full_phone}", None)
 
-        # 2. Check Database VerificationCode record
-        if not is_valid and user:
-            record = VerificationCode.objects.filter(user=user, code=code).order_by("-created_at").first()
-            if record:
-                is_valid = True
-                record.delete()
-
-        # 3. Check Session OTP
-        if not is_valid:
-            session_code = request.session.get(f"phone_otp_{full_phone}")
-            if session_code and session_code == code:
-                is_valid = True
-                request.session.pop(f"phone_otp_{full_phone}", None)
-
-        # 4. Universal testing code in debug/dev
+        # 2. Universal testing code in debug/dev
         if not is_valid and getattr(settings, "DEBUG", False) and code in ["123456", "000000"]:
             is_valid = True
 

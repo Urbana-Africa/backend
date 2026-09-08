@@ -110,7 +110,6 @@ sqlparse
 stripe
 tenacity
 tqdm
-twilio
 Twisted
 txaio
 typer

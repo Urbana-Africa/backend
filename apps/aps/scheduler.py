@@ -1,6 +1,7 @@
 # apps/pay/scheduler.py
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.memory import MemoryJobStore
 from django.conf import settings
 from django_apscheduler.jobstores import DjangoJobStore, register_events
 import logging
@@ -19,7 +20,13 @@ logger = logging.getLogger(__name__)
 
 def start():
     scheduler = BackgroundScheduler(timezone=settings.TIME_ZONE)
-    scheduler.add_jobstore(DjangoJobStore(), "default")
+
+    # In dev mode, use MemoryJobStore to avoid "Job no longer exists" errors
+    # caused by auto-reload replacing jobs that have pending executions in the DB.
+    if settings.ENV == "dev":
+        scheduler.add_jobstore(MemoryJobStore(), "default")
+    else:
+        scheduler.add_jobstore(DjangoJobStore(), "default")
 
     if settings.ENV == "dev":
         interval_minutes = 1
@@ -103,7 +110,11 @@ def start():
         coalesce=True,
     )
 
-    register_events(scheduler)
+    # Only register event listeners in production — in dev the auto-reload
+    # causes "Job no longer exists" spam from replaced jobs.
+    if settings.ENV != "dev":
+        register_events(scheduler)
+
     scheduler.start()
 
     logger.info("Escrow & email scheduler started successfully.")

@@ -166,7 +166,8 @@ if IS_DEVELOPMENT:
                 "DATABASE_URL",
                 default="postgres://postgres:postgres@localhost:5432/urbana",
             ),
-            conn_max_age=600,
+            conn_max_age=60,
+            conn_health_checks=True,
         )
     }
 else:
@@ -183,6 +184,8 @@ else:
                 "charset": "utf8mb4",
                 "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
             },
+            "CONN_MAX_AGE": 60,
+            "CONN_HEALTH_CHECKS": True,
         }
     }
 # =====================================================
@@ -449,12 +452,12 @@ STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="")
 SHIPPO_API_KEY = config("SHIPPO_API_KEY", default="")
 
 # =====================================================
-# Twilio SMS & OTP Verification
+# Termii SMS / WhatsApp / Voice OTP Verification
 # =====================================================
-TWILIO_ACCOUNT_SID = config("TWILIO_ACCOUNT_SID", default="")
-TWILIO_AUTH_TOKEN = config("TWILIO_AUTH_TOKEN", default="")
-TWILIO_PHONE_NUMBER = config("TWILIO_PHONE_NUMBER", default="")
-TWILIO_VERIFY_SERVICE_SID = config("TWILIO_VERIFY_SERVICE_SID", default="")
+# Get your API key from https://termii.com/app/dashboard
+# Sender ID must be registered/approved in your Termii dashboard.
+TERMII_API_KEY = config("TERMII_API_KEY", default="")
+TERMII_SENDER_ID = config("TERMII_SENDER_ID", default="Urbana")
 
 # =====================================================
 # WebSockets (Channels) Setup

@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 import stripe
 from .models import Invoice, PaymentAttempt
-from .config import get_paystack_keys, get_flutterwave_keys, get_stripe_keys
+from .config import get_flutterwave_keys, get_stripe_keys
 
 
 def get_exchange_rate(from_currency, to_currency):
@@ -96,41 +96,6 @@ class BaseInitializeInvoicePayment(APIView):
         invoice.payment_attempts.add(attempt)
         invoice.save()
         return attempt
-
-
-# ───────────────────────────────
-# 💳 PAYSTACK INITIALIZER (Modal)
-# ───────────────────────────────
-class InitializePaystackPayment(BaseInitializeInvoicePayment):
-    processor_name = "paystack"
-
-    def post(self, request):
-        email = request.user.email
-        invoice_id = request.data.get("reference")  # invoice.id
-        amount = request.data.get("amount")
-        # Validate invoice in original currency
-        invoice, error = self.validate_invoice(invoice_id, amount)
-        if error:
-            return error
-
-        # Get keys (public key used in modal)
-        keys = get_paystack_keys()
-        public_key = keys["public_key"]
-        # Log attempt and use its reference instead of invoice ID
-        attempt = self.log_attempt(invoice)
-
-        # Invoices are in USD, charge directly in USD
-        # Frontend does amount * 100 for Paystack, so we send the float amount
-        return Response({
-            "status": "success",
-            "processor": "paystack",
-            "public_key": public_key,
-            "reference": attempt.reference,  # ✅ Use PaymentAttempt reference
-            "invoice_id": invoice.id,
-            "amount": float(invoice.amount),
-            "email": email,
-            "currency": "USD",
-        })
 
 
 # ───────────────────────────────

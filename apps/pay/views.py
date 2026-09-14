@@ -29,13 +29,9 @@ from .serializers import *
 from rest_framework.response import Response
 from django.contrib import messages
 from decouple import config
-from paystackapi.verification import Verification
-from paystackapi.transfer import Transfer
-from paystackapi.trecipient import TransferRecipient
 import importlib
-from paystackease import PayStackWebhook, PayStackSignatureVerifyError
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from .config import get_flutterwave_keys, get_paystack_keys
+from .config import get_flutterwave_keys
 from django.template.loader import render_to_string
 from .models import Wallet, Escrow, Withdrawal, Invoice, Payment, Transfers, WalletTransaction
 from .serializers import WalletSerializer, WalletTransactionSerializer, WithdrawalSerializer, PaymentSerializer, InvoiceSerializer
@@ -121,56 +117,6 @@ def activate_invoice(payment):
         pass
 
 
-class TransferToAccount():
-    def __init__(self,transfer,account_name,description,account_number,bank_code) -> None:
-        self.transfer_obj = transfer
-        self.account_name =account_name
-        self.description = description
-        self.account_number=account_number
-        self.bank_code = bank_code
-
-    def transfer(self):
-        print("About to transfer")
-        ps_transfer = TransferRecipient.create(type="nuban",
-                                                            name=self.account_name,
-                                                            description=self.description,
-                                                            account_number=self.account_number,
-                                                            bank_code=self.bank_code,
-                                                            )
-        recipient_code = ps_transfer['data']['recipient_code']
-
-        transfer_instance = Transfer.initiate(recipient=recipient_code, amount=self.transfer_obj.amount, 
-                                              reason=self.transfer_obj.description, reference=self.transfer_obj.transfer_id,
-                                            source='balance',)
-        self.transfer_obj.recipient_code = recipient_code
-        self.transfer_obj.transfer_ref = transfer_instance['data']['transfer_code']
-        self.transfer_obj.status = transfer_instance['data']['status']
-        self.transfer_obj.save()
-
-        transfer_failed = True
-        count = 0
-        while transfer_failed:
-        
-            if count == 3:
-                break
-            sleep(4.0)
-            transfer_check = Transfer.fetch(
-                id_or_code=self.transfer_obj.transfer_ref,
-            )  
-            if transfer_check['data']['status'] == 'success':
-                transfer_failed = False
-                self.transfer_obj.status = transfer_check['data']['status']
-                self.transfer_obj.status = transfer_instance['data']['status']
-                self.transfer_obj.is_approved = True
-                self.transfer_obj.save()
-                break
-
-            elif transfer_check['data']['status'] == 'failed':
-                self.transfer_obj.is_deleted=True
-                self.transfer_obj.status = transfer_check['data']['status']
-                break
-            count+=1
-
 def createcommission(user,amount,payment=None):
         partnercommission,created = PartnerCommisions.objects.get_or_create(payment=payment,user=user)
         partnercommission.amount = amount
@@ -200,7 +146,7 @@ def walletbalance(request, amount):
 
 
 class CancelPayment( APIView):
-    permission_classes = ()
+    permission_classes = ([IsAuthenticated])
     serializer_class = PaymentSerializer
 
     def get(self, request, pay_id):
@@ -236,29 +182,11 @@ class CancelPayment( APIView):
         return Response(data, status=status.HTTP_202_ACCEPTED)
 
 
-class CheckAccountNumber( APIView):
-
-    def post(self, request):
-
-        user = request.user
-        bank_code = request.POST['bank_code']
-        account_number = request.POST['account_number']
-        verification_response = Verification.verify_account(
-            account_number=account_number, bank_code=bank_code)
-        if verification_response['status']:
-            data = verification_response
-        else:
-            data = {'status': False}
-
-        return Response(data=data)
-
-
 class PaymentView( APIView):
     permission_classes = ([IsAuthenticated])
     serializer_class = PaymentSerializer
 
     def get(self, request):
-        print(request.GET.get('payment_id'))
         try:
             payment = PaymentSerializer(Payment.objects.get(
                 reference=request.GET.get('payment_id'),is_deleted=False, user=request.user),many=False).data
@@ -282,7 +210,7 @@ class InvoicesView( APIView):
 
 
 class Subscribe( APIView):
-    permission_classes = ()
+    permission_classes = ([IsAuthenticated])
     serializer_class = PaymentSerializer
 
     def get(self, request):
@@ -503,40 +431,6 @@ def send_payment_success_email(user, payment:Payment):
             subject,
         ),
     ).start()
-
-
-class PaystackWebhookView(View):
-    def post(self, request, *args, **kwargs):
-        paystack_public, paystack_secret = get_paystack_keys
-        payload = request.body
-        signature_header = request.META["HTTP_X_PAYSTACK_SIGNATURE"]
-
-        try:
-            event = PayStackWebhook.get_event_data(paystack_secret, payload, signature_header)
-        except ValueError as error:
-            return HttpResponse(status=400)
-        except PayStackSignatureVerifyError as error:
-            return HttpResponse(status=400)
-        if event["event"] == "charge.success":
-            session = event["data"]
-            if session["status"] == "success":
-                try:
-                    payment = Payment.objects.get(reference=session["reference"])
-                    payment.approved = True
-                    payment.status = 'success'
-                    payment.is_paid=True
-                    payment.date_time_paid = datetime.now(utc)
-                    payment.date_time_approved = datetime.now(utc)
-                    payment.save()
-                    
-                    # Distribute Escrow
-                    from apps.pay.services.checkout import complete_successful_payment
-                    invoice = Invoice.objects.filter(payment=payment).first()
-                    if invoice:
-                        complete_successful_payment(payment, invoice)
-                except Payment.DoesNotExist:
-                    pass
-        return HttpResponse(status=200)
 
 
 class MakePaymentView(APIView):
@@ -1068,13 +962,9 @@ class AccountDetailView(APIView):
                     # We don't need a Flutterwave recipient.
                     account_detail.recipient_code = ""
                     account_detail.save(update_fields=["recipient_code", "updated_at"])
-                elif account_type == "paystack":
-                    # For Paystack, the recipient is created dynamically during withdrawal.
-                    # Clear any old Flutterwave recipient code.
-                    account_detail.recipient_code = ""
-                    account_detail.save(update_fields=["recipient_code", "updated_at"])
                 else:
-                    # Call Flutterwave for African Banks
+                    # Flutterwave — supports all African countries (NG, GH, KE,
+                    # UG, ZA, TZ, RW, ZM, CM, CI, SN, ML, and more).
                     response = create_fw_transfer_recipient(
                         access_token=get_flutterwave_keys()["secret_key"],
                         name=account_name,
@@ -1343,66 +1233,23 @@ class FlutterWaveVerifyAccountNumber(APIView):
                 'message':f'error occured at {e}'
             })
 
-class PaystackVerifyAccountView(APIView):
-    """
-    GET /pay/ps/verify-account
-    Verifies a Nigerian bank account using Paystack API.
-    """
-    def get(self, request):
-        try:
-            bank_code = request.GET.get("bank_code")
-            account_number = request.GET.get("account_number")
-
-            if not bank_code or not account_number:
-                return Response(
-                    {"status": "error", "message": "bank_code and account_number are required"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            ps_keys = get_paystack_keys()
-            headers = {
-                "Authorization": f"Bearer {ps_keys['secret_key']}",
-                "Content-Type": "application/json",
-            }
-            url = "https://api.paystack.co/bank/resolve"
-            params = {
-                "account_number": account_number,
-                "bank_code": bank_code,
-            }
-
-            response = requests.get(url, headers=headers, params=params, timeout=15)
-            data = response.json()
-
-            if data.get("status"):
-                return Response({
-                    "status": "success",
-                    "data": data["data"],
-                })
-            else:
-                return Response(
-                    {"status": "error", "message": data.get("message", "Verification failed")},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        except Exception as e:
-            return Response(
-                {"status": "error", "message": f"Error: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
 
 class SeedSalesView(APIView):
     """
     GET /api/pay/seed-sales
     Seeds 5 successful and 2 returned sales for EVERY designer.
     FOR TESTING WITHDRAWALS ONLY.
-    Simple GET request, no authentication needed (only in DEBUG mode).
+    Requires authentication and DEBUG mode.
     """
-    permission_classes = [] 
+    permission_classes = [IsAuthenticated]
 
     @transaction.atomic
     def get(self, request):
         if not getattr(settings, "DEBUG", False):
             return Response({"error": "Only available in DEBUG mode"}, status=status.HTTP_403_FORBIDDEN)
+
+        if not request.user.is_staff:
+            return Response({"error": "Only staff can seed sales"}, status=status.HTTP_403_FORBIDDEN)
 
         # 1. Get/Create Seed Customer
         seed_user, created = User.objects.get_or_create(

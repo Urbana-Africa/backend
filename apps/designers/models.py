@@ -100,6 +100,10 @@ class Designer(BaseModel):
     welcome_email_sent_at = models.DateTimeField(null=True, blank=True)
     upload_reminder_sent_at = models.DateTimeField(null=True, blank=True)
     storefront_reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    final_reminder_sent_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Last-chance 7-day reminder for designers still under 5 products",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     slug = models.SlugField(unique=True, blank=True, null=True)

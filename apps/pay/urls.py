@@ -1,8 +1,8 @@
 from django.urls import path
 
-from apps.pay.confirm import FlutterwaveConfirmView, PaystackConfirmView, StripeConfirmView
-from apps.pay.initialize import InitializeFlutterwavePayment, InitializePaystackPayment, InitializeStripePayment
-from apps.pay.webhooks import FlutterwaveWebhookView, PaystackWebhookView, StripeWebhookView, ShippoWebhookView
+from apps.pay.confirm import FlutterwaveConfirmView, StripeConfirmView
+from apps.pay.initialize import InitializeFlutterwavePayment, InitializeStripePayment
+from apps.pay.webhooks import FlutterwaveWebhookView, StripeWebhookView, ShippoWebhookView
 from . import views as payviews
 from rest_framework.routers import DefaultRouter
 from .views import (
@@ -10,7 +10,6 @@ from .views import (
     FlutterWaveVerifyAccountNumber,
     FlutterwaveBanksView,
     InitiatePayoutView,
-    PaystackVerifyAccountView,
     WithdrawalStatusView,
     WithdrawalListView,
     CustomerWalletSummaryView,
@@ -44,13 +43,11 @@ urlpatterns = [
     path("", payviews.Dashboard.as_view(), name="pay_dashboard"),
     path("my-transactions", payviews.MyTransactions.as_view(), name="my_transactions"),
     path("my-payments", payviews.MyPayments.as_view(), name="my_payments"),
-    path("check-account-number", payviews.CheckAccountNumber.as_view(), name="check_account_number"),
     path("invoices", payviews.InvoicesView.as_view()),
     path("payments", payviews.PaymentView.as_view()),
 
     # ─── Webhooks ─────────────────────────────────────────────────────────────
     path("webhook/flutterwave", FlutterwaveWebhookView.as_view()),
-    path("webhook/paystack", PaystackWebhookView.as_view()),
     path("webhooks/stripe/", StripeWebhookView.as_view(), name="stripe-webhook"),
     path("webhook/shippo", ShippoWebhookView.as_view(), name="shippo-webhook"),
 
@@ -60,16 +57,13 @@ urlpatterns = [
 
     # ─── Payment gateway ─────────────────────────────────────────────────────
     path("confirm/flutterwave/", FlutterwaveConfirmView.as_view()),
-    path("confirm/paystack/", PaystackConfirmView.as_view()),
     path("confirm/stripe/", StripeConfirmView.as_view()),
     path("init/flutterwave/", InitializeFlutterwavePayment.as_view()),
-    path("init/paystack/", InitializePaystackPayment.as_view()),
     path("init/stripe/", InitializeStripePayment.as_view()),
 
     # ─── Bank account / bank list ─────────────────────────────────────────────
     path("account", AccountDetailView.as_view(), name="account-detail"),
     path("banks", FlutterwaveBanksView.as_view()),
     path("fw/verify-account", FlutterWaveVerifyAccountNumber.as_view()),
-    path("ps/verify-account", PaystackVerifyAccountView.as_view()),
     path("seed-sales", payviews.SeedSalesView.as_view(), name="seed_sales"),
 ]

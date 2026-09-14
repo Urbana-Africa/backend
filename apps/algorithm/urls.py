@@ -9,7 +9,9 @@ from apps.algorithm.views import (
 
 urlpatterns = [
     # Public / Customer
-    path("track", TrackEventView.as_view(), name="algo-track"),
+    # NOTE: /core/track is registered in apps/core/urls.py (TrackEventsView).
+    # The algorithm TrackEventView was shadowed dead code and has been removed
+    # from this URL config. The core view now feeds SessionIntentEngine directly.
     path("feed", FeedView.as_view(), name="algo-feed"),
     path("trending", TrendingView.as_view(), name="algo-trending"),
     path("recommendations", RecommendationsView.as_view(), name="algo-recommendations"),

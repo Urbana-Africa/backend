@@ -1,0 +1,33 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ customer.user.first_name|default:customer.user.email }},</p>
+
+<p>Good news — your return request for order <strong>{{ order.order_id }}</strong> has been approved.</p>
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Return reference</td>
+    <td style="padding:8px 0; font-weight:600;">{{ return_request.return_id }}</td>
+  </tr>
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Order</td>
+    <td style="padding:8px 0; font-weight:600;">{{ order.order_id }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0; color:#666;">Item</td>
+    <td style="padding:8px 0; font-weight:600;">{{ order_item.product.name|default:"—" }}</td>
+  </tr>
+</table>
+
+<p>Our team will process your refund shortly. You will receive a separate confirmation once the refund has been issued to your original payment method.</p>
+
+<p style="margin:20px 0;"><a href="{{ order_url|default:'https://customer.urbanaafrica.com/orders' }}" class="btn-primary">View order details</a></p>
+
+<p>If you have any questions, reply to this email or contact our support team.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warmly,</p>
+<p>Urbana Africa Support</p>
+{% endblock %}

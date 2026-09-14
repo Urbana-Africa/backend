@@ -3,6 +3,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
 from django.template.loader import render_to_string
+import logging
 import threading
 import types
 
@@ -22,6 +23,8 @@ from .serializers import (
     WaitlistUnsubscribeSerializer,
     WaitlistStatsSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class WaitlistAnonRateThrottle(AnonRateThrottle):
@@ -110,10 +113,10 @@ You can unsubscribe anytime: {unsubscribe_url}
             fail_silently=False,
         )
         _log_event(subscriber, 'confirm_email_sent', request, {'status': 'sent'})
-        print(f"[WAITLIST EMAIL] SENT to {subscriber.email} — subject: {subject}")
+        logger.info("[WAITLIST EMAIL] SENT to %s — subject: %s", subscriber.email, subject)
     except Exception as e:
         _log_event(subscriber, 'confirm_email_sent', request, {'status': 'failed', 'error': str(e)})
-        print(f"[WAITLIST EMAIL] FAILED to {subscriber.email}: {e}")
+        logger.error("[WAITLIST EMAIL] FAILED to %s: %s", subscriber.email, e)
 
 
 class LaunchConfigView(APIView):

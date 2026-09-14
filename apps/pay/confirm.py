@@ -1,3 +1,4 @@
+import logging
 import threading
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -7,12 +8,13 @@ from django.template.loader import render_to_string
 
 from .models import Payment, PaymentAttempt, Invoice
 from .verify import (
-    verify_paystack_transaction,
     verify_flutterwave_transaction,
     verify_stripe_payment,
 )
 from apps.customers.models import Order
 from apps.utils.email_sender import resend_sendmail
+
+logger = logging.getLogger(__name__)
 
 
 # ───────────────────────────────
@@ -117,55 +119,35 @@ class BasePaymentConfirmView(APIView):
             invoice.payment = payment
             invoice.save()
 
-            # Update Order & Send Customer Confirmation Email
+            # Update Order status (emails are sent via the canonical idempotent
+            # notification helpers below, not a duplicate template-based send).
             try:
                 order = Order.objects.filter(invoice=invoice).first()
                 if order and order.status == "pending":
                     order.status = "processing"
                     order.save(update_fields=["status"])
-
-                    items = order.items.select_related("product").all()
-                    item_list = [
-                        {
-                            "name": i.product.name,
-                            "quantity": i.quantity,
-                            "price": str(i.amount),
-                        }
-                        for i in items
-                    ]
-
-                    ctx = {
-                        "customer_name": order.customer.user.first_name or order.customer.user.email,
-                        "order_id": order.order_id,
-                        "total": str(order.total_amount),
-                        "currency_symbol": "",
-                        "item_count": str(items.count()),
-                        "items": item_list,
-                        "status": "Processing",
-                    }
-                    msg = render_to_string("administrator/order_confirmation.html", ctx)
-                    threading.Thread(
-                        target=resend_sendmail,
-                        args=(
-                            f"Urbana — Order Confirmed: {order.order_id}",
-                            [order.customer.user.email],
-                            msg,
-                        ),
-                    ).start()
             except Exception as e:
-                print(f"Error sending customer order confirmation email: {str(e)}")
+                logger.error("Error updating order status after payment: %s", e)
 
-            # Notify designers of new paid order
+            # Notify designers + customer of the new paid order (idempotent —
+            # safe even if the webhook or checkout.py already triggered them).
             try:
                 if order:
-                    from apps.utils.notifications import send_designer_new_order
+                    from apps.utils.notifications import (
+                        send_designer_new_order,
+                        send_customer_order_confirmed,
+                    )
                     for item in order.items.select_related("product").all():
                         try:
                             send_designer_new_order(item)
                         except Exception as e:
-                            print(f"Error sending designer order email: {str(e)}")
+                            logger.error("Error sending designer order email: %s", e)
+                        try:
+                            send_customer_order_confirmed(item)
+                        except Exception as e:
+                            logger.error("Error sending customer order confirmation email: %s", e)
             except Exception as e:
-                print(f"Error sending designer order emails: {str(e)}")
+                logger.error("Error sending order emails: %s", e)
 
         return Response(
             {
@@ -175,16 +157,6 @@ class BasePaymentConfirmView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-
-
-# ───────────────────────────────
-# 🟧 PAYSTACK CONFIRM VIEW
-# ───────────────────────────────
-class PaystackConfirmView(BasePaymentConfirmView):
-    processor = "paystack"
-    verify_func = staticmethod(verify_paystack_transaction)
-    id_field = "reference"
-    success_check = staticmethod(lambda data: data.get("status") == "success")
 
 
 # ───────────────────────────────

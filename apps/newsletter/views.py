@@ -88,7 +88,7 @@ class NewsletterUnsubscribeAPIView(APIView):
             subscriber = NewsletterSubscriber.objects.get(email=email, is_active=True)
             subscriber.unsubscribe()
             return Response({
-                "message": "You have been successfully unsubscribed from Refresh Ghana Newsletter.",
+                "message": "You have been successfully unsubscribed from the Urbana Africa newsletter.",
                 "email": email
             }, status=status.HTTP_200_OK)
         except NewsletterSubscriber.DoesNotExist:

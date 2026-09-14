@@ -8,6 +8,8 @@ from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Q
+from django.conf import settings
+import logging
 import threading
 from django.template.loader import render_to_string
 from apps.core.models import *
@@ -17,7 +19,9 @@ from apps.pay.models import Withdrawal
 from apps.utils.pagination import StandardPagination
 from .serializers import *
 from apps.core.serializers import ProductSerializer
-from apps.utils.email_sender import resend_sendmail
+from apps.utils.email_sender import resend_sendmail, wrap_email_html
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -164,8 +168,9 @@ class AdminProductViewSet(AdminBaseViewSet):
                 "is_published": False,
                 "reasons": reasons,
                 "comment": comment,
+                "products_url": f"{settings.DESIGNER_URL}/products",
             }
-            message = render_to_string("administrator/product_status_update.html", context)
+            message = render_to_string("emails/designer_product_status_update.html", context)
             threading.Thread(
                 target=resend_sendmail,
                 args=(
@@ -173,9 +178,10 @@ class AdminProductViewSet(AdminBaseViewSet):
                     [product.user.email],
                     message,
                 ),
+                kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Studio"},
             ).start()
         except Exception as e:
-            print(f"Error sending product unpublish email: {str(e)}")
+            logger.error("Error sending product unpublish email: %s", e)
 
         serializer = self.get_serializer(product)
         return Response({
@@ -207,7 +213,7 @@ class AdminProductViewSet(AdminBaseViewSet):
                 from apps.utils.notifications import send_designer_storefront_live
                 send_designer_storefront_live(product.user)
         except Exception as e:
-            print(f"[EMAIL] Storefront live failed: {e}")
+            logger.error("[EMAIL] Storefront live failed: %s", e)
 
         # Email notification
         try:
@@ -218,8 +224,9 @@ class AdminProductViewSet(AdminBaseViewSet):
                 "is_published": True,
                 "reasons": None,
                 "comment": "",
+                "products_url": f"{settings.DESIGNER_URL}/products",
             }
-            message = render_to_string("administrator/product_status_update.html", context)
+            message = render_to_string("emails/designer_product_status_update.html", context)
             threading.Thread(
                 target=resend_sendmail,
                 args=(
@@ -227,9 +234,10 @@ class AdminProductViewSet(AdminBaseViewSet):
                     [product.user.email],
                     message,
                 ),
+                kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Studio"},
             ).start()
         except Exception as e:
-            print(f"Error sending product publish email: {str(e)}")
+            logger.error("Error sending product publish email: %s", e)
 
         serializer = self.get_serializer(product)
         return Response({
@@ -312,22 +320,35 @@ class AdminOrderItemViewSet(AdminBaseViewSet):
         order_item.save()
         
         # Trigger email to designer
-        from apps.utils.email_sender import sendmail
-        import threading
-        
+        from django.utils.html import escape
+
         try:
             if status_val == 'approved':
-                message = f"Your packaging media for Order Item {order_item.item_id} has been approved. You may now generate a shipping label."
+                message = (
+                    f"<p>Your packaging media for Order Item <strong>{order_item.item_id}</strong> "
+                    f"has been approved. You may now generate a shipping label.</p>"
+                )
             else:
-                message = f"Your packaging media for Order Item {order_item.item_id} has been rejected. Reason: {reason}. Please update your packaging and re-upload."
-                
-            threading.Thread(target=sendmail, args=(
-                f"Urbana - Packaging Media {status_val.capitalize()}",
-                [order_item.designer.email],
-                message
-            )).start()
+                message = (
+                    f"<p>Your packaging media for Order Item <strong>{order_item.item_id}</strong> "
+                    f"has been rejected.</p>"
+                    f"<p><strong>Reason:</strong> {escape(reason)}</p>"
+                    f"<p>Please update your packaging and re-upload.</p>"
+                )
+
+            subject = f"Urbana - Packaging Media {status_val.capitalize()}"
+            message = wrap_email_html(message, subject)
+            threading.Thread(
+                target=resend_sendmail,
+                args=(
+                    subject,
+                    [order_item.designer.email],
+                    message,
+                ),
+                kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Studio"},
+            ).start()
         except Exception as e:
-            print("Failed to send designer email:", e)
+            logger.error("Failed to send designer packaging email: %s", e)
             
         return Response({
             "status": "success",
@@ -353,7 +374,7 @@ class AdminOrderTrackingViewSet(AdminBaseViewSet):
                     "carrier": instance.carrier or "",
                     "estimated_delivery": str(instance.estimated_delivery) if instance.estimated_delivery else "",
                 }
-                message = render_to_string("administrator/shipping_update.html", context)
+                message = render_to_string("emails/customer_shipping_update.html", context)
                 threading.Thread(
                     target=resend_sendmail,
                     args=(
@@ -361,9 +382,10 @@ class AdminOrderTrackingViewSet(AdminBaseViewSet):
                         [order.customer.user.email],
                         message,
                     ),
+                    kwargs={"from_email": "support@accounts.urbanaafrica.com", "from_name": "Urbana Africa Support"},
                 ).start()
             except Exception as e:
-                print(f"Error sending shipping update email: {str(e)}")
+                logger.error("Error sending shipping update email: %s", e)
 
     def perform_update(self, serializer):
         instance = serializer.save()
@@ -378,7 +400,7 @@ class AdminOrderTrackingViewSet(AdminBaseViewSet):
                     "carrier": instance.carrier or "",
                     "estimated_delivery": str(instance.estimated_delivery) if instance.estimated_delivery else "",
                 }
-                message = render_to_string("administrator/shipping_update.html", context)
+                message = render_to_string("emails/customer_shipping_update.html", context)
                 threading.Thread(
                     target=resend_sendmail,
                     args=(
@@ -386,9 +408,10 @@ class AdminOrderTrackingViewSet(AdminBaseViewSet):
                         [order.customer.user.email],
                         message,
                     ),
+                    kwargs={"from_email": "support@accounts.urbanaafrica.com", "from_name": "Urbana Africa Support"},
                 ).start()
             except Exception as e:
-                print(f"Error sending shipping update email: {str(e)}")
+                logger.error("Error sending shipping update email: %s", e)
 
 # =====================================================
 # RETURN MANAGEMENT
@@ -453,7 +476,7 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
             subject = f"Your Return Request #{instance.return_id} Has Been Approved"
 
             message = render_to_string(
-                "administrator/return_approved.html",
+                "emails/return_approved.html",
                 context,
             )
 
@@ -473,7 +496,7 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
             subject = f"Your Return Request #{instance.return_id} Was Rejected"
 
             message = render_to_string(
-                "administrator/return_rejected.html",
+                "emails/return_rejected.html",
                 context,
             )
 
@@ -481,6 +504,7 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
         threading.Thread(
             target=resend_sendmail,
             args=(subject, [customer.user.email], message),
+            kwargs={"from_email": "support@accounts.urbanaafrica.com", "from_name": "Urbana Africa Support"},
         ).start()
 
         # Notify designer
@@ -677,8 +701,19 @@ class AdminDesignerViewSet(AdminBaseViewSet):
         def _send_status_email():
             try:
                 subject = f"Urbana Studio: Account Status Updated ({new_status.title()})"
-                context = {"designer": designer}
-                message = render_to_string("administrator/status_update.html", context)
+                status_message_map = {
+                    Designer.Status.APPROVED: "Your designer profile has been approved. You can now start selling on Urbana Africa.",
+                    Designer.Status.REJECTED: "Your profile needs a few refinements before it can be approved. Please review the details below and update your profile.",
+                    Designer.Status.BLOCKED: "Your account has been restricted. Please contact support for assistance.",
+                    Designer.Status.PENDING: "Your designer profile is now under review by our curation team.",
+                }
+                context = {
+                    "designer": designer,
+                    "status_label": new_status.title(),
+                    "status_message": status_message_map.get(new_status, ""),
+                    "designer_dashboard_url": f"{settings.DESIGNER_URL}/dashboard",
+                }
+                message = render_to_string("emails/designer_account_status_update.html", context)
                 resend_sendmail(
                     subject=subject,
                     recipient_list=[designer.user.email],
@@ -687,7 +722,7 @@ class AdminDesignerViewSet(AdminBaseViewSet):
                     from_name="Urbana Studio",
                 )
             except Exception as e:
-                print(f"[Email Error] Designer status update email failed for {designer.user.email}: {e}")
+                logger.error("Designer status update email failed for %s: %s", designer.user.email, e)
 
         threading.Thread(target=_send_status_email, daemon=True).start()
 
@@ -852,8 +887,9 @@ class AdminTicketViewSet(AdminBaseViewSet):
                     "ticket_reference": ticket.reference,
                     "sender_name": request.user.get_full_name() or request.user.email,
                     "reply_body": msg.body,
+                    "ticket_url": f"{settings.DESIGNER_URL}/help",
                 }
-                message = render_to_string("administrator/ticket_reply.html", context)
+                message = render_to_string("emails/support_ticket_reply.html", context)
                 threading.Thread(
                     target=resend_sendmail,
                     args=(
@@ -861,9 +897,10 @@ class AdminTicketViewSet(AdminBaseViewSet):
                         [ticket.user.email],
                         message,
                     ),
+                    kwargs={"from_email": "support@accounts.urbanaafrica.com", "from_name": "Urbana Africa Support"},
                 ).start()
             except Exception as e:
-                print(f"Error sending ticket reply email: {str(e)}")
+                logger.error("Error sending ticket reply email: %s", e)
 
         return Response(
             {
@@ -1234,7 +1271,7 @@ class AdminNewsletterViewSet(viewsets.ModelViewSet):
                         from_name="Urbana Africa",
                     )
             except Exception as e:
-                print(f"[Newsletter Error] Failed to send newsletter {newsletter.title}: {e}")
+                logger.error("[Newsletter Error] Failed to send newsletter %s: %s", newsletter.title, e)
 
         # Send asynchronously via threading
         threading.Thread(target=_send_emails, daemon=True).start()

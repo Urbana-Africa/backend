@@ -1,0 +1,53 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ designer_name }},</p>
+
+{% if is_published %}
+  <p>Great news — your product has been published and is now live on Urbana Africa.</p>
+{% else %}
+  <p>Your product has been unpublished from Urbana Africa. Details are below.</p>
+{% endif %}
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Product</td>
+    <td style="padding:8px 0; font-weight:600;">{{ product_name }}</td>
+  </tr>
+  {% if product_sku %}
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">SKU</td>
+    <td style="padding:8px 0; font-weight:600;">{{ product_sku }}</td>
+  </tr>
+  {% endif %}
+  <tr>
+    <td style="padding:8px 0; color:#666;">Status</td>
+    <td style="padding:8px 0; font-weight:600;">{% if is_published %}Published{% else %}Unpublished{% endif %}</td>
+  </tr>
+</table>
+
+{% if not is_published and reasons %}
+  <p><strong>Reason{{ reasons|length|pluralize }}:</strong></p>
+  <ul>
+    {% for reason in reasons %}<li>{{ reason }}</li>{% endfor %}
+  </ul>
+{% endif %}
+
+{% if comment %}
+  <p><strong>Notes from our team:</strong></p>
+  <p>{{ comment }}</p>
+{% endif %}
+
+{% if is_published %}
+  <p>Your piece is now discoverable by customers around the world. Keep your photos, sizes, and stock updated to maximise your sales.</p>
+{% else %}
+  <p>Please review the notes above, update your product accordingly, and resubmit it for review. If you have any questions, reply to this email or contact our support team.</p>
+{% endif %}
+
+<p style="margin:20px 0;"><a href="{{ products_url|default:'https://designer.urbanaafrica.com/products' }}" class="btn-primary">Manage your products</a></p>
+{% endblock %}
+
+{% block signature %}
+<p>Warmly,</p>
+<p>The Urbana Studio Team<br>Urbana Africa</p>
+{% endblock %}

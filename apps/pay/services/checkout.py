@@ -54,13 +54,23 @@ def complete_successful_payment(payment, invoice):
                 item.escrow = escrow
                 item.save(update_fields=['escrow'])
 
-            # Send order emails after successful payment
+        # Send order emails AFTER the transaction commits — never before,
+        # so a rollback never produces an email claiming a success that
+        # didn't happen.  The notification helpers are idempotent, so a
+        # duplicate trigger (e.g. webhook + confirm) is safe.
+        def _send_order_emails(_order_id=order.id):
+            import logging
+            from apps.customers.models import OrderItem
             from apps.utils.notifications import send_designer_new_order, send_customer_order_confirmed
-            try:
-                send_designer_new_order(item)
-            except Exception as e:
-                print(f"Error sending designer order email: {str(e)}")
-            try:
-                send_customer_order_confirmed(item)
-            except Exception as e:
-                print(f"Error sending customer order confirmation email: {str(e)}")
+            log = logging.getLogger(__name__)
+            for item in OrderItem.objects.filter(order_id=_order_id).select_related("product"):
+                try:
+                    send_designer_new_order(item)
+                except Exception as e:
+                    log.error("Designer order email failed: %s", e)
+                try:
+                    send_customer_order_confirmed(item)
+                except Exception as e:
+                    log.error("Customer order confirmation email failed: %s", e)
+
+        transaction.on_commit(_send_order_emails)

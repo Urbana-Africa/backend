@@ -1,6 +1,8 @@
 import json
 import logging
 import threading
+import hashlib
+import hmac
 from datetime import timedelta, datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
@@ -10,7 +12,9 @@ from rest_framework.response import Response
 from rest_framework import status
 import stripe
 from django.conf import settings
+from decouple import config
 from .models import Payment, PaymentAttempt, Invoice, PaymentWebhookLog
+from .config import get_flutterwave_keys
 from apps.customers.models import Order
 from apps.utils.email_sender import resend_sendmail
 
@@ -44,7 +48,22 @@ def handle_successful_payment(reference, processor_name=None, data=None):
     Handles all successful payment confirmations across processors.
     Updates payment, creates/updates PaymentAttempt, and links invoices.
     'reference' may be a Payment.reference OR a PaymentAttempt.reference.
+
+    IDEMPOTENT: if the payment is already marked successful, this is a
+    duplicate webhook/event and we return early without re-processing.
+    This prevents double-escrow, double-wallet-credit, and double-email
+    on webhook retries or duplicate deliveries.
     """
+    # ── 0. Idempotency check ────────────────────────────────────────
+    # If the payment is already paid, this is a duplicate event.
+    existing = Payment.objects.filter(reference=reference, is_paid=True).first()
+    if existing:
+        logger.info(
+            f"[{processor_name}] Duplicate event for reference {reference} — "
+            f"payment already marked paid. Skipping to prevent double-processing."
+        )
+        return
+
     # ── 1. Resolve Payment ──────────────────────────────────────────
     payment = None
     attempt = None
@@ -152,45 +171,32 @@ def handle_successful_payment(reference, processor_name=None, data=None):
         invoice.save(update_fields=["is_active", "is_expired", "start_date", "expiry_date"])
         logger.info(f"[{processor_name}] Invoice {invoice.id} activated for user {invoice.user_id}.")
 
-        # ── 5. Update Order & Send Customer Confirmation Email ───────
+        # ── 5. Update Order status & send order-confirmation emails ──
         try:
             order = Order.objects.filter(invoice=invoice).first()
             if order and order.status == "pending":
                 order.status = "processing"
                 order.save(update_fields=["status"])
 
-                # Build order items context for email
-                items = order.items.select_related("product").all()
-                item_list = [
-                    {
-                        "name": i.product.name,
-                        "quantity": i.quantity,
-                        "price": str(i.amount),
-                    }
-                    for i in items
-                ]
+                # Notify designers + customer (idempotent — safe even if the
+                # client-side confirm view or checkout.py already fired them).
+                from apps.utils.notifications import (
+                    send_designer_new_order,
+                    send_customer_order_confirmed,
+                )
+                for item in order.items.select_related("product").all():
+                    try:
+                        send_designer_new_order(item)
+                    except Exception as e:
+                        logger.error(f"[{processor_name}] Designer order email failed: {e}")
+                    try:
+                        send_customer_order_confirmed(item)
+                    except Exception as e:
+                        logger.error(f"[{processor_name}] Customer order email failed: {e}")
 
-                ctx = {
-                    "customer_name": order.customer.user.first_name or order.customer.user.email,
-                    "order_id": order.order_id,
-                    "total": str(order.total_amount),
-                    "currency_symbol": "",
-                    "item_count": str(items.count()),
-                    "items": item_list,
-                    "status": "Processing",
-                }
-                msg = render_to_string("administrator/order_confirmation.html", ctx)
-                threading.Thread(
-                    target=resend_sendmail,
-                    args=(
-                        f"Urbana — Order Confirmed: {order.order_id}",
-                        [order.customer.user.email],
-                        msg,
-                    ),
-                ).start()
-                logger.info(f"[{processor_name}] Order confirmation email sent for {order.order_id}.")
+                logger.info(f"[{processor_name}] Order confirmation emails dispatched for {order.order_id}.")
         except Exception as e:
-            logger.error(f"[{processor_name}] Error sending order confirmation email: {e}")
+            logger.error(f"[{processor_name}] Error sending order confirmation emails: {e}")
 
 
 # ---------------------------------------------------------------------
@@ -221,31 +227,6 @@ class BaseWebhookView(APIView):
 
 
 # ---------------------------------------------------------------------
-# PAYSTACK WEBHOOK
-# ---------------------------------------------------------------------
-@method_decorator(csrf_exempt, name="dispatch")
-class PaystackWebhookView(BaseWebhookView):
-    processor_name = "Paystack"
-    success_event_types = ["charge.success"]
-
-    def post(self, request):
-        payload = self.parse_json_payload(request)
-        if not payload:
-            return Response({"error": "Invalid payload"}, status=status.HTTP_400_BAD_REQUEST)
-
-        event_type = payload.get("event")
-        data = payload.get("data", {})
-        reference = data.get("reference")
-
-        # ✅ Confirm success
-        if event_type == "charge.success" and data.get("status") == "success":
-            return self.handle_event(event_type, payload, reference)
-
-        log_webhook_event(self.processor_name, event_type or "unknown", payload, reference, processed=False)
-        return Response({"status": "ignored"}, status=status.HTTP_200_OK)
-
-
-# ---------------------------------------------------------------------
 # FLUTTERWAVE WEBHOOK
 # ---------------------------------------------------------------------
 @method_decorator(csrf_exempt, name="dispatch")
@@ -254,6 +235,25 @@ class FlutterwaveWebhookView(BaseWebhookView):
     success_event_types = ["charge.completed"]
 
     def post(self, request):
+        # Verify Flutterwave signature (SHA512 of secret_key + "|" + raw_body)
+        flw_sig = request.META.get("HTTP_VERIF_HASH", "")
+        secret_key = get_flutterwave_keys().get("secret_key", "")
+        if not flw_sig or not secret_key:
+            log_webhook_event(self.processor_name, "missing_signature", "", status_code=401)
+            return Response({"error": "Missing signature"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            expected_sig = hashlib.sha512(
+                (secret_key + request.body.decode("utf-8")).encode("utf-8")
+            ).hexdigest()
+        except Exception:
+            log_webhook_event(self.processor_name, "signature_error", "", status_code=500)
+            return Response({"error": "Signature error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not hmac.compare_digest(expected_sig, flw_sig):
+            log_webhook_event(self.processor_name, "invalid_signature", request.body, status_code=401)
+            return Response({"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+
         payload = self.parse_json_payload(request)
         if not payload:
             return Response({"error": "Invalid payload"}, status=status.HTTP_400_BAD_REQUEST)
@@ -262,7 +262,7 @@ class FlutterwaveWebhookView(BaseWebhookView):
         data = payload.get("data", {})
         reference = data.get("tx_ref")
 
-        # ✅ Flutterwave’s actual success event is “charge.completed” + status == “successful”
+        # ✅ Flutterwave's actual success event is "charge.completed" + status == "successful"
         if event_type == "charge.completed" and data.get("status") == "successful":
             return self.handle_event(event_type, payload, reference)
 
@@ -364,10 +364,38 @@ class ShippoWebhookView(APIView):
     POST /pay/webhook/shippo
     Processes tracking updates from Shippo.
     If tracking status is 'DELIVERED', updates OrderItem and executes customer notification.
+
+    Verifies the X-Shippo-Signature header using HMAC-SHA256 with the
+    SHIPPO_WEBHOOK_SECRET environment variable.
     """
     permission_classes = [AllowAny]
 
     def post(self, request):
+        # Verify Shippo signature (HMAC-SHA256 of raw body with webhook secret)
+        shippo_sig = request.headers.get("X-Shippo-Signature", "")
+        if not shippo_sig:
+            log_webhook_event("Shippo", "missing_signature", "", status_code=401)
+            return Response({"error": "Missing signature"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        shippo_secret = getattr(settings, "SHIPPO_WEBHOOK_SECRET", "") or config("SHIPPO_WEBHOOK_SECRET", default="", cast=str)
+        if not shippo_secret:
+            log_webhook_event("Shippo", "missing_secret_config", "", status_code=500)
+            return Response({"error": "Webhook secret not configured"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            expected_sig = hmac.new(
+                shippo_secret.encode("utf-8"),
+                request.body,
+                hashlib.sha256,
+            ).hexdigest()
+        except Exception as e:
+            log_webhook_event("Shippo", "signature_error", "", status_code=500)
+            return Response({"error": "Signature verification failed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not hmac.compare_digest(expected_sig, shippo_sig):
+            log_webhook_event("Shippo", "invalid_signature", request.body, status_code=401)
+            return Response({"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+
         payload = request.body.decode("utf-8")
         try:
             event_data = json.loads(payload)
@@ -418,7 +446,7 @@ class ShippoWebhookView(APIView):
                         try:
                             send_customer_order_delivered(order_item)
                         except Exception as e:
-                            print(f"[EMAIL] Customer delivered email failed: {e}")
+                            logger.error("[EMAIL] Customer delivered email failed: %s", e)
                             
                         # Log webhook as processed successfully
                         log_webhook_event("Shippo", event, event_data, reference=tracking_number, processed=True)

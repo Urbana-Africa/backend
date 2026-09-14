@@ -29,7 +29,7 @@ class AccountDetail(models.Model):
     country = models.CharField(max_length=5, blank=True, default="NG")
     account_type = models.CharField(
         max_length=20,
-        choices=[("flutterwave", "Flutterwave"), ("stripe", "Stripe"), ("paystack", "Paystack")],
+        choices=[("flutterwave", "Flutterwave"), ("stripe", "Stripe")],
         default="flutterwave",
     )
     recipient_code = models.CharField(default='', blank=True, max_length=200)
@@ -82,7 +82,7 @@ class Banks(models.Model):
 
 
 PROCESSORS = (
-    ('paystack', 'Paystack'),
+    ('flutterwave', 'Flutterwave'),
     ('stripe', 'Stripe'),
     ('paypal', 'PayPal'),
     ('manual', 'Manual'),
@@ -149,7 +149,7 @@ class Payment(models.Model):
     name = models.CharField(max_length=100, null=True, blank=True)
     reference = models.CharField(max_length=100, unique=True, blank=True)
     processor = models.CharField(max_length=20, choices=PROCESSORS, blank=True, default='')
-    processor_payment_id = models.CharField(max_length=200, blank=True, default='')  # Processor’s internal ID
+    processor_payment_id = models.CharField(max_length=200, blank=True, default='')  # Processor's internal ID
     currency = models.CharField(max_length=10, default='USD', blank=True)
     status = models.CharField(max_length=50, choices=PAYMENT_STATUS, default='pending')
     is_paid = models.BooleanField(default=False)
@@ -158,20 +158,6 @@ class Payment(models.Model):
     date_time_added = models.DateTimeField(auto_now_add=True)
     date_time_paid = models.DateTimeField(null=True, blank=True)
     date_time_approved = models.DateTimeField(null=True, blank=True)
-
-    def save(self, *args, **kwargs):
-        # Auto-generate unique reference if not set
-        if not self.reference:
-            exist = True
-            while exist:
-                ref = get_random_string(50)
-                if not Payment.objects.filter(reference=ref).exists():
-                    self.reference = ref
-                    exist = False
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return f"{self.reference} - {self.amount}"
 
     class Meta:
         db_table = 'payments'
@@ -196,7 +182,7 @@ class Payment(models.Model):
         # Auto-mark paid if status is success
         if self.status == 'success' and not self.is_paid:
             self.is_paid = True
-            self.date_time_paid = datetime.now()
+            self.date_time_paid = timezone.now()
 
         super().save(*args, **kwargs)
 
@@ -204,7 +190,7 @@ class Payment(models.Model):
         """Convenience method for confirming successful payment."""
         self.status = 'success'
         self.is_paid = True
-        self.date_time_paid = datetime.now()
+        self.date_time_paid = timezone.now()
         if processor_id:
             self.processor_payment_id = processor_id
         self.save(update_fields=['status', 'is_paid', 'date_time_paid', 'processor_payment_id'])
@@ -594,3 +580,93 @@ class Transaction(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.transaction_type} - {self.amount}"
+
+
+# =============================
+# API COST TRACKING (immutable ledger)
+# =============================
+
+class ApiCostRecord(models.Model):
+    """
+    Immutable ledger entry for every variable-cost third-party API call.
+
+    Every AI generation, image processing, SMS, or other metered external
+    service MUST produce one of these records so the platform can calculate
+    the true cost of serving each customer.
+
+    This is NOT a balance table — it is an append-only audit trail. Never
+    update or delete rows; write adjustment rows instead.
+    """
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="api_cost_records")
+    session_key = models.CharField(max_length=100, blank=True, default="", help_text="Anonymous session ID when user is not authenticated")
+
+    # What was called
+    service = models.CharField(max_length=50, help_text="e.g. 'ai_search', 'ai_tryon', 'ai_fitme'")
+    provider = models.CharField(max_length=50, help_text="e.g. 'gemini', 'fal', 'replicate'")
+    model = models.CharField(max_length=100, blank=True, default="", help_text="e.g. 'gemini-2.5-flash-image-preview'")
+
+    # Usage metrics (provider-specific)
+    units = models.CharField(max_length=50, default="1", help_text="e.g. '1', '1500_tokens', '1_image'")
+    input_tokens = models.IntegerField(default=0)
+    output_tokens = models.IntegerField(default=0)
+
+    # Cost in USD (minor-unit-free, 6 decimal places for sub-cent precision)
+    estimated_cost_usd = models.DecimalField(max_digits=12, decimal_places=6, default=0)
+
+    # Linkage
+    related_request_id = models.CharField(max_length=100, blank=True, default="")
+    related_payment = models.ForeignKey("Payment", null=True, blank=True, on_delete=models.SET_NULL)
+
+    success = models.BooleanField(default=True)
+    error_message = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "api_cost_records"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "service"]),
+            models.Index(fields=["service", "provider"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+    def __str__(self):
+        who = self.user_id or self.session_key or "anon"
+        return f"{self.service}/{self.provider} ${self.estimated_cost_usd} by {who}"
+
+
+# =============================
+# PROCESSOR FEE TRACKING
+# =============================
+
+class ProcessorFee(models.Model):
+    """
+    Records the actual fee charged by a payment processor for a given
+    Payment, so the platform can calculate NET revenue rather than
+    reporting gross transaction value as revenue.
+    """
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="processor_fees")
+    processor = models.CharField(max_length=20, choices=PROCESSORS)
+
+    # Fee breakdown in the payment's currency
+    percentage_fee = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    fixed_fee = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    total_fee = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+
+    # Net amount settled to the platform
+    net_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    currency = models.CharField(max_length=10, default="USD")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "processor_fees"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.processor} fee ${self.total_fee} on {self.payment_id}"

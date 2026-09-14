@@ -1,0 +1,22 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ designer.user.first_name|default:designer.user.email }},</p>
+
+<p>Thank you for submitting your designer profile to Urbana Africa.</p>
+
+<p>Your profile is now under review by our curation team. We review every brand carefully to keep the Urbana marketplace full of authentic, high-quality African fashion, so it may take a little time.</p>
+
+<p>While you wait, you can start preparing your products so you are ready to upload as soon as your profile is approved.</p>
+
+<p style="margin:20px 0;"><a href="{{ designer_dashboard_url|default:'https://designer.urbanaafrica.com/dashboard' }}" class="btn-primary">Go to your dashboard</a></p>
+
+<p>We will email you as soon as your profile has been reviewed. If we need any additional details, our team will reach out directly.</p>
+
+<p>Thank you for bringing your brand to Urbana Africa.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warmly,</p>
+<p>The Urbana Studio Team<br>Urbana Africa</p>
+{% endblock %}

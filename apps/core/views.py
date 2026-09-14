@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import threading
 from django.conf import settings
 from django.core.cache import cache
@@ -7,6 +8,7 @@ from django.core.paginator import Paginator
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.db.models import Avg, Prefetch, Sum, Count
+from django.utils.html import escape
 from google import genai
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -14,7 +16,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from apps.designers.models import DesignerStory
 from apps.designers.serializers import StorySerializer
-from apps.utils.email_sender import resend_sendmail
+from apps.utils.email_sender import resend_sendmail, wrap_email_html
 from django.db.models.functions import Lower
 from .models import (
     Brand, Country, Currency, Category, MediaAsset, Product, Review, Sizes,
@@ -41,12 +43,18 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied, NotFound
+from rest_framework.throttling import AnonRateThrottle
 from .models import Country, Currency
 from .serializers import (
     CountrySerializer,
     CurrencySerializer,
     MediaAssetSerializer,
 )
+
+
+class AiAnonRateThrottle(AnonRateThrottle):
+    """Rate limit for anonymous AI endpoint usage to prevent cost abuse."""
+    rate = '10/minute'
 
 
 class CountryListView(APIView):  # → core-countries
@@ -425,7 +433,6 @@ class MediaAssetViewSet(ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()  # looks up by custom id
-        print(request.data)
         if instance.user != request.user:
             print("Permission error")
             raise PermissionDenied("You cannot delete this file.")
@@ -449,11 +456,11 @@ class MediaAssetDeleteView(APIView):
         except MediaAsset.DoesNotExist:
             raise NotFound("Media asset not found.")
 
-        # if asset.user != request.user:
-        #     return Response(
-        #         {"status": "success", "message": "Permission denied"},
-        #         status=status.HTTP_400_BAD_REQUEST
-        #     )
+        if asset.user != request.user:
+            return Response(
+                {"status": "error", "message": "Permission denied"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         asset.delete()
         return Response(
             {"status": "success", "message": "File deleted successfully."},
@@ -911,20 +918,22 @@ class ContactMessageView(APIView):
         message = f"""
         <p>You have received a new contact message on Urbana.</p>
         <br>
-        <p><strong>Name:</strong> {contact.name}</p>
-        <p><strong>Email:</strong> {contact.email}</p>
+        <p><strong>Name:</strong> {escape(contact.name)}</p>
+        <p><strong>Email:</strong> {escape(contact.email)}</p>
         <br>
         <p><strong>Message:</strong></p>
-        <p>{contact.message}</p>
+        <p>{escape(contact.message)}</p>
         """
+        message = wrap_email_html(message, subject)
 
         threading.Thread(
             target=resend_sendmail,
             args=(
                 subject,
-                ["supporturbanaafrica@gmail.com"],
+                [settings.SUPPORT_EMAIL],
                 message,
             ),
+            kwargs={"from_email": "support@accounts.urbanaafrica.com", "from_name": "Urbana Africa Support"},
         ).start()
 
         return Response(
@@ -980,10 +989,18 @@ class SearchSuggestions(APIView):
 class SeedDummyDataView(APIView):
     """
     Endpoint to generate a dummy approved Designer and 10 dummy Products.
+    Only available in development mode.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        # Block in production
+        if not settings.DEBUG:
+            return Response(
+                {"error": "This endpoint is only available in development mode."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         from django.contrib.auth import get_user_model
         import random
         import requests
@@ -1156,12 +1173,12 @@ class SupportTicketCreateView(APIView):
         support_body = f"""
         <h2>New Support Ticket Received</h2>
         <table cellpadding="6" style="border-collapse:collapse;">
-          <tr><td><strong>Reference</strong></td><td>{ticket.reference}</td></tr>
-          <tr><td><strong>From</strong></td><td>{submitter_name} ({submitter_email})</td></tr>
-          <tr><td><strong>Category</strong></td><td>{ticket.get_category_display()}</td></tr>
-          <tr><td><strong>Priority</strong></td><td>{ticket.get_priority_display()}</td></tr>
-          <tr><td><strong>Subject</strong></td><td>{ticket.subject}</td></tr>
-          <tr><td><strong>Description</strong></td><td>{ticket.description}</td></tr>
+          <tr><td><strong>Reference</strong></td><td>{escape(ticket.reference)}</td></tr>
+          <tr><td><strong>From</strong></td><td>{escape(submitter_name)} ({escape(submitter_email)})</td></tr>
+          <tr><td><strong>Category</strong></td><td>{escape(ticket.get_category_display())}</td></tr>
+          <tr><td><strong>Priority</strong></td><td>{escape(ticket.get_priority_display())}</td></tr>
+          <tr><td><strong>Subject</strong></td><td>{escape(ticket.subject)}</td></tr>
+          <tr><td><strong>Description</strong></td><td>{escape(ticket.description)}</td></tr>
         </table>
         <br>
         <p>Please respond via the admin panel.</p>
@@ -1170,14 +1187,14 @@ class SupportTicketCreateView(APIView):
         # ── Confirmation email to designer/submitter ──
         designer_subject = f"We received your request – {ticket.reference}"
         designer_body = f"""
-        <p>Hi {submitter_name},</p>
+        <p>Hi {escape(submitter_name)},</p>
         <p>Thank you for reaching out to Urbana Support. We have received your ticket and our team will respond within <strong>24–48 hours</strong>.</p>
         <br>
         <table cellpadding="6" style="border-collapse:collapse;background:#faf7f4;border-radius:8px;">
-          <tr><td><strong>Ticket Reference</strong></td><td>{ticket.reference}</td></tr>
-          <tr><td><strong>Subject</strong></td><td>{ticket.subject}</td></tr>
-          <tr><td><strong>Category</strong></td><td>{ticket.get_category_display()}</td></tr>
-          <tr><td><strong>Priority</strong></td><td>{ticket.get_priority_display()}</td></tr>
+          <tr><td><strong>Ticket Reference</strong></td><td>{escape(ticket.reference)}</td></tr>
+          <tr><td><strong>Subject</strong></td><td>{escape(ticket.subject)}</td></tr>
+          <tr><td><strong>Category</strong></td><td>{escape(ticket.get_category_display())}</td></tr>
+          <tr><td><strong>Priority</strong></td><td>{escape(ticket.get_priority_display())}</td></tr>
         </table>
         <br>
         <p>You can track the status of your ticket by logging into your designer dashboard and visiting <strong>Help &amp; Support → My Tickets</strong>.</p>
@@ -1186,9 +1203,15 @@ class SupportTicketCreateView(APIView):
         """
 
         def send_emails():
-            resend_sendmail(support_subject, ["supporturbanaafrica@gmail.com"], support_body)
+            resend_sendmail(
+                support_subject, [settings.SUPPORT_EMAIL], wrap_email_html(support_body, support_subject),
+                from_email="support@accounts.urbanaafrica.com", from_name="Urbana Africa Support",
+            )
             if submitter_email:
-                resend_sendmail(designer_subject, [submitter_email], designer_body)
+                resend_sendmail(
+                    designer_subject, [submitter_email], wrap_email_html(designer_body, designer_subject),
+                    from_email="support@accounts.urbanaafrica.com", from_name="Urbana Africa Support",
+                )
 
         threading.Thread(target=send_emails).start()
 
@@ -1385,7 +1408,12 @@ class SmartCollectionDetailView(APIView):
 # Event Tracking (Phase 2)
 # -------------------------------
 class TrackEventsView(APIView):
-    """POST /core/track — batch event ingestion from frontend."""
+    """POST /core/track — batch event ingestion from frontend.
+
+    This is the single canonical tracking endpoint. It writes to ProductView
+    and feeds the SessionIntentEngine for real-time recommendations. The
+    duplicate registration in apps/algorithm/urls.py was removed.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1432,6 +1460,18 @@ class TrackEventsView(APIView):
                 metadata=ev.get("metadata", {}),
             )
             created += 1
+
+            # Feed the real-time session intent engine for recommendations
+            if session_id:
+                try:
+                    from apps.algorithm.engine import SessionIntentEngine
+                    SessionIntentEngine.record_action(
+                        session_id=session_id,
+                        action_type=event_type,
+                        user=request.user if request.user.is_authenticated else None,
+                    )
+                except Exception:
+                    pass  # Don't fail the track request if intent engine errors
 
         return Response({"status": "success", "tracked": created}, status=status.HTTP_201_CREATED)
 
@@ -1810,6 +1850,7 @@ class AiSearchView(APIView):
       4. Trending products
     """
     permission_classes = [AllowAny]
+    throttle_classes = [AiAnonRateThrottle]
     MIN_RESULTS = 6
 
     # ── DB helpers ────────────────────────────────────────────────────────
@@ -2353,6 +2394,25 @@ ALWAYS classify the above examples as SHOPPING, not off-topic."""
             except concurrent.futures.TimeoutError:
                 raise TimeoutError("Gemini response timed out")
 
+        # ── Cost tracking (best-effort, never breaks the request) ──
+        try:
+            from apps.pay.services.cost_tracking import record_api_cost
+            # Estimate tokens: ~4 chars per token for English text
+            input_tokens = (len(system_prompt) + len(message)) // 4
+            output_tokens = len(response.text or "") // 4
+            record_api_cost(
+                service="ai_search",
+                provider="gemini",
+                model="gemini-2.0-flash",
+                user=user,
+                session_key="",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                units=f"{input_tokens + output_tokens}_tokens",
+            )
+        except Exception:
+            pass
+
         parsed = json.loads(response.text)
         try:
             cache.set(cache_key, parsed, timeout=300)  # 5 minutes
@@ -2536,6 +2596,7 @@ class AiOutfitBuilderView(APIView):
     outfit (primary item + complementary pieces) using actual DB relationships.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [AiAnonRateThrottle]
 
     def post(self, request):
         product_id = request.data.get("product_id")
@@ -2860,6 +2921,7 @@ class AiPhotoFitMeView(APIView):
     short timeout so the user never waits for AI text if the model is slow.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [AiAnonRateThrottle]
 
     @staticmethod
     def _compute_fast_fit(product):
@@ -2959,6 +3021,26 @@ Respond ONLY with valid JSON in this exact structure:
                             fast_data["recommended_size"] = parsed["recommended_size"]
                         if parsed.get("fit_score") is not None:
                             fast_data["fit_score"] = parsed["fit_score"]
+
+                        # ── Cost tracking (best-effort) ──
+                        try:
+                            from apps.pay.services.cost_tracking import record_api_cost
+                            user = request.user if request.user.is_authenticated else None
+                            session_key = request.session.session_key or "" if hasattr(request, 'session') else ""
+                            input_tokens = (len(prompt) + len(photo_bytes) // 4) // 4
+                            output_tokens = len(response.text or "") // 4
+                            record_api_cost(
+                                service="ai_fitme",
+                                provider="gemini",
+                                model="gemini-2.0-flash",
+                                user=user,
+                                session_key=session_key,
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                                units=f"{input_tokens + output_tokens}_tokens",
+                            )
+                        except Exception:
+                            pass
                     except concurrent.futures.TimeoutError:
                         pass  # Fall back to locally computed data
             except Exception:
@@ -2994,6 +3076,7 @@ class AiTryOnView(APIView):
     user wearing the product's garment, using the selected VTON provider.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [AiAnonRateThrottle]
 
     @staticmethod
     def _read_garment(product):
@@ -3088,6 +3171,23 @@ class AiTryOnView(APIView):
         name = f"ai_tryon/{uuid.uuid4().hex}.png"
         path = default_storage.save(name, ContentFile(result_bytes))
         url = request.build_absolute_uri(default_storage.url(path))
+
+        # ── Cost tracking (best-effort, never breaks the request) ──
+        try:
+            from apps.pay.services.cost_tracking import record_api_cost
+            user = request.user if request.user.is_authenticated else None
+            session_key = request.session.session_key or "" if hasattr(request, 'session') else ""
+            record_api_cost(
+                service="ai_tryon",
+                provider=provider_key,
+                model=getattr(provider, "VTON_MODEL", "") or getattr(provider, "key", provider_key),
+                user=user,
+                session_key=session_key,
+                images=1,
+                units="1_image",
+            )
+        except Exception:
+            pass
 
         return Response(
             {

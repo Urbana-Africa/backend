@@ -10,8 +10,6 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = config("SECRET_KEY")
-DEBUG = True
-# DEBUG = config("DEBUG", default=False, cast=bool)
 ENV = config("ENV", default="dev").lower()  # dev | prod | staging
 
 if ENV not in ["dev", "prod", "staging"]:
@@ -19,6 +17,7 @@ if ENV not in ["dev", "prod", "staging"]:
 
 IS_PRODUCTION = ENV == "prod"
 IS_DEVELOPMENT = ENV == "dev"
+DEBUG = config("DEBUG", default=IS_DEVELOPMENT, cast=bool)
 
 # =====================================================
 # Frontend URLs
@@ -34,6 +33,16 @@ else:
     CUSTOMER_URL = config("CUSTOMER_URL", default="https://customer.urbanaafrica.com")
     DESIGNER_URL = config("DESIGNER_URL", default="https://designer.urbanaafrica.com")
     ADMIN_URL = config("ADMIN_URL", default="https://admin.urbanaafrica.com")
+
+# Canonical support / admin notification inboxes (never hardcode these in app code)
+SUPPORT_EMAIL = config("SUPPORT_EMAIL", default="support@urbanaafrica.com")
+ADMIN_NOTIFY_EMAIL = config("ADMIN_NOTIFY_EMAIL", default="admin@urbanaafrica.com")
+PRIVACY_URL = config("PRIVACY_URL", default=f"{STORE_URL}/privacy")
+TERMS_URL = config("TERMS_URL", default=f"{STORE_URL}/terms")
+CONTACT_URL = config("CONTACT_URL", default=f"{STORE_URL}/contact")
+
+# Logo used in the header of every email (must be a publicly-resolvable URL).
+LOGO_URL = config("LOGO_URL", default=f"{STORE_URL}/urbana-icon.png")
 
 # =====================================================
 # Hosts & Allowed

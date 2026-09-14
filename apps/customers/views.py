@@ -498,7 +498,6 @@ class CheckoutView(APIView):
                 }
             }, status=201)
         except Exception as e:
-            print(request.data)
             print(e)
             return Response({'status':'error','message':'An error occured'}, status=400)
 
@@ -899,7 +898,6 @@ class WishlistView(APIView):
     def post(self, request):
         product_id = request.data.get('product_id')
         customer = request.user.customer_profile
-        print(request.data)
         try:
             product = Product.objects.get(id=product_id, is_published=True)
         except Product.DoesNotExist:
@@ -914,7 +912,6 @@ class WishlistView(APIView):
     def delete(self, request):
         product_id = request.data.get('product_id')
         customer = request.user.customer_profile
-        print(request.data)
         try:
             product = Product.objects.get(id=product_id, is_published=True)
             wishlist = Wishlist.objects.get(customer=customer, product=product)

@@ -1,0 +1,30 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ user_name }},</p>
+
+<p>There is a new reply on your support ticket.</p>
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Ticket reference</td>
+    <td style="padding:8px 0; font-weight:600;">{{ ticket_reference }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0; color:#666;">Reply from</td>
+    <td style="padding:8px 0; font-weight:600;">{{ sender_name }}</td>
+  </tr>
+</table>
+
+<p><strong>Message:</strong></p>
+<p>{{ reply_body|linebreaksbr }}</p>
+
+<p style="margin:20px 0;"><a href="{{ ticket_url|default:'https://designer.urbanaafrica.com/help' }}" class="btn-primary">View ticket</a></p>
+
+<p>If you have any further questions, you can reply directly from your dashboard.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warmly,</p>
+<p>Urbana Africa Support</p>
+{% endblock %}

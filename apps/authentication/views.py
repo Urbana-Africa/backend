@@ -23,6 +23,9 @@ from social_django.utils import psa
 from django.conf import settings
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def getUserData(request):
@@ -43,10 +46,8 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     - Returns minimal user data (no tokens in body to reduce exposure)
     """
     def post(self, request, *args, **kwargs):
-        print(request.data)
         email_or_username = str(request.data.get("email", "")).lower().strip()
         password = str(request.data.get("password", "")).strip()
-        print(email_or_username)
 
         if not email_or_username or not password:
             return Response(
@@ -347,8 +348,6 @@ class SetPassword(APIView):
     def post(self, request):
         verification_code = request.data['code']
         email = request.data['email']
-        # '154914'
-        print(request.data)
         try:
             user= User.objects.get(email=email)
             try:
@@ -596,11 +595,12 @@ def send_verification_email(user:User):
     code_digits = ''.join(secrets.choice(string.digits) for _ in range(6))
     code.code= make_password(code_digits)
     code.save()
-    print(code_digits)
-    message = """<p>Hi there!,<br> <br>
-    <b>Use """ + code_digits + """ as your activation code.</b><br>
-    This code will expire in 10 minutes.</p>"""
-    subject = 'urbana   - Account creation'
+    context = {
+        "name": user.first_name or user.email,
+        "code": code_digits,
+    }
+    message = render_to_string("emails/verification_code.html", context)
+    subject = 'Urbana Africa — Your verification code'
     threading.Thread(
         target=resend_sendmail,
         args=(subject, [user.email], message),
@@ -716,8 +716,7 @@ class AllUserView(APIView):
 
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = ()
-    # permission_classes = ([IsAuthenticated])
+    permission_classes = [IsAdminUser]
 
     def get(self, request):
         from django.db.models import Q
@@ -781,7 +780,7 @@ class DeleteUserView(APIView):
 
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = (AllowAny,)
+    permission_classes = (IsAdminUser,)
 
     def post(self,request):
         try:
@@ -806,7 +805,7 @@ class DeleteAllUsersView(APIView):
 
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = (AllowAny,)
+    permission_classes = (IsAdminUser,)
 
     def post(self,request):
         try:
@@ -1076,7 +1075,7 @@ class Signup(APIView):
                     from apps.utils.notifications import send_admin_designer_notification
                     send_admin_designer_notification(user, "signed up")
                 except Exception as e:
-                    print(f"Error sending admin designer signup notification: {e}")
+                    logger.error("Error sending admin designer signup notification: %s", e)
 
             serialized_data = UserSerializer(user)
             send_verification_email(user)
@@ -1120,12 +1119,10 @@ def VerifySocialLogin(request, backend):
     token=request.data.get('access_token')
 
     user = request.backend.do_auth(token)
-    print(user,user.first_name)
 
 
     if user:
         # new_user=User.objects.get(user=user)
-        print(user)
         user,_=User.objects.get_or_create(
             first_name=user.first_name,
             last_name=user.last_name,
@@ -1133,11 +1130,9 @@ def VerifySocialLogin(request, backend):
             is_active=True
 
             )
-        print(user)
-        
+
         token=get_tokens_for_user(user)
-        print(token)
-        
+
         return Response(
             {
                 'token': token,

@@ -1,0 +1,38 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<p>Hi {{ designer.user.first_name|default:designer.user.email }},</p>
+
+<p>There is an update on your Urbana designer account.</p>
+
+<table style="width:100%; border-collapse:collapse; margin:16px 0; font-size:14px;">
+  <tr style="border-bottom:1px solid #e6e0db;">
+    <td style="padding:8px 0; color:#666;">Brand</td>
+    <td style="padding:8px 0; font-weight:600;">{{ designer.brand_name|default:"—" }}</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0; color:#666;">Account status</td>
+    <td style="padding:8px 0; font-weight:600;">{{ status_label|default:designer.status }}</td>
+  </tr>
+</table>
+
+{% if status_message %}
+<p>{{ status_message }}</p>
+{% endif %}
+
+{% if designer.status_reasons %}
+  <p><strong>Details:</strong></p>
+  <ul>
+    {% for reason in designer.status_reasons %}<li>{{ reason }}</li>{% endfor %}
+  </ul>
+{% endif %}
+
+<p style="margin:20px 0;"><a href="{{ designer_dashboard_url|default:'https://designer.urbanaafrica.com/dashboard' }}" class="btn-primary">Go to your dashboard</a></p>
+
+<p>If you believe this update was made in error, or you need help getting back on track, reply to this email and our team will assist you.</p>
+{% endblock %}
+
+{% block signature %}
+<p>Warmly,</p>
+<p>The Urbana Studio Team<br>Urbana Africa</p>
+{% endblock %}

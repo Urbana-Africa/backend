@@ -16,6 +16,7 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.pagination import PageNumberPagination
 
 from apps.administrator.permissions import IsSuperAdmin, IsMarketer
+from apps.utils.email_sender import wrap_email_html
 
 from .models import LaunchConfig, WaitlistSubscriber, WaitlistEvent, LaunchCampaign
 from .serializers import (
@@ -246,7 +247,7 @@ class LaunchCampaignAdminViewSet(ModelViewSet):
                         'List-Unsubscribe': f"<{unsubscribe_url}>",
                     },
                 )
-                msg.attach_alternative(campaign.html_body + footer, 'text/html')
+                msg.attach_alternative(wrap_email_html(campaign.html_body + footer, campaign.subject), 'text/html')
                 try:
                     msg.send(fail_silently=False)
                     _log_event(recipient, 'email_sent', None, {'campaign_id': campaign.id}, campaign=campaign)

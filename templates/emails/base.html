@@ -47,7 +47,26 @@
       border-bottom: 1px solid #eae8e4;
     }
 
+    .brand-link {
+      display: inline-block;
+      text-decoration: none;
+    }
+
+    .brand-logo {
+      display: inline-block;
+      vertical-align: middle;
+      width: 40px;
+      height: 40px;
+      max-width: 40px;
+      border: 0;
+      outline: none;
+      text-decoration: none;
+    }
+
     .brand-name {
+      display: inline-block;
+      vertical-align: middle;
+      margin-left: 10px;
       font-family: 'Manrope', Arial, sans-serif;
       font-size: 24px;
       font-weight: 800;
@@ -137,7 +156,10 @@
       <!-- Header -->
       <tr>
         <td class="header-nav" align="center">
-          <a href="{{ site_url|default:'https://www.urbanaafrica.com' }}" class="brand-name">Urbana Africa</a>
+          <a href="{{ site_url|default:'https://www.urbanaafrica.com' }}" class="brand-link">
+            <img src="{{ logo_url|default:'https://www.urbanaafrica.com/urbana-icon.png' }}" alt="Urbana Africa" width="40" height="40" class="brand-logo">
+            <span class="brand-name">Urbana Africa</span>
+          </a>
         </td>
       </tr>
 
@@ -157,12 +179,12 @@
           <span class="footer-brand">Urbana Africa</span>
           <p>Connecting global homes with authentic African craftsmanship.<br>Each piece tells a story of heritage, skill, and sustainable creation.</p>
           <p style="margin-top: 24px;">
-            <a href="#">Privacy Policy</a> &nbsp;|&nbsp; 
-            <a href="#">Terms of Service</a> &nbsp;|&nbsp; 
-            <a href="#">Contact Us</a>
+            <a href="{{ privacy_url|default:'https://www.urbanaafrica.com/privacy' }}">Privacy Policy</a> &nbsp;|&nbsp; 
+            <a href="{{ terms_url|default:'https://www.urbanaafrica.com/terms' }}">Terms of Service</a> &nbsp;|&nbsp; 
+            <a href="{{ contact_url|default:'https://www.urbanaafrica.com/contact' }}">Contact Us</a>
           </p>
           <p style="margin-top: 24px; font-size: 11px; opacity: 0.7;">
-            &copy; 2024 Urbana Africa. Celebrating African Excellence.<br>
+            &copy; {% now "Y" %} Urbana Africa. Celebrating African Excellence.<br>
             Designed in Lagos &bull; Crafted for the World
           </p>
         </td>

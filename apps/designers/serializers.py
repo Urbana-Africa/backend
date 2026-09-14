@@ -2,14 +2,36 @@ from rest_framework import serializers
 
 from apps.authentication.serializers import UserSerializer
 from apps.core.models import MediaAsset, Sizes, Product
-from apps.customers.models import Order, OrderItem, ReturnRequest
-from apps.customers.serializers import AddressSerializer, CustomerSerializer
+from apps.customers.models import Order, OrderItem, ReturnRequest, Address
+from apps.customers.serializers import CustomerSerializer
 from .models import (
     Designer, Collection, DesignerProduct, DesignerStory, ProductImage, Shipment,
     ShippingOption, DesignerOrder, DesignerAnalytics, StoryView, Notification
 )
 from apps.core.serializers import MediaAssetSerializer, ProductSerializer
 from django.utils import timezone
+
+
+# =====================================================
+# DESIGNER-FACING (PII-MASKED) SERIALIZERS
+# PRD rule: real customer email/phone/billing details
+# are NEVER exposed to designers. Only masked aliases
+# and the shipping address fields required for
+# fulfillment are returned.
+# =====================================================
+
+class MaskedAddressSerializer(serializers.ModelSerializer):
+    """Shipping address for designer fulfillment.
+
+    Exposes only the fields a designer needs to ship an
+    order. The customer FK, phone, and label are stripped
+    to avoid leaking customer PII.
+    """
+
+    class Meta:
+        model = Address
+        fields = ['recipient_name', 'line1', 'line2', 'city', 'state', 'country', 'postal_code']
+        read_only_fields = fields
 
 
 # =====================================================
@@ -28,7 +50,8 @@ class DesignerStorySerializer(serializers.ModelSerializer):
         fields = ['id', 'designer', 'title', 'media', 'caption', 'start_time', 'end_time', 'is_active', 'created_at', 'views_count']
 
 class StoryViewSerializer(serializers.ModelSerializer):
-    viewer = CustomerSerializer(read_only=True)
+    # PRD: do not expose customer phone/avatar to designers.
+    viewer = serializers.StringRelatedField(read_only=True)
 
     class Meta:
         model = StoryView
@@ -120,7 +143,12 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        data['shipping_address'] = AddressSerializer(instance.shipping_address).data
+        # PRD: never expose the full customer address (phone, customer FK,
+        # label) to designers. Only ship-to fields are returned.
+        if instance.shipping_address:
+            data['shipping_address'] = MaskedAddressSerializer(instance.shipping_address).data
+        else:
+            data['shipping_address'] = None
         return data
 
 
@@ -288,7 +316,14 @@ class ReturnRequestSerializer(BaseSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        data['customer'] = UserSerializer(instance.order_item.order.customer.user).data
+        # PRD non-negotiable: NEVER expose real customer email/phone to
+        # designers. Return masked aliases from the OrderItem instead of
+        # the full customer UserSerializer.
+        order_item = instance.order_item
+        data['customer'] = {
+            'masked_email': getattr(order_item, 'masked_email', None),
+            'masked_phone': getattr(order_item, 'masked_phone', None),
+        }
         data['designer'] = DesignerSerializer(instance.order_item.designer.designer_profile).data
         data['order_item'] = OrderItemSerializer(instance.order_item).data
 

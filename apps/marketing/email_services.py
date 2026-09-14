@@ -1,6 +1,6 @@
 import logging
 from django.template.loader import render_to_string
-from apps.utils.email_sender import resend_sendmail
+from apps.utils.email_sender import resend_sendmail, wrap_email_html
 from .models import EmailLog
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ def compile_and_send_lead_email(lead, template, custom_html_body=None, custom_su
         return False
 
     try:
+        final_html = wrap_email_html(final_html, subject)
         resend_sendmail(
             subject=subject,
             recipient_list=[lead.email],

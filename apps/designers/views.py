@@ -1,4 +1,6 @@
 from datetime import timedelta
+import logging
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
@@ -26,7 +28,7 @@ from .serializers import InventoryAlertSerializer, PromotionSerializer
 from django.utils import timezone
 from django.template.loader import render_to_string
 import threading
-from apps.utils.email_sender import resend_sendmail
+from apps.utils.email_sender import resend_sendmail, wrap_email_html
 from apps.utils.notifications import send_designer_welcome_email
 from django.db.models.functions import TruncWeek
 from rest_framework.decorators import action
@@ -34,10 +36,13 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from rest_framework import viewsets
+from .permissions import IsDesigner
+
+logger = logging.getLogger(__name__)
 
 
 class DesignerBaseViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsDesigner]
     pagination_class = StandardPagination
 
     filter_backends = [
@@ -219,11 +224,29 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
     def create(self, request):
         """
         POST /designer-products/ → Create new product
+
+        Creates a Product and links it to the authenticated designer via
+        a DesignerProduct join record. The DesignerProduct link is what
+        `designer.products.count()` (used by admin activation checks)
+        counts, so it MUST be created here — otherwise designers who
+        upload products will never satisfy the 5-product requirement.
         """
         serializer = self.get_serializer(data=request.data)
 
         if serializer.is_valid():
             product = serializer.save(user=request.user)
+
+            # Link the product to the designer's profile.
+            # `DesignerProduct` is the join model; without it the product
+            # exists but is invisible to `designer.products` and to the
+            # admin activation gate that requires >= 5 products.
+            designer = getattr(request.user, "designer_profile", None)
+            if designer is not None:
+                DesignerProduct.objects.create(
+                    designer=designer,
+                    product=product,
+                    stock=product.stock or 0,
+                )
 
             return Response({
                 "status": "success",
@@ -281,6 +304,13 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
         if not file:
             return Response({"error": "CSV file is required"}, status=400)
 
+        designer = getattr(request.user, "designer_profile", None)
+        if designer is None:
+            return Response(
+                {"error": "Authenticated user has no designer profile."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             csv_file = StringIO(file.read().decode("utf-8"))
             reader = csv.DictReader(csv_file)
@@ -296,8 +326,11 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
                     # add other Product fields you want from CSV
                 )
 
+                # Link the product to the designer via the join model.
+                # (Previously this passed `user=` which is not a field on
+                # DesignerProduct and omitted the required `designer=` FK.)
                 designer_product = DesignerProduct.objects.create(
-                    user=request.user,
+                    designer=designer,
                     product=product,
                     stock=int(row.get("stock", 0)),
                     # add other DesignerProduct fields if needed
@@ -463,6 +496,15 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
         status_update = request.data.get("status")
         old_status = order_item.designer_status
 
+        # Validate the requested status against the allowed choices to
+        # prevent arbitrary strings from being persisted.
+        valid_statuses = {choice[0] for choice in OrderItem.STATUS_CHOICES}
+        if status_update not in valid_statuses:
+            return Response(
+                {"status": "error", "message": f"Invalid status '{status_update}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         order_item.designer_status = status_update
         order_item.save()
 
@@ -475,11 +517,11 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
             try:
                 send_designer_order_shipped(order_item)
             except Exception as e:
-                print(f"[EMAIL] Designer shipped failed: {e}")
+                logger.error("[EMAIL] Designer shipped failed: %s", e)
             try:
                 send_customer_order_shipped(order_item)
             except Exception as e:
-                print(f"[EMAIL] Customer shipped failed: {e}")
+                logger.error("[EMAIL] Customer shipped failed: %s", e)
 
         if status_update == "delivered" and old_status != "delivered":
             from apps.utils.notifications import send_customer_order_delivered
@@ -489,7 +531,7 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
             try:
                 send_customer_order_delivered(order_item)
             except Exception as e:
-                print(f"[EMAIL] Customer delivered failed: {e}")
+                logger.error("[EMAIL] Customer delivered failed: %s", e)
 
         return Response({
             "status": "success",
@@ -526,24 +568,31 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
         order_item.save()
         
         # Trigger email to admin
-        from apps.utils.email_sender import sendmail
-        import threading
         from django.contrib.auth import get_user_model
-        
+
         User = get_user_model()
         admin_emails = list(User.objects.filter(is_superuser=True).values_list('email', flat=True))
         if not admin_emails:
-            admin_emails = ['admin@urbanaafrica.com']
-            
+            admin_emails = [settings.ADMIN_NOTIFY_EMAIL]
+
         try:
-            message = f"Designer {request.user.email} has uploaded packaging media for Order Item {order_item.item_id}. Please review in the admin dashboard."
-            threading.Thread(target=sendmail, args=(
-                f"Urbana - Packaging Media Review Required for {order_item.item_id}",
-                admin_emails,
-                message
-            )).start()
+            message = (
+                f"<p>Designer <strong>{request.user.email}</strong> has uploaded packaging media "
+                f"for Order Item <strong>{order_item.item_id}</strong>.</p>"
+                f"<p>Please review it in the admin dashboard.</p>"
+            )
+            message = wrap_email_html(message, f"Urbana - Packaging Media Review Required for {order_item.item_id}")
+            threading.Thread(
+                target=resend_sendmail,
+                args=(
+                    f"Urbana - Packaging Media Review Required for {order_item.item_id}",
+                    admin_emails,
+                    message,
+                ),
+                kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Studio"},
+            ).start()
         except Exception as e:
-            print("Failed to send admin email:", e)
+            logger.error("Failed to send admin packaging email: %s", e)
             
         return Response({
             "status": "success", 
@@ -615,11 +664,11 @@ class DesignerOrderViewSet(DesignerBaseViewSet):
             try:
                 send_designer_order_shipped(order_item)
             except Exception as e:
-                print(f"[EMAIL] Designer shipped failed: {e}")
+                logger.error("[EMAIL] Designer shipped failed: %s", e)
             try:
                 send_customer_order_shipped(order_item)
             except Exception as e:
-                print(f"[EMAIL] Customer shipped failed: {e}")
+                logger.error("[EMAIL] Customer shipped failed: %s", e)
                 
             return Response({
                 "status": "success",
@@ -732,14 +781,18 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
             # Email confirmation
             try:
                 subject = "Urbana Studio: Profile Submitted for Review"
-                context = {"designer": profile}
-                message = render_to_string("administrator/status_update.html", context)
+                context = {
+                    "designer": profile,
+                    "designer_dashboard_url": f"{settings.DESIGNER_URL}/dashboard",
+                }
+                message = render_to_string("emails/designer_profile_submitted.html", context)
                 threading.Thread(
                     target=resend_sendmail,
                     args=(subject, [request.user.email], message),
+                    kwargs={"from_email": "hello@accounts.urbanaafrica.com", "from_name": "Urbana Studio"},
                 ).start()
             except Exception as e:
-                print(f"Error sending profile submission email: {str(e)}")
+                logger.error("Error sending profile submission email: %s", e)
 
             # Send welcome email only on first profile creation (track to prevent duplicates)
             if not profile.welcome_email_sent_at:
@@ -748,7 +801,7 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
                     profile.welcome_email_sent_at = timezone.now()
                     profile.save(update_fields=["welcome_email_sent_at"])
                 except Exception as e:
-                    print(f"Error sending designer welcome email: {str(e)}")
+                    logger.error("Error sending designer welcome email: %s", e)
 
         # Send admin notification about profile update
         try:
@@ -756,7 +809,7 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
             action_word = "signed up and submitted" if created else "updated"
             send_admin_designer_notification(request.user, action_word)
         except Exception as e:
-            print(f"Error sending admin notification email: {str(e)}")
+            logger.error("Error sending admin notification email: %s", e)
 
         return Response({
             "status": "success",
@@ -832,7 +885,7 @@ class DesignerDashboardViewSet(DesignerBaseViewSet):
             "total_sales": total_sales,
             "total_orders": total_orders,
             "average_order_value": average_order_value,
-            "conversion_rate": 0.0,
+            "conversion_rate": None,  # Requires view data — see /core/designers/analytics
             "sales_change_pct": round(sales_change_pct, 2),
             "order_change_pct": round(order_change_pct, 2),
             "sales_over_time": sales_over_time,
@@ -977,7 +1030,7 @@ class DesignerReturnRequestViewSet(DesignerBaseViewSet):
 
 
 class NotificationViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsDesigner]
     serializer_class = NotificationSerializer
 
     def get_queryset(self):
@@ -1025,7 +1078,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
 class DesignerSearchView(APIView):
     """Global search for designer app across products, orders, returns, notifications and profile."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsDesigner]
 
     def get(self, request):
         q = request.GET.get("q", "").strip()

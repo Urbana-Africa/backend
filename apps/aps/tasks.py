@@ -240,11 +240,12 @@ def send_delayed_designer_emails():
         return designer.welcome_email_sent_at is not None
 
     def has_fewer_than_five_products(designer):
-        # `designer.products` is the DesignerProduct reverse relation and
-        # is what the admin activation gate counts. We deliberately do NOT
-        # filter on is_published/is_admin_published here — the goal is to
-        # get designers to 5 uploaded products, regardless of publish state.
-        return designer.products.count() < 5
+        # Count products the designer actually uploaded (via Product.user),
+        # not just DesignerProduct join records. Products uploaded before the
+        # join-record fix have no DesignerProduct link and would be invisible
+        # to designer.products.count().
+        from apps.core.models import Product as ProductModel
+        return ProductModel.objects.filter(user=designer.user).count() < 5
 
     # ── 24-hour reminder ──────────────────────────────────────────────
     # Window: 24h–48h after signup (wide enough that a 5-minute scheduler

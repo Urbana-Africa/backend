@@ -301,7 +301,12 @@ class DesignerSerializer(serializers.ModelSerializer):
         return f"{obj.user.first_name} {obj.user.last_name}"
 
     def get_products_count(self, obj):
-        return obj.products.count()
+        # Count products the designer actually uploaded (via Product.user),
+        # not just DesignerProduct join records. Products uploaded before the
+        # join-record fix have no DesignerProduct link and would be invisible
+        # to obj.products.count().
+        from apps.core.models import Product as ProductModel
+        return ProductModel.objects.filter(user=obj.user).count()
 
 
 

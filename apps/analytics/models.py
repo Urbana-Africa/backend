@@ -1,6 +1,78 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 from apps.utils.uuid_generator import generate_custom_id
+
+
+# ---------------------------------------------------------------------------
+# Anonymous visitor analytics
+#
+# PageView + VisitorEvent power the staff-only /analytics console. They are
+# deliberately anonymous: no user FKs, no IP addresses, no cookies. The only
+# identity is `session_hash` — a 16-char truncated HMAC-SHA256 of
+# `IP | User-Agent | date | salt` derived server-side at ingest time. It
+# rotates daily, so "unique visitors" means unique daily sessions and a
+# session never spans midnight.
+# ---------------------------------------------------------------------------
+
+
+class PageView(models.Model):
+    DEVICE_CHOICES = (
+        ('mobile', 'Mobile'),
+        ('tablet', 'Tablet'),
+        ('desktop', 'Desktop'),
+    )
+
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+    session_hash = models.CharField(max_length=16, db_index=True)
+    path = models.CharField(max_length=500)
+    title = models.CharField(max_length=300, blank=True, default='')
+    referrer = models.CharField(max_length=500, blank=True, default='')
+    device = models.CharField(max_length=10, choices=DEVICE_CHOICES, default='desktop')
+    country = models.CharField(max_length=10, blank=True, default='')
+    duration_ms = models.PositiveIntegerField(default=0)
+    source = models.CharField(max_length=20, default='web')
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        verbose_name = 'Page View'
+        verbose_name_plural = 'Page Views'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['path', '-created_at']),
+            models.Index(fields=['source', '-created_at']),
+            models.Index(fields=['session_hash', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.path} ({self.session_hash[:8]}…)'
+
+
+class VisitorEvent(models.Model):
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+    session_hash = models.CharField(max_length=16, db_index=True)
+    name = models.CharField(max_length=100)
+    category = models.CharField(max_length=50, default='custom')
+    props = models.JSONField(default=dict, blank=True)
+    value = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    path = models.CharField(max_length=500, blank=True, default='')
+    device = models.CharField(max_length=10, default='desktop')
+    source = models.CharField(max_length=20, default='web')
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        verbose_name = 'Visitor Event'
+        verbose_name_plural = 'Visitor Events'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['name', '-created_at']),
+            models.Index(fields=['source', '-created_at']),
+            models.Index(fields=['session_hash', '-created_at']),
+            models.Index(fields=['category', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.name} ({self.session_hash[:8]}…)'
 
 
 class EventSchema(models.Model):

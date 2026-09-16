@@ -100,6 +100,15 @@ INSTALLED_APPS = [
 ]
 
 # =====================================================
+# Visitor analytics
+# =====================================================
+
+# Static salt for the anonymous daily-rotating session hash used by
+# apps.analytics.tracking. Falls back to SECRET_KEY when unset; override via
+# env to decouple rotation from the signing key.
+ANALYTICS_SALT = config("ANALYTICS_SALT", default=SECRET_KEY)
+
+# =====================================================
 # Middleware (CORS must be first!)
 # =====================================================
 

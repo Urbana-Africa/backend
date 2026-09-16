@@ -3,6 +3,7 @@ from .models import (
     Event,
     EventSchema,
     Identity,
+    PageView,
     Session,
     DailyMetric,
     FunnelSnapshot,
@@ -10,6 +11,7 @@ from .models import (
     MetricDefinition,
     MetricAlert,
     DeadLetterEvent,
+    VisitorEvent,
 )
 
 
@@ -40,6 +42,20 @@ class MetricDefinitionAdmin(admin.ModelAdmin):
 @admin.register(MetricAlert)
 class MetricAlertAdmin(admin.ModelAdmin):
     list_display = ['metric', 'rule', 'channel', 'is_active']
+
+
+@admin.register(PageView)
+class PageViewAdmin(admin.ModelAdmin):
+    list_display = ['path', 'session_hash', 'device', 'source', 'created_at']
+    list_filter = ['device', 'source']
+    search_fields = ['path', 'session_hash', 'referrer']
+
+
+@admin.register(VisitorEvent)
+class VisitorEventAdmin(admin.ModelAdmin):
+    list_display = ['name', 'category', 'session_hash', 'path', 'created_at']
+    list_filter = ['category', 'source']
+    search_fields = ['name', 'session_hash', 'path']
 
 
 admin.site.register(Identity)

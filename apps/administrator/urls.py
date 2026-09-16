@@ -69,6 +69,8 @@ urlpatterns = router.urls + [
     path("launch/", include("apps.launch.admin_urls")),
     # Analytics Admin Endpoints
     path("analytics/", include("apps.analytics.admin_urls")),
+    # Anonymous visitor-analytics reports (admin /analytics console)
+    path("analytics/visitors/", include("apps.analytics.visitor_admin_urls")),
     # Algorithm Admin Endpoints
     path("algorithm-config", AlgorithmConfigView.as_view(), name="admin-algo-config"),
     path("category-balance", CategoryBalanceView.as_view(), name="admin-category-balance"),

@@ -33,6 +33,7 @@ urlpatterns = [
     path('marketing/',include('apps.marketing.urls')),
     path('launch/',include('apps.launch.urls')),
     path('analytics/', include('apps.analytics.urls')),
+    path('t/', include('apps.analytics.urls')), # Alias for analytics to bypass adblockers
     re_path(r'^oauth/', include('drf_social_oauth2.urls', namespace='drf'))
 
 ]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

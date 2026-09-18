@@ -229,7 +229,7 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
         a DesignerProduct join record. The DesignerProduct link is what
         `designer.products.count()` (used by admin activation checks)
         counts, so it MUST be created here — otherwise designers who
-        upload products will never satisfy the 5-product requirement.
+        upload products will never satisfy the 1-product requirement.
         """
         serializer = self.get_serializer(data=request.data)
 
@@ -239,7 +239,7 @@ class DesignerProductUploadViewSet(DesignerBaseViewSet):
             # Link the product to the designer's profile.
             # `DesignerProduct` is the join model; without it the product
             # exists but is invisible to `designer.products` and to the
-            # admin activation gate that requires >= 5 products.
+            # admin activation gate that requires >= 1 product.
             designer = getattr(request.user, "designer_profile", None)
             if designer is not None:
                 DesignerProduct.objects.create(

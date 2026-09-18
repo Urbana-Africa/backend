@@ -213,9 +213,9 @@ def auto_release_escrows_after_24hrs():
 
 def send_delayed_designer_emails():
     """Send product-upload reminders to designers who have completed their
-    profile but haven't yet uploaded the 5 products required for activation.
+    profile but haven't yet uploaded the 1 product required for activation.
 
-    Reminder cadence (all gated on profile completion + <5 products):
+    Reminder cadence (all gated on profile completion + <1 products):
       • 24h  after signup  → upload_reminder  (existing email)
       • 72h  after signup  → storefront reminder (existing email)
       •  7d  after signup  → final reminder    (existing storefront email,
@@ -239,13 +239,13 @@ def send_delayed_designer_emails():
     def profile_completed(designer):
         return designer.welcome_email_sent_at is not None
 
-    def has_fewer_than_five_products(designer):
+    def has_fewer_than_one_product(designer):
         # Count products the designer actually uploaded (via Product.user),
         # not just DesignerProduct join records. Products uploaded before the
         # join-record fix have no DesignerProduct link and would be invisible
         # to designer.products.count().
         from apps.core.models import Product as ProductModel
-        return ProductModel.objects.filter(user=designer.user).count() < 5
+        return ProductModel.objects.filter(user=designer.user).count() < 1
 
     # ── 24-hour reminder ──────────────────────────────────────────────
     # Window: 24h–48h after signup (wide enough that a 5-minute scheduler
@@ -260,7 +260,7 @@ def send_delayed_designer_emails():
     for designer in designers_24h:
         if not profile_completed(designer):
             continue
-        if not has_fewer_than_five_products(designer):
+        if not has_fewer_than_one_product(designer):
             continue
         try:
             send_designer_product_upload_reminder(designer.user)
@@ -281,7 +281,7 @@ def send_delayed_designer_emails():
     for designer in designers_72h:
         if not profile_completed(designer):
             continue
-        if not has_fewer_than_five_products(designer):
+        if not has_fewer_than_one_product(designer):
             continue
         try:
             send_designer_storefront_reminder(designer.user)
@@ -292,7 +292,7 @@ def send_delayed_designer_emails():
 
     # ── 7-day final reminder ───────────────────────────────────────────
     # Window: 7d–9d after signup. A single last-chance nudge for designers
-    # who still haven't reached 5 products.
+    # who still haven't reached 1 product.
     week_ago = now - timedelta(days=7)
     nine_days_ago = now - timedelta(days=9)
     designers_7d = Designer.objects.filter(
@@ -303,7 +303,7 @@ def send_delayed_designer_emails():
     for designer in designers_7d:
         if not profile_completed(designer):
             continue
-        if not has_fewer_than_five_products(designer):
+        if not has_fewer_than_one_product(designer):
             continue
         try:
             send_designer_storefront_reminder(designer.user)

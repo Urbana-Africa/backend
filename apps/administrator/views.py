@@ -660,19 +660,19 @@ class AdminDesignerViewSet(AdminBaseViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Require at least 5 products before approving.
+        # Require at least 1 product before approving.
         # Count via Product.user (what the designer actually uploaded) rather
         # than designer.products (DesignerProduct join), because products
         # uploaded before the join-record fix have no DesignerProduct link
         # and would be invisible to designer.products.count().
         from apps.core.models import Product as ProductModel
         uploaded_count = ProductModel.objects.filter(user=designer.user).count()
-        if new_status == Designer.Status.APPROVED and uploaded_count < 5:
+        if new_status == Designer.Status.APPROVED and uploaded_count < 1:
             return Response(
                 {
-                    "detail": "This designer must upload at least 5 products before their profile can be approved.",
+                    "detail": "This designer must upload at least 1 product before their profile can be approved.",
                     "products_count": uploaded_count,
-                    "required_products": 5,
+                    "required_products": 1,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )

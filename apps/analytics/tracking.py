@@ -148,7 +148,7 @@ def _parse_ts(raw):
         return now
     if timezone.is_naive(ts):
         ts = timezone.make_aware(ts)
-    if ts < now - timedelta(hours=24) or ts > now + timedelta(minutes=5):
+    if ts < now - timedelta(hours=24) or ts > now:
         return now
     return ts
 

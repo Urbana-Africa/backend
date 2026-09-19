@@ -35,6 +35,7 @@ urlpatterns = [
     # ─── Wallet — Customer ────────────────────────────────────────────────────
     path("customer-wallet/summary", CustomerWalletSummaryView.as_view()),
     path("customer-wallet/pay", WalletPaymentView.as_view()),
+    path("customer-wallet/deposit", payviews.CustomerWalletDepositView.as_view()),
 
     # ─── Escrow ───────────────────────────────────────────────────────────────
     path("escrow/<str:escrow_id>/release", payviews.ReleaseEscrowView.as_view()),
@@ -44,6 +45,7 @@ urlpatterns = [
     path("my-transactions", payviews.MyTransactions.as_view(), name="my_transactions"),
     path("my-payments", payviews.MyPayments.as_view(), name="my_payments"),
     path("invoices", payviews.InvoicesView.as_view()),
+    path("invoices/reverify", payviews.InvoiceReverifyView.as_view()),
     path("payments", payviews.PaymentView.as_view()),
 
     # ─── Webhooks ─────────────────────────────────────────────────────────────

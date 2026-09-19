@@ -19,7 +19,9 @@ def complete_successful_payment(payment, invoice):
         try:
             order = Order.objects.get(invoice=invoice)
         except Order.DoesNotExist:
-            # Invoice might not be for a product order, return early
+            # Non-order invoice — wallet top-ups credit the balance here.
+            from apps.pay.services.wallet_topup import credit_wallet_topup
+            credit_wallet_topup(invoice, payment)
             return
 
         # Distribute into Escrow for each OrderItem (Sub-Order)

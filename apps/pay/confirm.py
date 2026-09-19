@@ -12,9 +12,86 @@ from .verify import (
     verify_stripe_payment,
 )
 from apps.customers.models import Order
+from apps.pay.services.wallet_topup import credit_wallet_topup
 from apps.utils.email_sender import resend_sendmail
 
 logger = logging.getLogger(__name__)
+
+
+def finalize_successful_attempt(attempt, processor, processor_payment_id):
+    """
+    Shared post-verification path for every "payment confirmed" flow
+    (confirm views, invoice reverify). Marks the attempt successful,
+    creates/links the Payment, activates invoices, credits wallet
+    top-ups, and updates order status + notifications.
+    Returns the list of affected invoices.
+    """
+    attempt.status = "success"
+    attempt.is_successful = True
+    attempt.processor_payment_id = processor_payment_id
+    attempt.save(update_fields=["status", "is_successful", "processor_payment_id"])
+
+    invoices = list(Invoice.objects.filter(payment_attempts=attempt))
+    if not invoices:
+        return []
+
+    # Create or update Payment record
+    first_invoice = invoices[0]
+    payment, _ = Payment.objects.get_or_create(
+        reference=first_invoice.id,
+        defaults={
+            "user": first_invoice.user,
+            "amount": first_invoice.amount,
+            "processor": processor,
+            "status": "success",
+            "is_paid": True,
+            "date_time_paid": timezone.now(),
+        },
+    )
+    payment.mark_as_paid(processor_id=processor_payment_id)
+
+    # Update all linked invoices
+    for invoice in invoices:
+        invoice.payment = payment
+        invoice.save()
+
+        # Wallet top-up invoices credit the customer's wallet here.
+        try:
+            credit_wallet_topup(invoice, payment)
+        except Exception as e:
+            logger.error("Wallet top-up credit failed for invoice %s: %s", invoice.id, e)
+
+        # Update Order status (emails are sent via the canonical idempotent
+        # notification helpers below, not a duplicate template-based send).
+        try:
+            order = Order.objects.filter(invoice=invoice).first()
+            if order and order.status == "pending":
+                order.status = "processing"
+                order.save(update_fields=["status"])
+        except Exception as e:
+            logger.error("Error updating order status after payment: %s", e)
+
+        # Notify designers + customer of the new paid order (idempotent —
+        # safe even if the webhook or checkout.py already triggered them).
+        try:
+            if order:
+                from apps.utils.notifications import (
+                    send_designer_new_order,
+                    send_customer_order_confirmed,
+                )
+                for item in order.items.select_related("product").all():
+                    try:
+                        send_designer_new_order(item)
+                    except Exception as e:
+                        logger.error("Error sending designer order email: %s", e)
+                    try:
+                        send_customer_order_confirmed(item)
+                    except Exception as e:
+                        logger.error("Error sending customer order confirmation email: %s", e)
+        except Exception as e:
+            logger.error("Error sending order emails: %s", e)
+
+    return invoices
 
 
 # ───────────────────────────────
@@ -86,68 +163,12 @@ class BasePaymentConfirmView(APIView):
             or transaction_id
         )
 
-        attempt.status = "success"
-        attempt.is_successful = True
-        attempt.processor_payment_id = processor_payment_id
-        attempt.save(update_fields=["status", "is_successful", "processor_payment_id"])
-
-        # ────────────── LINK INVOICE ──────────────
-        invoices = Invoice.objects.filter(payment_attempts=attempt)
-        if not invoices.exists():
+        invoices = finalize_successful_attempt(attempt, self.processor, processor_payment_id)
+        if not invoices:
             return Response(
                 {"error": "No invoice found linked to this payment attempt."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
-        # Create or update Payment record
-        invoice = invoices.first()
-        payment, _ = Payment.objects.get_or_create(
-            reference=invoice.id,
-            defaults={
-                "user": invoice.user,
-                "amount": invoice.amount,
-                "processor": self.processor,
-                "status": "success",
-                "is_paid": True,
-                "date_time_paid": timezone.now(),
-            },
-        )
-        payment.mark_as_paid(processor_id=processor_payment_id)
-
-        # Update all linked invoices
-        for invoice in invoices:
-            invoice.payment = payment
-            invoice.save()
-
-            # Update Order status (emails are sent via the canonical idempotent
-            # notification helpers below, not a duplicate template-based send).
-            try:
-                order = Order.objects.filter(invoice=invoice).first()
-                if order and order.status == "pending":
-                    order.status = "processing"
-                    order.save(update_fields=["status"])
-            except Exception as e:
-                logger.error("Error updating order status after payment: %s", e)
-
-            # Notify designers + customer of the new paid order (idempotent —
-            # safe even if the webhook or checkout.py already triggered them).
-            try:
-                if order:
-                    from apps.utils.notifications import (
-                        send_designer_new_order,
-                        send_customer_order_confirmed,
-                    )
-                    for item in order.items.select_related("product").all():
-                        try:
-                            send_designer_new_order(item)
-                        except Exception as e:
-                            logger.error("Error sending designer order email: %s", e)
-                        try:
-                            send_customer_order_confirmed(item)
-                        except Exception as e:
-                            logger.error("Error sending customer order confirmation email: %s", e)
-            except Exception as e:
-                logger.error("Error sending order emails: %s", e)
 
         return Response(
             {

@@ -171,6 +171,13 @@ def handle_successful_payment(reference, processor_name=None, data=None):
         invoice.save(update_fields=["is_active", "is_expired", "start_date", "expiry_date"])
         logger.info(f"[{processor_name}] Invoice {invoice.id} activated for user {invoice.user_id}.")
 
+        # ── 4b. Wallet top-up invoices credit the customer's wallet ──
+        try:
+            from apps.pay.services.wallet_topup import credit_wallet_topup
+            credit_wallet_topup(invoice, payment)
+        except Exception as e:
+            logger.error(f"[{processor_name}] Wallet top-up credit failed for invoice {invoice.id}: {e}")
+
         # ── 5. Update Order status & send order-confirmation emails ──
         try:
             order = Order.objects.filter(invoice=invoice).first()

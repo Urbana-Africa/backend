@@ -1072,15 +1072,25 @@ class CartView(APIView):
 class OrderListView(APIView):
     permission_classes = [IsAuthenticated]
 
+    COMPLETED_STATUSES = ["delivered", "cancelled", "returned"]
+
     def get(self, request):
         page = int(request.GET.get("page", 1))
         limit = int(request.GET.get("limit", 10))
+        status_filter = (request.GET.get("status") or "").strip().lower()
 
         queryset = (
             Order.objects
             .filter(customer=request.user.customer_profile)
             .order_by("-created_at")
         )
+
+        if status_filter == "active":
+            queryset = queryset.exclude(status__in=self.COMPLETED_STATUSES)
+        elif status_filter == "completed":
+            queryset = queryset.filter(status__in=self.COMPLETED_STATUSES)
+        elif status_filter and status_filter != "all":
+            queryset = queryset.filter(status=status_filter)
 
         paginator = Paginator(queryset, limit)
         page_obj = paginator.get_page(page)

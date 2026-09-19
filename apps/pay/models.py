@@ -390,6 +390,7 @@ class PartnerCommisions(models.Model):
 TRANSACTION_TYPES = (
     ("escrow_hold", "Escrow Hold"),
     ("escrow_release", "Escrow Release"),
+    ("deposit", "Deposit"),
     ("withdrawal", "Withdrawal"),
     ("commission", "Platform Commission"),
     ("refund", "Refund"),

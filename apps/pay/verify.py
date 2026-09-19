@@ -73,3 +73,42 @@ def verify_flutterwave_transaction(transaction_id):
 
     except requests.RequestException as e:
         return {"status": "error", "message": str(e), "data": None}
+
+
+def verify_flutterwave_by_reference(tx_ref):
+    """
+    Verifies a Flutterwave transaction by our internal tx_ref
+    (PaymentAttempt.reference) instead of Flutterwave's numeric id —
+    needed when the client never saw the transaction id (e.g. the user
+    closed the payment modal before the callback fired).
+    """
+    keys = get_flutterwave_keys()
+    url = f"{keys['base']}/transactions/verify_by_reference"
+    headers = {
+        "Authorization": f"Bearer {keys['secret_key']}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.get(url, params={"tx_ref": tx_ref}, headers=headers, timeout=10)
+        res_data = response.json()
+
+        if (
+            response.status_code == 200
+            and res_data.get("status") == "success"
+            and res_data.get("data", {}).get("status") == "successful"
+        ):
+            return {
+                "status": "success",
+                "message": "Verification successful",
+                "data": res_data.get("data"),
+            }
+
+        return {
+            "status": "error",
+            "message": res_data.get("message", "Verification failed"),
+            "data": res_data.get("data"),
+        }
+
+    except requests.RequestException as e:
+        return {"status": "error", "message": str(e), "data": None}

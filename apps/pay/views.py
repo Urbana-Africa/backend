@@ -1387,3 +1387,137 @@ class SeedSalesView(APIView):
         else:
             # Refund escrow (simulating return)
             refund_escrow_to_customer(escrow.id)
+
+
+class CustomerWalletDepositView(APIView):
+    """
+    POST /pay/customer-wallet/deposit
+    Body: {"amount": <number>}
+
+    Creates a wallet top-up invoice. The customer pays it through the
+    standard payment page (Flutterwave/Stripe); whichever confirmation
+    path fires (webhook, confirm view, reverify) credits the wallet via
+    apps.pay.services.wallet_topup.credit_wallet_topup (idempotent).
+    """
+    permission_classes = [IsAuthenticated]
+
+    MAX_TOPUP = decimal.Decimal("10000")
+
+    def post(self, request):
+        try:
+            amount = decimal.Decimal(str(request.data.get("amount", "0")))
+        except (decimal.InvalidOperation, TypeError, ValueError):
+            return Response(
+                {"error": "amount must be a number"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if amount <= 0:
+            return Response(
+                {"error": "amount must be greater than zero"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if amount > self.MAX_TOPUP:
+            return Response(
+                {"error": "Top-ups are limited to $10,000 per transaction"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from apps.pay.services.wallet_topup import WALLET_TOPUP_PURPOSE
+
+        today = timezone.now().date()
+        invoice = Invoice.objects.create(
+            user=request.user,
+            amount=int(amount),
+            purpose=WALLET_TOPUP_PURPOSE,
+            start_date=today,
+            expiry_date=today + timezone.timedelta(days=7),
+        )
+
+        return Response(
+            {
+                "status": "success",
+                "invoice_id": invoice.id,
+                "amount": invoice.amount,
+                "purpose": invoice.purpose,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class InvoiceReverifyView(APIView):
+    """
+    POST /pay/invoices/reverify
+    Body: {"invoice_id": <id>}
+
+    On-demand re-verification for an unpaid invoice: asks the processor
+    directly using the latest payment attempt instead of waiting on the
+    webhook. This closes the gap where a user completes payment but the
+    webhook hasn't landed yet (or failed), so the client would otherwise
+    report "unpaid" for a paid invoice.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        invoice_id = request.data.get("invoice_id")
+        if not invoice_id:
+            return Response(
+                {"error": "invoice_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        invoice = Invoice.objects.filter(
+            id=invoice_id, user=request.user, is_deleted=False
+        ).first()
+        if not invoice:
+            return Response(
+                {"error": "Invoice not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        def _is_paid(inv):
+            p = inv.payment
+            return bool(p and (p.is_paid or p.status == "success"))
+
+        if _is_paid(invoice):
+            return Response({"status": "success", "paid": True})
+
+        from apps.pay.confirm import finalize_successful_attempt
+        from apps.pay.verify import (
+            verify_flutterwave_by_reference,
+            verify_stripe_payment,
+        )
+
+        # Try each recent attempt — newest first.
+        for attempt in invoice.payment_attempts.order_by("-created_at")[:10]:
+            verified = False
+            processor_payment_id = None
+            try:
+                if attempt.processor == "stripe" and attempt.processor_payment_id:
+                    res = verify_stripe_payment(attempt.processor_payment_id)
+                    verified = (
+                        res.get("status") == "success"
+                        and (res.get("data") or {}).get("status") == "succeeded"
+                    )
+                    processor_payment_id = attempt.processor_payment_id
+                elif attempt.processor == "flutterwave" and attempt.reference:
+                    res = verify_flutterwave_by_reference(attempt.reference)
+                    verified = (
+                        res.get("status") == "success"
+                        and (res.get("data") or {}).get("status") == "successful"
+                    )
+                    processor_payment_id = str(
+                        (res.get("data") or {}).get("id") or attempt.reference
+                    )
+            except Exception as e:
+                print(f"[reverify] attempt {attempt.id} failed: {e}")
+                continue
+
+            if verified:
+                finalize_successful_attempt(
+                    attempt, attempt.processor, processor_payment_id
+                )
+                invoice.refresh_from_db()
+                return Response({"status": "success", "paid": _is_paid(invoice)})
+
+        return Response({"status": "success", "paid": False})

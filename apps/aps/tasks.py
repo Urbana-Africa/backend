@@ -213,7 +213,8 @@ def auto_release_escrows_after_24hrs():
 
 def send_delayed_designer_emails():
     """Send product-upload reminders to designers who have completed their
-    profile but haven't yet uploaded the 1 product required for activation.
+    profile but haven't uploaded any products yet. Approval no longer
+    requires products — these are friendly nudges, not a gate.
 
     Reminder cadence (all gated on profile completion + <1 products):
       • 24h  after signup  → upload_reminder  (existing email)

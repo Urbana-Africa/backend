@@ -1,9 +1,10 @@
 """
 Twilio OTP service — preserved for future reactivation.
 
-This module is currently NOT used by the active authentication flow (Termii is
-the active provider). It is kept here so that the phone verification flow can
-be re-enabled with Twilio at a later date without having to recreate the file.
+This module is currently NOT used by the active authentication flow
+(Flutterwave's OTP API is the active provider). It is kept here so that the
+phone verification flow can be re-enabled with Twilio at a later date
+without having to recreate the file.
 
 To reactivate:
   1. Add `twilio` to backend/requirements.txt and install it.
@@ -11,7 +12,7 @@ To reactivate:
      settings.py / .env.
   3. Wire `send_verification_otp` and `verify_otp` into the phone verification
      views in apps/authentication/views.py (RequestPhoneVerificationCodeView
-     and VerifyPhoneCodeView) as a fallback behind Termii.
+     and VerifyPhoneCodeView) as a fallback behind Flutterwave.
 """
 
 import logging

@@ -470,12 +470,12 @@ STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="")
 SHIPPO_API_KEY = config("SHIPPO_API_KEY", default="")
 
 # =====================================================
-# Termii SMS / WhatsApp / Voice OTP Verification
+# Phone OTP Verification (Flutterwave OTP API)
 # =====================================================
-# Get your API key from https://termii.com/app/dashboard
-# Sender ID must be registered/approved in your Termii dashboard.
-TERMII_API_KEY = config("TERMII_API_KEY", default="")
-TERMII_SENDER_ID = config("TERMII_SENDER_ID", default="Urbana")
+# Uses the FLUTTERWAVE_* keys configured above. Delivery is billed per
+# channel from the merchant NGN wallet (email ₦1, SMS ₦4, WhatsApp ₦15).
+# Optional: sender name shown in the OTP message.
+FLUTTERWAVE_OTP_SENDER = config("FLUTTERWAVE_OTP_SENDER", default="Urbana")
 
 # =====================================================
 # WebSockets (Channels) Setup

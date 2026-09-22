@@ -102,7 +102,7 @@ class Designer(BaseModel):
     storefront_reminder_sent_at = models.DateTimeField(null=True, blank=True)
     final_reminder_sent_at = models.DateTimeField(
         null=True, blank=True,
-        help_text="Last-chance 7-day reminder for designers still under 5 products",
+        help_text="Last-chance 7-day reminder for designers who still haven't uploaded a product",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

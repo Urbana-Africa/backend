@@ -644,51 +644,16 @@ class AdminDesignerViewSet(AdminBaseViewSet):
             "stats": stats
         })
 
-    @action(detail=True, methods=["patch"], url_path="update-status")
-    def update_status(self, request, pk=None):
+    def _send_status_notifications(self, designer, new_status):
+        """In-app notification + status email for a designer status transition.
+
+        Shared by the update-status action and perform_update so both code
+        paths behave identically. On approval, the email carries an upload
+        CTA when the designer still has no products — approval no longer
+        requires products, so we nudge instead of gate.
         """
-        PATCH /admin/designers/{pk}/update-status
-        Triggers an email notification on every status update.
-        """
-        designer = self.get_object()
-        new_status = request.data.get("status")
-        status_reasons = request.data.get("status_reasons", [])
-
-        if not new_status:
-            return Response(
-                {"detail": "Status is required."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Require at least 1 product before approving.
-        # Count via Product.user (what the designer actually uploaded) rather
-        # than designer.products (DesignerProduct join), because products
-        # uploaded before the join-record fix have no DesignerProduct link
-        # and would be invisible to designer.products.count().
-        from apps.core.models import Product as ProductModel
-        uploaded_count = ProductModel.objects.filter(user=designer.user).count()
-        if new_status == Designer.Status.APPROVED and uploaded_count < 1:
-            return Response(
-                {
-                    "detail": "This designer must upload at least 1 product before their profile can be approved.",
-                    "products_count": uploaded_count,
-                    "required_products": 1,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        designer.status = new_status
-        designer.status_reasons = status_reasons
-
-        # If approved, we also mark as verified if not already
-        if new_status == Designer.Status.APPROVED:
-            designer.is_verified = True
-
-        designer.save()
-
-        # In-app notification
         status_messages = {
-            Designer.Status.APPROVED: ("Profile approved", "Your designer profile has been approved. You can now start selling.", "/dashboard"),
+            Designer.Status.APPROVED: ("Profile approved", "Your designer profile has been approved. Upload your products to start selling.", "/products/add"),
             Designer.Status.REJECTED: ("Profile update required", "Your profile needs some refinements before approval.", "/profile-status"),
             Designer.Status.BLOCKED: ("Account restricted", "Your account has been restricted. Contact support for assistance.", "/help"),
             Designer.Status.PENDING: ("Profile under review", "Your designer profile is now under review by our curation team.", "/profile-status"),
@@ -706,9 +671,11 @@ class AdminDesignerViewSet(AdminBaseViewSet):
         # Send email notification (async, failures are logged not raised)
         def _send_status_email():
             try:
+                from apps.core.models import Product as ProductModel
+                products_count = ProductModel.objects.filter(user=designer.user).count()
                 subject = f"Urbana Studio: Account Status Updated ({new_status.title()})"
                 status_message_map = {
-                    Designer.Status.APPROVED: "Your designer profile has been approved. You can now start selling on Urbana Africa.",
+                    Designer.Status.APPROVED: "Your designer profile has been approved. Upload your products to start selling on Urbana Africa.",
                     Designer.Status.REJECTED: "Your profile needs a few refinements before it can be approved. Please review the details below and update your profile.",
                     Designer.Status.BLOCKED: "Your account has been restricted. Please contact support for assistance.",
                     Designer.Status.PENDING: "Your designer profile is now under review by our curation team.",
@@ -718,6 +685,9 @@ class AdminDesignerViewSet(AdminBaseViewSet):
                     "status_label": new_status.title(),
                     "status_message": status_message_map.get(new_status, ""),
                     "designer_dashboard_url": f"{settings.DESIGNER_URL}/dashboard",
+                    "products_url": f"{settings.DESIGNER_URL}/products/add",
+                    "products_count": products_count,
+                    "is_approved": new_status == Designer.Status.APPROVED,
                 }
                 message = render_to_string("emails/designer_account_status_update.html", context)
                 resend_sendmail(
@@ -731,6 +701,51 @@ class AdminDesignerViewSet(AdminBaseViewSet):
                 logger.error("Designer status update email failed for %s: %s", designer.user.email, e)
 
         threading.Thread(target=_send_status_email, daemon=True).start()
+
+    def perform_update(self, serializer):
+        """Fire status notifications when PATCH /manage/designers/{id}
+        changes status — the admin UI updates via partial_update, not the
+        update-status action, so hooks live here to keep emails consistent."""
+        previous_status = serializer.instance.status
+        designer = serializer.save()
+        if designer.status != previous_status:
+            if designer.status == Designer.Status.APPROVED and not designer.is_verified:
+                designer.is_verified = True
+                designer.save(update_fields=["is_verified"])
+            self._send_status_notifications(designer, designer.status)
+
+    @action(detail=True, methods=["patch"], url_path="update-status")
+    def update_status(self, request, pk=None):
+        """
+        PATCH /admin/designers/{pk}/update-status
+        Triggers an email notification on every status update.
+        """
+        designer = self.get_object()
+        new_status = request.data.get("status")
+        status_reasons = request.data.get("status_reasons", [])
+
+        if not new_status:
+            return Response(
+                {"detail": "Status is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if new_status not in Designer.Status.values:
+            return Response(
+                {"detail": f"Invalid status. Choose from {Designer.Status.values}."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        designer.status = new_status
+        designer.status_reasons = status_reasons
+
+        # If approved, we also mark as verified if not already
+        if new_status == Designer.Status.APPROVED:
+            designer.is_verified = True
+
+        designer.save()
+
+        self._send_status_notifications(designer, new_status)
 
         serializer = self.get_serializer(designer)
         return Response({

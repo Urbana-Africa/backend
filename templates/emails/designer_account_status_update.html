@@ -20,14 +20,19 @@
 <p>{{ status_message }}</p>
 {% endif %}
 
+{% if is_approved and products_count == 0 %}
+<p><strong>Next step:</strong> your storefront is ready — upload your best products with clear photos, accurate sizes, and pricing so customers can start discovering your brand.</p>
+<p style="margin:20px 0;"><a href="{{ products_url|default:'https://designer.urbanaafrica.com/products/add' }}" class="btn-primary">Upload your first product</a></p>
+{% else %}
+<p style="margin:20px 0;"><a href="{{ designer_dashboard_url|default:'https://designer.urbanaafrica.com/dashboard' }}" class="btn-primary">Go to your dashboard</a></p>
+{% endif %}
+
 {% if designer.status_reasons %}
   <p><strong>Details:</strong></p>
   <ul>
     {% for reason in designer.status_reasons %}<li>{{ reason }}</li>{% endfor %}
   </ul>
 {% endif %}
-
-<p style="margin:20px 0;"><a href="{{ designer_dashboard_url|default:'https://designer.urbanaafrica.com/dashboard' }}" class="btn-primary">Go to your dashboard</a></p>
 
 <p>If you believe this update was made in error, or you need help getting back on track, reply to this email and our team will assist you.</p>
 {% endblock %}

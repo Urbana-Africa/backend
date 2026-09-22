@@ -19,6 +19,8 @@ from apps.authentication.models import DeletedUser, PasswordResetCode, User, Ver
 import secrets
 import string
 from django.utils.decorators import method_decorator
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from social_django.utils import psa
 from django.conf import settings
 from google.auth.transport import requests as google_requests
@@ -882,6 +884,54 @@ class AdminUserActionView(APIView):
                 status=status.HTTP_200_OK,
             )
 
+        elif action == "change_admin_role":
+            # Only a super admin may reassign admin roles.
+            is_superadmin = request.user.is_superuser or (
+                getattr(request.user, "user_type", None) == "admin"
+                and getattr(request.user, "admin_role", None) == "superadmin"
+            )
+            if not is_superadmin:
+                return Response(
+                    {"status": "error", "message": "Only super admins can change admin roles."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            if user.pk == request.user.pk:
+                return Response(
+                    {"status": "error", "message": "You cannot change your own admin role."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if user.user_type != "admin":
+                return Response(
+                    {"status": "error", "message": "Admin roles can only be assigned to admin users."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            new_admin_role = request.data.get("admin_role")
+            if new_admin_role not in dict(User.ADMIN_ROLE_CHOICES):
+                return Response(
+                    {
+                        "status": "error",
+                        "message": f"Invalid admin role: {new_admin_role}. "
+                        f"Choose from {list(dict(User.ADMIN_ROLE_CHOICES))}.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            user.admin_role = new_admin_role
+            # Admin-role holders need staff access to reach the admin site.
+            user.is_staff = True
+            user.save(update_fields=["admin_role", "is_staff"])
+            return Response(
+                {
+                    "status": "success",
+                    "message": f"Admin role changed to {new_admin_role}.",
+                    "admin_role": new_admin_role,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         elif action == "delete":
             user.delete()
             return Response(
@@ -1306,8 +1356,8 @@ def GoogleOneTapLogin(request):
 class RequestPhoneVerificationCodeView(APIView):
     """
     POST /auth/phone/request-code
-    Dispatches a 6-digit OTP to the specified phone number via Termii.
-    Defaults to WhatsApp channel with automatic SMS fallback.
+    Dispatches a 6-digit OTP to the specified phone number via Flutterwave's
+    OTP API. Defaults to WhatsApp channel with automatic SMS fallback.
     Supports authenticated user or anonymous registration session.
 
     Body params:
@@ -1316,8 +1366,9 @@ class RequestPhoneVerificationCodeView(APIView):
       - email (str, optional — used to look up unauthenticated user)
       - channel (str, optional — "whatsapp" (default) or "sms")
 
-    Termii generates the code itself; we store the returned pinId in the
-    session so it can be passed to the verify endpoint later.
+    The provider generates the code itself; we store the returned
+    reference/pinId in the session so it can be passed to the verify
+    endpoint later.
     """
     permission_classes = [AllowAny]
 
@@ -1349,34 +1400,56 @@ class RequestPhoneVerificationCodeView(APIView):
             VerificationCode.objects.filter(user=user).delete()
         request.session.pop(f"phone_otp_{full_phone}", None)
         request.session.pop(f"phone_pin_id_{full_phone}", None)
+        request.session.pop(f"phone_otp_expiry_{full_phone}", None)
 
-        # Dispatch via Termii (generates & stores the code server-side)
-        from .services.termii_service import send_verification_otp
-        termii_res = send_verification_otp(full_phone, code="", channel=channel)
-
+        # Dispatch via Flutterwave's OTP API (generates & stores the code
+        # server-side, returns a reference used for validation).
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"[PHONE OTP] Termii dispatch for {full_phone}: {termii_res}")
 
-        if not termii_res.get("success"):
+        from .services import flutterwave_otp_service
+
+        customer_email = user.email if user else request.data.get("email", "")
+        customer_name = user.get_full_name() if user else ""
+        otp_res = flutterwave_otp_service.send_verification_otp(
+            full_phone,
+            channel=channel,
+            customer_name=customer_name,
+            customer_email=customer_email,
+        )
+
+        logger.info(f"[PHONE OTP] Flutterwave dispatch for {full_phone}: {otp_res}")
+
+        if not otp_res.get("success"):
+            # Provider errors stay in logs; users get a clean, actionable
+            # message. User-fixable input problems come back as a 400.
+            error_code = otp_res.get("error_code", "provider_error")
+            message = flutterwave_otp_service.SEND_ERROR_MESSAGES.get(
+                error_code, flutterwave_otp_service.SEND_ERROR_MESSAGES["provider_error"]
+            )
+            http_status = (
+                status.HTTP_400_BAD_REQUEST
+                if error_code in ("invalid_phone", "invalid_email")
+                else status.HTTP_502_BAD_GATEWAY
+            )
             return Response(
-                {
-                    "status": "error",
-                    "message": termii_res.get("error", "Failed to send verification code."),
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
+                {"status": "error", "message": message},
+                status=http_status,
             )
 
-        # Store the Termii pinId in the session for later verification
-        pin_id = termii_res.get("pin_id")
-        if pin_id:
-            request.session[f"phone_pin_id_{full_phone}"] = pin_id
+        # Store the verification reference + expiry in the session so the
+        # verify endpoint can validate the code later.
+        reference = otp_res.get("reference")
+        if reference:
+            request.session[f"phone_pin_id_{full_phone}"] = reference
+        if otp_res.get("expiry"):
+            request.session[f"phone_otp_expiry_{full_phone}"] = otp_res["expiry"]
 
         return Response(
             {
                 "status": "success",
                 "message": f"Verification code sent to {full_phone}.",
-                "channel": termii_res.get("method", channel),
+                "channel": otp_res.get("method", channel),
             },
             status=status.HTTP_200_OK,
         )
@@ -1385,7 +1458,7 @@ class RequestPhoneVerificationCodeView(APIView):
 class VerifyPhoneCodeView(APIView):
     """
     POST /auth/phone/verify-code
-    Validates the 6-digit OTP via the Termii verify endpoint.
+    Validates the 6-digit OTP via Flutterwave's OTP validate endpoint.
     Falls back to a universal debug code in dev mode.
     """
     permission_classes = [AllowAny]
@@ -1412,21 +1485,46 @@ class VerifyPhoneCodeView(APIView):
                 user = User.objects.filter(email=email).first()
 
         is_valid = False
+        fail_reason = None
 
-        # 1. Check Termii verify endpoint (primary)
-        from .services.termii_service import check_verification_otp
-        pin_id = request.session.get(f"phone_pin_id_{full_phone}")
-        if check_verification_otp(full_phone, code, pin_id=pin_id):
-            is_valid = True
+        from .services import flutterwave_otp_service
+
+        # 1. Local expiry check — Flutterwave returns an ISO expiry at create
+        #    time, so expired codes are rejected deterministically without an
+        #    API call.
+        reference = request.session.get(f"phone_pin_id_{full_phone}")
+        expiry_str = request.session.get(f"phone_otp_expiry_{full_phone}")
+        try:
+            expiry_dt = parse_datetime(expiry_str) if expiry_str else None
+            if expiry_dt and expiry_dt.tzinfo is None:
+                expiry_dt = timezone.make_aware(expiry_dt)
+        except Exception:
+            expiry_dt = None
+        if not reference:
+            fail_reason = "no_reference"
+        elif expiry_dt and timezone.now() > expiry_dt:
+            fail_reason = "expired"
+        else:
+            # 2. Validate the code with Flutterwave
+            result = flutterwave_otp_service.check_verification_otp(reference, code)
+            is_valid = result.get("verified", False)
+            if not is_valid:
+                fail_reason = result.get("reason", "invalid")
+
+        if is_valid:
             request.session.pop(f"phone_pin_id_{full_phone}", None)
+            request.session.pop(f"phone_otp_expiry_{full_phone}", None)
 
-        # 2. Universal testing code in debug/dev
+        # 3. Universal testing code in debug/dev
         if not is_valid and getattr(settings, "DEBUG", False) and code in ["123456", "000000"]:
             is_valid = True
 
         if not is_valid:
+            message = flutterwave_otp_service.VERIFY_ERROR_MESSAGES.get(
+                fail_reason, flutterwave_otp_service.VERIFY_ERROR_MESSAGES["invalid"]
+            )
             return Response(
-                {"status": "error", "message": "Invalid or expired verification code."},
+                {"status": "error", "message": message, "reason": fail_reason},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

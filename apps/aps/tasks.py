@@ -372,8 +372,24 @@ def process_scrape_jobs():
             run_scrape_engine(job.id)
         except Exception as e:
             job.refresh_from_db()
+            # The engine claims jobs atomically — don't clobber a job that a
+            # concurrent scheduler already ran.
+            if job.status != 'queued':
+                continue
             job.status = 'failed'
             job.error_message = str(e)
             job.completed_at = timezone.now()
             job.save(update_fields=['status', 'error_message', 'completed_at'])
-            print(f"[SCHEDULED] Scrape job {job.id} failed: {e}")
+            logger.exception("[SCHEDULED] Scrape job %s failed", job.id)
+
+
+def reset_monthly_scrape_spend():
+    """Reset per-provider spend counters at the start of each month so the
+    monthly_budget cap is actually monthly (not lifetime)."""
+    from decimal import Decimal
+    from apps.marketing.models import ScrapeProviderConfig
+
+    updated = ScrapeProviderConfig.objects.filter(
+        monthly_spend__gt=0
+    ).update(monthly_spend=Decimal('0'))
+    logger.info("[SCHEDULED] Reset monthly scrape spend for %s provider(s)", updated)

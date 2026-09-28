@@ -456,9 +456,13 @@ GEMINI_SECRET_KEY = config("GEMINI_SECRET_KEY", default="")
 # Scraper provider credentials (DataForSEO + Bright Data)
 DATAFORSEO_LOGIN = config("DATAFORSEO_LOGIN", default="")
 DATAFORSEO_PASSWORD = config("DATAFORSEO_PASSWORD", default="")
+# SERP location_code — 2840=US, 2566=NG. Overridable per-provider in DB config.
+DATAFORSEO_LOCATION_CODE = config("DATAFORSEO_LOCATION_CODE", default=2840, cast=int)
 BRIGHTDATA_API_KEY = config("BRIGHTDATA_API_KEY", default="")
-BRIGHTDATA_CUSTOMER_ID = config("BRIGHTDATA_CUSTOMER_ID", default="")
+# "zone" and "proxy" are the same thing — Bright Data renamed zones to proxies
+# in the dashboard; the API field is still "zone". Either env var works.
 BRIGHTDATA_ZONE = config("BRIGHTDATA_ZONE", default="")
+BRIGHTDATA_PROXY = config("BRIGHTDATA_PROXY", default="")
 BRIGHTDATA_IG_DATASET_ID = config("BRIGHTDATA_IG_DATASET_ID", default="gd_l1vikfch901nx3by4")
 
 # Virtual try-on providers (fal.ai + Replicate are disabled by default; only

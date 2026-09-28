@@ -130,7 +130,6 @@ def scrape_leads_placeholder(request):
     Endpoint for triggering third-party API scraping.
     Creates a ScrapeJob and dispatches the provider engine.
     """
-    import threading
     from .services import run_scraping_job
 
     query = request.data.get('query', '')
@@ -138,11 +137,15 @@ def scrape_leads_placeholder(request):
         return Response({'error': 'Search query is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     provider_name = request.data.get('provider', '')
-    max_results = request.data.get('max_results', 5)
+    try:
+        max_results = int(request.data.get('max_results', 5))
+    except (TypeError, ValueError):
+        return Response({'error': 'max_results must be an integer'}, status=status.HTTP_400_BAD_REQUEST)
+    max_results = max(1, min(max_results, 50))
 
     job = run_scraping_job(
-        query=query,
-        max_results=int(max_results),
+        query=query.strip()[:500],
+        max_results=max_results,
         created_by=request.user,
         provider_name=provider_name,
     )

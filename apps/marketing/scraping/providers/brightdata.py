@@ -1,13 +1,17 @@
-import json
 import logging
 import re
+import time
 import requests
 from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional
+from bs4 import BeautifulSoup
 from django.conf import settings
-from ..base import ScrapeProvider
+from ..base import ScrapeProvider, request_with_retry
 
 logger = logging.getLogger(__name__)
+
+SNAPSHOT_POLL_INTERVAL_S = 5
+SNAPSHOT_TIMEOUT_S = 180
 
 
 class BrightDataProvider(ScrapeProvider):
@@ -18,8 +22,13 @@ class BrightDataProvider(ScrapeProvider):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.api_key = config.get("api_key") or getattr(settings, "BRIGHTDATA_API_KEY", "")
-        self.zone = config.get("zone") or getattr(settings, "BRIGHTDATA_ZONE", "")
-        self.customer_id = config.get("customer_id") or getattr(settings, "BRIGHTDATA_CUSTOMER_ID", "")
+        # Bright Data renamed "zone" to "proxy" in the dashboard; the API
+        # request field is still "zone". Accept either config/env spelling.
+        self.zone = (
+            config.get("zone") or config.get("proxy")
+            or getattr(settings, "BRIGHTDATA_ZONE", "")
+            or getattr(settings, "BRIGHTDATA_PROXY", "")
+        )
         self.base_url = "https://api.brightdata.com"
         self.instagram_dataset_id = config.get(
             "instagram_dataset_id"
@@ -66,68 +75,157 @@ class BrightDataProvider(ScrapeProvider):
 
         return "\n".join(lines)
 
+    def _poll_snapshot(self, snapshot_id: str, timeout_s: int = SNAPSHOT_TIMEOUT_S) -> Optional[List[Dict[str, Any]]]:
+        """
+        Sync /scrape requests auto-convert to async after ~60s server-side and
+        return a snapshot_id (HTTP 202). Poll /progress until ready, then
+        download /snapshot. Returns the record list or None.
+        """
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                prog = requests.get(
+                    f"{self.base_url}/datasets/v3/progress/{snapshot_id}",
+                    headers=self._headers(),
+                    timeout=30,
+                )
+                status = prog.json().get("status", "").lower()
+            except Exception as e:
+                logger.warning(f"Bright Data snapshot progress check failed for {snapshot_id}: {e}")
+                status = ""
+
+            if status in ("ready", "done"):
+                snap = requests.get(
+                    f"{self.base_url}/datasets/v3/snapshot/{snapshot_id}",
+                    headers=self._headers(),
+                    params={"format": "json"},
+                    timeout=60,
+                )
+                snap.raise_for_status()
+                return snap.json()
+            if status in ("failed", "error", "dead"):
+                logger.warning(f"Bright Data snapshot {snapshot_id} ended with status '{status}'")
+                return None
+            time.sleep(SNAPSHOT_POLL_INTERVAL_S)
+
+        logger.warning(f"Bright Data snapshot {snapshot_id} timed out after {timeout_s}s")
+        return None
+
+    def _extract_instagram(self, url: str) -> Optional[Dict[str, Any]]:
+        resp = request_with_retry(
+            "post",
+            f"{self.base_url}/datasets/v3/scrape",
+            headers=self._headers(),
+            params={"dataset_id": self.instagram_dataset_id, "format": "json"},
+            json=[{"url": url}],
+            timeout=130,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Over ~60s of scraping the sync endpoint returns a snapshot_id instead
+        # of data (HTTP 202) — poll until the snapshot is ready.
+        if resp.status_code == 202 or (isinstance(data, dict) and data.get("snapshot_id")):
+            snapshot_id = data.get("snapshot_id") if isinstance(data, dict) else None
+            data = self._poll_snapshot(snapshot_id) if snapshot_id else None
+
+        if not isinstance(data, list) or not data:
+            logger.warning(f"Bright Data Instagram returned no records for {url}: {data}")
+            return None
+
+        item = data[0]
+        return {
+            "url": url,
+            "text": self._instagram_profile_text(item, url),
+            "json": item,
+            "source": self.name,
+        }
+
+    _BROWSER_UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+
+    def _direct_fetch(self, url: str) -> Optional[Dict[str, Any]]:
+        """Plain HTTP fetch + HTML-to-text — free. Returns None when the page
+        looks blocked/empty so the caller can escalate to Web Unlocker."""
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": self._BROWSER_UA},
+                timeout=30,
+            )
+        except Exception as e:
+            logger.info(f"Direct fetch failed for {url}: {e}")
+            return None
+        if resp.status_code != 200:
+            logger.info(f"Direct fetch got HTTP {resp.status_code} for {url}")
+            return None
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ", strip=True)
+
+        # A real page has substance; tiny bodies are usually block/CAPTCHA walls.
+        if len(text) < 300:
+            logger.info(f"Direct fetch for {url} returned thin content ({len(text)} chars) — treating as blocked")
+            return None
+
+        return {
+            "url": url,
+            "markdown": text,
+            "source": "direct",
+            "_free_call": True,
+        }
+
+    def _extract_web(self, url: str) -> Optional[Dict[str, Any]]:
+        """Cheap→paid ladder: plain fetch first, Web Unlocker on failure."""
+        direct = self._direct_fetch(url)
+        if direct:
+            return direct
+
+        if not self.zone:
+            raise RuntimeError(
+                "Direct fetch failed and no Bright Data proxy/zone configured for fallback"
+            )
+
+        resp = request_with_retry(
+            "post",
+            f"{self.base_url}/request",
+            headers=self._headers(),
+            json={
+                "zone": self.zone,
+                "url": url,
+                "format": "raw",
+                "data_format": "markdown",
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return {
+            "url": url,
+            "markdown": resp.text,
+            "source": self.name,
+        }
+
     def search(self, query: str, max_results: int = 10, **kwargs) -> List[Dict[str, Any]]:
         raise NotImplementedError("Bright Data does not provide a managed search endpoint in this adapter")
 
     def extract(self, url: str, **kwargs) -> Optional[Dict[str, Any]]:
         if not self.api_key:
             raise RuntimeError("Bright Data API key not configured")
-
         if self._is_instagram_url(url):
-            try:
-                resp = requests.post(
-                    f"{self.base_url}/datasets/v3/scrape",
-                    headers=self._headers(),
-                    params={"dataset_id": self.instagram_dataset_id, "format": "json"},
-                    json=[{"url": url}],
-                    timeout=120,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-
-                if not isinstance(data, list) or not data:
-                    # Bright Data may return a snapshot_id dict on timeout; not handled here.
-                    logger.warning(f"Bright Data Instagram returned non-list response for {url}: {data}")
-                    return None
-
-                item = data[0]
-                return {
-                    "url": url,
-                    "text": self._instagram_profile_text(item, url),
-                    "json": item,
-                    "source": self.name,
-                }
-            except Exception as e:
-                logger.error(f"Bright Data Instagram extract error: {e}")
-                return None
-
-        # Fallback: generic Bright Data web scraping (raw HTML).
-        try:
-            resp = requests.get(
-                f"{self.base_url}/request",
-                headers=self._headers(),
-                params={
-                    "customer": self.customer_id,
-                    "zone": self.zone,
-                    "url": url,
-                    "format": "raw",
-                },
-                timeout=120,
-            )
-            resp.raise_for_status()
-            return {
-                "url": url,
-                "html": resp.text,
-                "source": self.name,
-            }
-        except Exception as e:
-            logger.error(f"Bright Data extract error: {e}")
-            return None
+            return self._extract_instagram(url)
+        return self._extract_web(url)
 
     def health_check(self) -> Dict[str, Any]:
-        ok = bool(self.api_key and (self.zone or self.customer_id or self.instagram_dataset_id))
+        # Zone is optional — web extraction falls back to a free direct fetch.
+        ok = bool(self.api_key)
         return {
             "ok": ok,
             "name": self.name,
-            "message": "Credentials present" if ok else "Missing credentials",
+            "message": (
+                "Credentials present" if ok else "Missing credentials"
+            ) + ("" if self.zone else " — no proxy/zone, web pages will use direct fetch only"),
         }

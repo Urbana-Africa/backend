@@ -5,9 +5,11 @@ import re
 import time
 from datetime import timedelta
 from decimal import Decimal
+from urllib.parse import urlparse
 from django.utils import timezone
 from django.conf import settings
-from django.db import transaction
+from django.db import transaction, IntegrityError
+from django.db.models import F, Q
 
 from ..models import (
     DesignerLead,
@@ -22,13 +24,21 @@ from .registry import get_provider
 
 logger = logging.getLogger(__name__)
 
+# Domains that identify the platform, not the brand — never dedupe on these.
+PLATFORM_DOMAINS = {
+    "instagram.com", "facebook.com", "fb.com", "tiktok.com", "twitter.com",
+    "x.com", "youtube.com", "linkedin.com", "pinterest.com", "threads.net",
+}
+
+EMAIL_RE = re.compile(r"[\w.-]+@[\w.-]+\.[\w]{2,}")
+
 
 class BudgetExceeded(Exception):
     pass
 
 
-def _url_hash(url: str) -> str:
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+def _url_hash(provider_name: str, url: str) -> str:
+    return hashlib.sha256(f"{provider_name}|{url}".encode("utf-8")).hexdigest()
 
 
 def _unit_cost(provider_name: str) -> tuple:
@@ -42,21 +52,35 @@ def _unit_cost(provider_name: str) -> tuple:
 
 
 def _consume_budget(job, provider_name: str):
-    """Check budget, increment spend and return call cost. Raises BudgetExceeded if over cap."""
+    """Check budget, increment spend atomically and return call cost. Raises BudgetExceeded if over cap."""
     config, cost = _unit_cost(provider_name)
     if not config or not config.monthly_budget:
         return cost
 
-    if config.monthly_spend + cost > config.monthly_budget:
+    # Atomic compare-and-increment so concurrent jobs can't both pass the check.
+    updated = ScrapeProviderConfig.objects.filter(
+        id=config.id,
+        monthly_spend__lte=config.monthly_budget - cost,
+    ).update(monthly_spend=F('monthly_spend') + cost)
+
+    if not updated:
         job.status = 'budget_stopped'
         job.completed_at = timezone.now()
         job.error_message = f"Provider {provider_name} monthly budget exceeded"
         job.save(update_fields=['status', 'completed_at', 'error_message'])
         raise BudgetExceeded(job.error_message)
 
-    config.monthly_spend += cost
-    config.save(update_fields=['monthly_spend'])
     return cost
+
+
+def _refund_budget(provider_name: str, cost):
+    """Return a consumed budget reservation — for calls that never billed
+    (free direct fetches, failed requests)."""
+    if not cost:
+        return
+    ScrapeProviderConfig.objects.filter(name=provider_name).update(
+        monthly_spend=F('monthly_spend') - cost
+    )
 
 
 def _is_suppressed(brand_name: str, email: str, url: str) -> bool:
@@ -65,16 +89,30 @@ def _is_suppressed(brand_name: str, email: str, url: str) -> bool:
     if email and LeadSuppression.objects.filter(email__iexact=email).exists():
         return True
     if url:
-        from urllib.parse import urlparse
-        domain = urlparse(url).netloc
+        domain = urlparse(url).netloc.lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
         if domain and LeadSuppression.objects.filter(domain__iexact=domain).exists():
             return True
     return False
 
 
+def _slim_payload(extracted: dict) -> dict:
+    """Keep the ScrapeCall ledger slim — full page text/html is stored on
+    LeadEnrichment, not duplicated into every call row."""
+    slim = dict(extracted or {})
+    for bulky in ("html", "text", "markdown"):
+        content = slim.pop(bulky, None)
+        if content:
+            slim["content_chars"] = len(content)
+    return slim
+
+
 def _get_cached_or_extract(job, provider, url):
-    h = _url_hash(url)
-    cache = ScrapeCache.objects.filter(url_hash=h).first()
+    h = _url_hash(provider.name, url)
+    cache = ScrapeCache.objects.filter(url_hash=h).exclude(
+        stale_after__lte=timezone.now()
+    ).first()
     if cache:
         # cache used — still record a call so we can track duplicates
         ScrapeCall.objects.create(
@@ -85,21 +123,21 @@ def _get_cached_or_extract(job, provider, url):
             cost_usd=0,
             status='ok',
             raw_payload={'cached': True, 'url_hash': h},
-            raw_response=cache.extracted,
+            raw_response=_slim_payload(cache.extracted if isinstance(cache.extracted, dict) else {}),
             duration_ms=0,
         )
         return cache.extracted
 
-    # Budget is consumed before the paid provider call
+    # Budget is reserved before the provider call, then settled: failed calls
+    # and free direct fetches are refunded so monthly_spend tracks real spend.
     cost = _consume_budget(job, provider.name)
 
     start = int(time.time() * 1000)
     try:
         extracted = provider.extract(url)
-    except BudgetExceeded:
-        raise
     except Exception as e:
         duration = int(time.time() * 1000) - start
+        _refund_budget(provider.name, cost)
         ScrapeCall.objects.create(
             job=job,
             provider_name=provider.name,
@@ -107,11 +145,18 @@ def _get_cached_or_extract(job, provider, url):
             input_url=url,
             status='error',
             error_message=str(e),
+            cost_usd=0,
             duration_ms=duration,
+            raw_payload={'reserved_cost': str(cost)},
         )
         return None
 
     duration = int(time.time() * 1000) - start
+
+    if extracted and extracted.pop("_free_call", False):
+        _refund_budget(provider.name, cost)
+        cost = Decimal('0')
+
     ScrapeCall.objects.create(
         job=job,
         provider_name=provider.name,
@@ -120,7 +165,7 @@ def _get_cached_or_extract(job, provider, url):
         cost_usd=cost,
         status='ok',
         raw_payload={'url_hash': h},
-        raw_response=extracted or {},
+        raw_response=_slim_payload(extracted or {}),
         duration_ms=duration,
     )
 
@@ -169,7 +214,43 @@ def _select_extract_provider(search_provider_name: str):
     return None
 
 
-def _parse_extracted_text(text: str, url: str):
+def _looks_like_instagram_profile(raw_json) -> bool:
+    return isinstance(raw_json, dict) and (
+        "account" in raw_json
+        or ("biography" in raw_json and "followers" in raw_json)
+    )
+
+
+def _lead_data_from_instagram(item: dict, url: str) -> dict:
+    """Map a Bright Data Instagram profile record directly — no LLM needed."""
+    bio = item.get("biography") or ""
+    account = (item.get("account") or "").lstrip("@")
+    email_match = EMAIL_RE.search(bio)
+    email = (
+        item.get("email_address")     # confirmed present in the dataset payload
+        or item.get("business_email")
+        or item.get("email")
+        or (email_match.group(0) if email_match else "")
+    )
+    category = (
+        item.get("business_category_name")
+        or item.get("category_name")
+        or item.get("category")
+        or ""
+    )
+    return {
+        "brand_name": (item.get("full_name") or account or ""),
+        "designer_name": item.get("full_name") or "",
+        "email": email,
+        "phone_number": item.get("business_phone_number") or item.get("contact_phone_number") or "",
+        "social_media_links": {"instagram": url},
+        "followers_count": item.get("followers") or 0,
+        "category_tags": [category] if category else [],
+        "country_code": "",
+    }
+
+
+def _parse_extracted_text(job: ScrapeJob, text: str, url: str):
     """Use Gemini to parse extracted page text into DesignerLead fields."""
     try:
         from google import genai
@@ -199,6 +280,7 @@ def _parse_extracted_text(text: str, url: str):
     - phone_number: Any contact phone number.
     - social_media_links: A JSON object mapping platform names (e.g., "instagram", "twitter") to their URLs.
     - followers_count: Integer (if mentioned).
+    - country_code: ISO 3166-1 alpha-2 country code of the designer/brand (e.g., "NG", "GH", "ZA") if identifiable, otherwise empty.
     - category_tags: A list of strings describing the style (e.g., ["Streetwear", "Luxury"]).
 
     IMPORTANT: If the text does not contain their email, phone_number, or social_media_links, do not invent them. Leave them blank.
@@ -209,17 +291,36 @@ def _parse_extracted_text(text: str, url: str):
     {text}
     """
 
+    start = int(time.time() * 1000)
+    chat_model = getattr(settings, "CHAT_GEMINI_MODEL", "gemini-2.5-flash")
     try:
         client = genai.Client(api_key=gemini_key)
-        chat_model = getattr(settings, "CHAT_GEMINI_MODEL", "gemini-2.5-flash")
-
         gen_response = client.models.generate_content(
             model=chat_model,
             contents=[prompt],
-            config=types.GenerateContentConfig(temperature=0.1),
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json",
+            ),
         )
 
-        output_text = gen_response.text.strip()
+        duration = int(time.time() * 1000) - start
+        usage = getattr(gen_response, "usage_metadata", None)
+        ScrapeCall.objects.create(
+            job=job,
+            provider_name="gemini",
+            call_type='llm',
+            input_url=url,
+            status='ok',
+            duration_ms=duration,
+            raw_payload={'model': chat_model, 'input_chars': len(text)},
+            raw_response={
+                'prompt_tokens': getattr(usage, "prompt_token_count", None),
+                'completion_tokens': getattr(usage, "candidates_token_count", None),
+            },
+        )
+
+        output_text = (gen_response.text or "").strip()
         if output_text.startswith("```json"):
             output_text = output_text[7:]
         if output_text.startswith("```"):
@@ -232,6 +333,20 @@ def _parse_extracted_text(text: str, url: str):
             return None
         return data
     except Exception as e:
+        duration = int(time.time() * 1000) - start
+        try:
+            ScrapeCall.objects.create(
+                job=job,
+                provider_name="gemini",
+                call_type='llm',
+                input_url=url,
+                status='error',
+                error_message=str(e),
+                duration_ms=duration,
+                raw_payload={'model': chat_model},
+            )
+        except Exception:
+            pass
         logger.error(f"Gemini parse error for {url}: {e}")
         return None
 
@@ -239,14 +354,30 @@ def _parse_extracted_text(text: str, url: str):
 def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
     if not extracted:
         return None
-    text = extracted.get("text") or extracted.get("markdown") or extracted.get("html", "")
     url = extracted.get("url", "")
-    data = _parse_extracted_text(text, url) or {}
     raw_json = extracted.get("json") or {}
+    text = extracted.get("text") or extracted.get("markdown") or extracted.get("html", "")
+
+    # Structured Instagram records are mapped directly; Gemini is only used
+    # to parse unstructured page text.
+    used_gemini = not _looks_like_instagram_profile(raw_json)
+    if used_gemini:
+        data = _parse_extracted_text(job, text, url) or {}
+    else:
+        data = _lead_data_from_instagram(raw_json, url)
+
     if not data.get("brand_name") and not raw_json:
         return None
 
-    brand = data.get("brand_name", "").strip()[:255]
+    # Where the content actually came from (e.g. "direct" for free fetches).
+    source_name = extracted.get("source") or provider_name
+
+    brand = (data.get("brand_name") or "").strip()[:255]
+    if not brand and raw_json:
+        brand = (raw_json.get("account") or raw_json.get("full_name") or "").strip()[:255]
+    if not brand:
+        return None
+
     if _is_suppressed(brand, data.get("email", ""), url):
         logger.info(f"Suppressed lead: {brand}")
         return None
@@ -258,27 +389,42 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
         followers = 0
 
     # Normalise dedupe inputs
-    from urllib.parse import urlparse
     socials = data.get("social_media_links", {}) or {}
     ig_url = socials.get("instagram") or ""
     instagram_handle = ""
+    domain = (urlparse(url).netloc or "").lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+    domain = domain[:100]
     if ig_url:
         # e.g. https://instagram.com/mybrand/ -> mybrand
         instagram_handle = ig_url.rstrip("/").split("/")[-1].lstrip("@").lower()[:100]
     elif "instagram.com" in domain:
         instagram_handle = (urlparse(url).path.strip("/").split("/")[0] or "").lstrip("@").lower()[:100]
-    domain = (urlparse(url).netloc or "").lower()[:100]
     brand_norm = brand.lower()[:100]
     dedupe_parts = [p for p in [brand_norm, instagram_handle, domain] if p]
     dedupe_key = "|".join(dedupe_parts)[:255] if dedupe_parts else None
 
-    if dedupe_key and DesignerLead.objects.filter(dedupe_key=dedupe_key).exists():
-        logger.info(f"Lead already exists (dedupe): {dedupe_key}")
-        return None
+    # Dedupe on each identifier independently — a composite key misses the
+    # same brand found via its website vs its Instagram profile.
+    conditions = []
+    if instagram_handle:
+        conditions.append(Q(instagram_handle__iexact=instagram_handle))
+    if brand_norm:
+        conditions.append(Q(brand_name__iexact=brand))
+    if domain and domain not in PLATFORM_DOMAINS:
+        conditions.append(Q(website__icontains=domain) | Q(dedupe_key__icontains=domain))
+    if conditions:
+        dup_q = conditions[0]
+        for c in conditions[1:]:
+            dup_q |= c
+        if DesignerLead.objects.filter(dup_q).exists():
+            logger.info(f"Lead already exists (dedupe): {brand}")
+            return None
 
     # Confidence: only store provenanced values — no invented contacts
     bio = (raw_json.get("biography") or "") if raw_json else ""
-    json_email_match = re.search(r"[\w.-]+@[\w.-]+\.[\w]{2,}", bio) if bio else None
+    json_email_match = EMAIL_RE.search(bio) if bio else None
     json_email = json_email_match.group(0) if json_email_match else ""
     email = (data.get("email") or json_email or "")[:254]
     phone = (data.get("phone_number") or "")[:50]
@@ -294,38 +440,43 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
 
     needs_review = not email and not phone
 
-    with transaction.atomic():
-        lead = DesignerLead.objects.create(
-            brand_name=brand,
-            designer_name=(data.get("designer_name") or "")[:255],
-            email=email,
-            phone_number=phone,
-            social_media_links=socials,
-            website=(raw_json.get("external_url") or url)[:200],
-            instagram_handle=instagram_handle,
-            country_code=(data.get("country_code") or "")[:10],
-            followers_count=followers,
-            category_tags=data.get("category_tags", []),
-            confidence_score=confidence,
-            provenance={
-                'source_url': url,
-                'provider': provider_name,
-                'fetched_at': timezone.now().isoformat(),
-            },
-            source=f"{provider_name} / Gemini",
-            status="Discovered",
-            needs_review=needs_review,
-            dedupe_key=dedupe_key,
-            last_enriched_at=timezone.now(),
-        )
-        LeadEnrichment.objects.create(
-            lead=lead,
-            job=job,
-            raw_text=text,
-            raw_html=extracted.get("html", ""),
-            extraction_source=provider_name,
-            enrichment_status='completed',
-        )
+    try:
+        with transaction.atomic():
+            lead = DesignerLead.objects.create(
+                brand_name=brand,
+                designer_name=(data.get("designer_name") or "")[:255],
+                email=email,
+                phone_number=phone,
+                social_media_links=socials,
+                website=(raw_json.get("external_url") or url)[:200],
+                instagram_handle=instagram_handle,
+                country_code=(data.get("country_code") or "")[:10],
+                followers_count=followers,
+                category_tags=data.get("category_tags", []),
+                confidence_score=confidence,
+                provenance={
+                    'source_url': url,
+                    'provider': provider_name,
+                    'fetched_at': timezone.now().isoformat(),
+                },
+                source=f"{source_name} / Gemini" if used_gemini else source_name,
+                status="Discovered",
+                needs_review=needs_review,
+                dedupe_key=dedupe_key,
+                last_enriched_at=timezone.now(),
+            )
+            LeadEnrichment.objects.create(
+                lead=lead,
+                job=job,
+                raw_text=text,
+                raw_html=extracted.get("html", ""),
+                extraction_source=source_name,
+                confidence=confidence,
+                enrichment_status='completed',
+            )
+    except IntegrityError:
+        logger.info(f"Lead already exists (unique dedupe_key): {dedupe_key}")
+        return None
     return lead
 
 
@@ -336,18 +487,47 @@ def run_scrape_engine(job_id: str):
         logger.error(f"ScrapeJob {job_id} not found")
         return
 
+    # Atomic claim — guards against duplicate schedulers in multi-process
+    # deployments picking up the same queued job.
+    claimed = ScrapeJob.objects.filter(id=job.id, status='queued').update(
+        status='running', started_at=timezone.now()
+    )
+    if not claimed:
+        logger.info(f"ScrapeJob {job_id} already claimed (status={job.status})")
+        return
     job.status = 'running'
     job.started_at = timezone.now()
-    job.save(update_fields=['status', 'started_at'])
 
     try:
         provider = _pick_provider(job.provider_name)
+        extract_provider = _select_extract_provider(provider.name) or provider
+
+        # Fail fast on missing credentials instead of spending a paid SERP
+        # call and recording every URL as a parse failure.
+        for p in {provider.name: provider, extract_provider.name: extract_provider}.values():
+            health = p.health_check()
+            if not health.get("ok"):
+                raise RuntimeError(f"Provider {p.name} not configured: {health.get('message')}")
 
         # Consume search budget before the call
         search_cost = _consume_budget(job, provider.name)
 
         start = int(time.time() * 1000)
-        urls = provider.search(job.query, max_results=job.max_results)
+        try:
+            urls = provider.search(job.query, max_results=job.max_results)
+        except Exception as e:
+            _refund_budget(provider.name, search_cost)
+            ScrapeCall.objects.create(
+                job=job,
+                provider_name=provider.name,
+                call_type='search',
+                raw_payload={'query': job.query, 'max_results': job.max_results, 'reserved_cost': str(search_cost)},
+                status='error',
+                error_message=str(e),
+                cost_usd=0,
+                duration_ms=int(time.time() * 1000) - start,
+            )
+            raise
         duration = int(time.time() * 1000) - start
         ScrapeCall.objects.create(
             job=job,
@@ -360,7 +540,6 @@ def run_scrape_engine(job_id: str):
             duration_ms=duration,
         )
 
-        extract_provider = _select_extract_provider(provider.name) or provider
         created = 0
         failed = 0
         seen = set()
@@ -374,6 +553,15 @@ def run_scrape_engine(job_id: str):
             try:
                 extracted = _get_cached_or_extract(job, extract_provider, url)
             except BudgetExceeded:
+                job.result_summary = {
+                    'urls_found': len(urls),
+                    'leads_created': created,
+                    'parse_failures': failed,
+                    'search_provider': provider.name,
+                    'extract_provider': extract_provider.name,
+                    'stopped_reason': 'budget_exceeded'
+                }
+                job.save(update_fields=['result_summary'])
                 return
 
             if _lead_from_extracted(extracted, extract_provider.name, job):

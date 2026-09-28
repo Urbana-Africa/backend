@@ -13,6 +13,7 @@ from .tasks import (
     send_delayed_customer_emails,
     send_delayed_designer_emails,
     process_scrape_jobs,
+    reset_monthly_scrape_spend,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,20 @@ def start():
         id="process_scrape_jobs_job",
         replace_existing=True,
         max_instances=1,
+        coalesce=True,
+    )
+
+    # -------------------------------------------------------
+    # Monthly scrape-budget reset (1st of month, 00:10)
+    # -------------------------------------------------------
+    scheduler.add_job(
+        reset_monthly_scrape_spend,
+        trigger="cron",
+        day=1,
+        hour=0,
+        minute=10,
+        id="reset_monthly_scrape_spend_job",
+        replace_existing=True,
         coalesce=True,
     )
 

@@ -36,6 +36,8 @@ class ScrapeProviderConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = ScrapeProviderConfig
         fields = ['id', 'name', 'enabled', 'config', 'priority', 'cost_per_1k_credits', 'monthly_budget', 'monthly_spend', 'created_at', 'updated_at']
+        # config holds API keys/passwords — writable but never served back out
+        extra_kwargs = {'config': {'write_only': True}}
 
 
 class ScrapeJobSerializer(serializers.ModelSerializer):

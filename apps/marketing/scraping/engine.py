@@ -54,21 +54,27 @@ def _unit_cost(provider_name: str) -> tuple:
 def _consume_budget(job, provider_name: str):
     """Check budget, increment spend atomically and return call cost. Raises BudgetExceeded if over cap."""
     config, cost = _unit_cost(provider_name)
-    if not config or not config.monthly_budget:
+    if not config:
         return cost
 
-    # Atomic compare-and-increment so concurrent jobs can't both pass the check.
-    updated = ScrapeProviderConfig.objects.filter(
-        id=config.id,
-        monthly_spend__lte=config.monthly_budget - cost,
-    ).update(monthly_spend=F('monthly_spend') + cost)
+    if config.monthly_budget:
+        # Atomic compare-and-increment so concurrent jobs can't both pass the check.
+        updated = ScrapeProviderConfig.objects.filter(
+            id=config.id,
+            monthly_spend__lte=config.monthly_budget - cost,
+        ).update(monthly_spend=F('monthly_spend') + cost)
 
-    if not updated:
-        job.status = 'budget_stopped'
-        job.completed_at = timezone.now()
-        job.error_message = f"Provider {provider_name} monthly budget exceeded"
-        job.save(update_fields=['status', 'completed_at', 'error_message'])
-        raise BudgetExceeded(job.error_message)
+        if not updated:
+            job.status = 'budget_stopped'
+            job.completed_at = timezone.now()
+            job.error_message = f"Provider {provider_name} monthly budget exceeded"
+            job.save(update_fields=['status', 'completed_at', 'error_message'])
+            raise BudgetExceeded(job.error_message)
+    else:
+        # No cap — still count spend so cost-per-lead reporting works.
+        ScrapeProviderConfig.objects.filter(id=config.id).update(
+            monthly_spend=F('monthly_spend') + cost
+        )
 
     return cost
 
@@ -99,12 +105,19 @@ def _is_suppressed(brand_name: str, email: str, url: str) -> bool:
 
 def _slim_payload(extracted: dict) -> dict:
     """Keep the ScrapeCall ledger slim — full page text/html is stored on
-    LeadEnrichment, not duplicated into every call row."""
+    LeadEnrichment, not duplicated into every call row. Bright Data's embedded
+    record also carries heavy arrays (posts/highlights) we don't need to echo."""
     slim = dict(extracted or {})
     for bulky in ("html", "text", "markdown"):
         content = slim.pop(bulky, None)
         if content:
             slim["content_chars"] = len(content)
+    j = slim.get("json")
+    if isinstance(j, dict):
+        j = dict(j)
+        for k in ("posts", "highlights", "post_hashtags", "bio_hashtags"):
+            j.pop(k, None)
+        slim["json"] = j
     return slim
 
 
@@ -390,7 +403,7 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
 
     if _is_suppressed(brand, data.get("email", ""), url):
         logger.info(f"Suppressed lead: {brand}")
-        return None
+        return 'skipped'
 
     followers = data.get("followers_count")
     if not isinstance(followers, int):
@@ -430,7 +443,7 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
             dup_q |= c
         if DesignerLead.objects.filter(dup_q).exists():
             logger.info(f"Lead already exists (dedupe): {brand}")
-            return None
+            return 'skipped'
 
     # Confidence: only store provenanced values — no invented contacts
     bio = (raw_json.get("biography") or "") if raw_json else ""
@@ -488,7 +501,7 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
             )
     except IntegrityError:
         logger.info(f"Lead already exists (unique dedupe_key): {dedupe_key}")
-        return None
+        return 'skipped'
     return lead
 
 
@@ -513,6 +526,12 @@ def run_scrape_engine(job_id: str):
     try:
         provider = _pick_provider(job.provider_name)
         extract_provider = _select_extract_provider(provider.name) or provider
+
+        if not getattr(extract_provider, 'can_extract', False):
+            raise RuntimeError(
+                f"Provider '{extract_provider.name}' cannot extract; "
+                "enable an extract-capable provider (e.g. brightdata)."
+            )
 
         # Fail fast on missing credentials instead of spending a paid SERP
         # call and recording every URL as a parse failure.
@@ -554,6 +573,7 @@ def run_scrape_engine(job_id: str):
 
         created = 0
         failed = 0
+        skipped = 0
         seen = set()
 
         for item in urls:
@@ -568,6 +588,7 @@ def run_scrape_engine(job_id: str):
                 job.result_summary = {
                     'urls_found': len(urls),
                     'leads_created': created,
+                    'skipped': skipped,
                     'parse_failures': failed,
                     'search_provider': provider.name,
                     'extract_provider': extract_provider.name,
@@ -577,7 +598,10 @@ def run_scrape_engine(job_id: str):
                 return
 
             try:
-                if _lead_from_extracted(extracted, extract_provider.name, job):
+                res = _lead_from_extracted(extracted, extract_provider.name, job)
+                if res == 'skipped':
+                    skipped += 1
+                elif res:
                     created += 1
                 else:
                     failed += 1
@@ -591,6 +615,7 @@ def run_scrape_engine(job_id: str):
         job.result_summary = {
             'urls_found': len(urls),
             'leads_created': created,
+            'skipped': skipped,
             'parse_failures': failed,
             'search_provider': provider.name,
             'extract_provider': extract_provider.name,

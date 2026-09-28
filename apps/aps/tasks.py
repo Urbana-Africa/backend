@@ -373,8 +373,10 @@ def process_scrape_jobs():
         except Exception as e:
             job.refresh_from_db()
             # The engine claims jobs atomically — don't clobber a job that a
-            # concurrent scheduler already ran.
-            if job.status != 'queued':
+            # concurrent scheduler already finished. 'running' here means the
+            # engine's own handler also died (e.g. DB down mid-save) — fail it
+            # so it doesn't get stuck forever.
+            if job.status not in ('queued', 'running'):
                 continue
             job.status = 'failed'
             job.error_message = str(e)

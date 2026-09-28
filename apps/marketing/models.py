@@ -91,7 +91,7 @@ class ScrapeProviderConfig(models.Model):
     priority = models.PositiveSmallIntegerField(default=100)
     cost_per_1k_credits = models.DecimalField(max_digits=10, decimal_places=4, default=0)
     monthly_budget = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    monthly_spend = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    monthly_spend = models.DecimalField(max_digits=12, decimal_places=4, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

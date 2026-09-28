@@ -465,6 +465,9 @@ BRIGHTDATA_ZONE = config("BRIGHTDATA_ZONE", default="")
 BRIGHTDATA_PROXY = config("BRIGHTDATA_PROXY", default="")
 BRIGHTDATA_IG_DATASET_ID = config("BRIGHTDATA_IG_DATASET_ID", default="gd_l1vikfch901nx3by4")
 
+# Concurrent URL extractions per scrape job (I/O-bound threads)
+SCRAPE_MAX_WORKERS = config("SCRAPE_MAX_WORKERS", default=4, cast=int)
+
 # Virtual try-on providers (fal.ai + Replicate are disabled by default; only
 # Gemini is active during testing — see apps/core/services/vton.py)
 FAL_KEY = config("FAL_KEY", default="")

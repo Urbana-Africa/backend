@@ -3,12 +3,14 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
+from functools import partial
 from urllib.parse import urlparse
 from django.utils import timezone
 from django.conf import settings
-from django.db import transaction, IntegrityError
+from django.db import close_old_connections, connection, transaction, IntegrityError
 from django.db.models import F, Q
 
 from ..models import (
@@ -31,6 +33,11 @@ PLATFORM_DOMAINS = {
 }
 
 EMAIL_RE = re.compile(r"[\w.-]+@[\w.-]+\.[\w]{2,}")
+
+
+def _is_platform_domain(domain: str) -> bool:
+    """Suffix-aware match so subdomains (help.instagram.com etc.) count."""
+    return any(domain == d or domain.endswith(f".{d}") for d in PLATFORM_DOMAINS)
 
 
 class BudgetExceeded(Exception):
@@ -435,7 +442,7 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
         conditions.append(Q(instagram_handle__iexact=instagram_handle))
     if brand_norm:
         conditions.append(Q(brand_name__iexact=brand))
-    if domain and domain not in PLATFORM_DOMAINS:
+    if domain and not _is_platform_domain(domain):
         conditions.append(Q(website__icontains=domain) | Q(dedupe_key__icontains=domain))
     if conditions:
         dup_q = conditions[0]
@@ -503,6 +510,29 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
         logger.info(f"Lead already exists (unique dedupe_key): {dedupe_key}")
         return 'skipped'
     return lead
+
+
+def _process_url(job, provider, url: str) -> str:
+    """Extract one URL and upsert the lead. Runs in a worker thread —
+    returns 'created' | 'skipped' | 'failed' | 'budget_stopped'."""
+    try:
+        try:
+            extracted = _get_cached_or_extract(job, provider, url)
+        except BudgetExceeded:
+            return 'budget_stopped'
+        res = _lead_from_extracted(extracted, provider.name, job)
+        if res == 'skipped':
+            return 'skipped'
+        return 'created' if res else 'failed'
+    except Exception as e:
+        # One malformed record shouldn't kill the whole job
+        logger.warning(f"Lead processing failed for {url}: {e}")
+        return 'failed'
+    finally:
+        # Worker threads must release their DB connection — but never close
+        # one that sits inside an atomic block (TestCase txn / ATOMIC_REQUESTS).
+        if not connection.in_atomic_block:
+            close_old_connections()
 
 
 def run_scrape_engine(job_id: str):
@@ -574,41 +604,47 @@ def run_scrape_engine(job_id: str):
         created = 0
         failed = 0
         skipped = 0
+        stopped = False
         seen = set()
-
+        work = []
         for item in urls:
             url = item.get('url', item) if isinstance(item, dict) else item
-            if not url or url in seen:
-                continue
-            seen.add(url)
+            if url and url not in seen:
+                seen.add(url)
+                work.append(url)
 
-            try:
-                extracted = _get_cached_or_extract(job, extract_provider, url)
-            except BudgetExceeded:
-                job.result_summary = {
-                    'urls_found': len(urls),
-                    'leads_created': created,
-                    'skipped': skipped,
-                    'parse_failures': failed,
-                    'search_provider': provider.name,
-                    'extract_provider': extract_provider.name,
-                    'stopped_reason': 'budget_exceeded'
-                }
-                job.save(update_fields=['result_summary'])
-                return
+        # Extraction is I/O-bound (HTTP + optional LLM) — run a small pool.
+        # Budget CAS stays safe across threads; a BudgetExceeded anywhere just
+        # surfaces as a 'budget_stopped' result.
+        max_workers = int(getattr(settings, 'SCRAPE_MAX_WORKERS', 4) or 1)
+        if max_workers > 1 and len(work) > 1:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                outcomes = list(pool.map(partial(_process_url, job, extract_provider), work))
+        else:
+            outcomes = [_process_url(job, extract_provider, u) for u in work]
 
-            try:
-                res = _lead_from_extracted(extracted, extract_provider.name, job)
-                if res == 'skipped':
-                    skipped += 1
-                elif res:
-                    created += 1
-                else:
-                    failed += 1
-            except Exception as e:
-                # One malformed record shouldn't kill the whole job
-                logger.warning(f"Lead extraction failed for {url}: {e}")
+        for res in outcomes:
+            if res == 'created':
+                created += 1
+            elif res == 'skipped':
+                skipped += 1
+            elif res == 'budget_stopped':
+                stopped = True
+            else:
                 failed += 1
+
+        if stopped:
+            job.result_summary = {
+                'urls_found': len(urls),
+                'leads_created': created,
+                'skipped': skipped,
+                'parse_failures': failed,
+                'search_provider': provider.name,
+                'extract_provider': extract_provider.name,
+                'stopped_reason': 'budget_exceeded'
+            }
+            job.save(update_fields=['result_summary'])
+            return
 
         job.status = 'completed'
         job.completed_at = timezone.now()

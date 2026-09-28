@@ -33,6 +33,9 @@ class BrightDataProvider(ScrapeProvider):
         self.instagram_dataset_id = config.get(
             "instagram_dataset_id"
         ) or getattr(settings, "BRIGHTDATA_IG_DATASET_ID", "gd_l1vikfch901nx3by4")
+        # Pages below this many chars of visible text get a second look for
+        # block markers before we pay for Web Unlocker.
+        self.min_content_chars = int(config.get("min_content_chars") or 300)
 
     def _headers(self):
         return {
@@ -146,6 +149,15 @@ class BrightDataProvider(ScrapeProvider):
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
 
+    # Phrases typical of CAPTCHA walls / anti-bot interstitials / JS shells.
+    _BLOCK_MARKERS = (
+        "just a moment", "checking your browser", "verify you are human",
+        "unusual traffic", "access denied", "attention required",
+        "request blocked", "captcha", "cf-chl", "ray id",
+        "enable javascript", "please enable javascript",
+        "you need to enable javascript", "browser check",
+    )
+
     def _direct_fetch(self, url: str) -> Optional[Dict[str, Any]]:
         """Plain HTTP fetch + HTML-to-text — free. Returns None when the page
         looks blocked/empty so the caller can escalate to Web Unlocker."""
@@ -167,10 +179,16 @@ class BrightDataProvider(ScrapeProvider):
             tag.decompose()
         text = soup.get_text(separator=" ", strip=True)
 
-        # A real page has substance; tiny bodies are usually block/CAPTCHA walls.
-        if len(text) < 300:
-            logger.info(f"Direct fetch for {url} returned thin content ({len(text)} chars) — treating as blocked")
-            return None
+        # Escalate on real signals only: block/CAPTCHA walls and effectively
+        # empty JS-shell pages. A small page with real content is fine.
+        if len(text) < self.min_content_chars:
+            haystack = f"{text} {resp.text[:3000]}".lower()
+            if any(m in haystack for m in self._BLOCK_MARKERS):
+                logger.info(f"Direct fetch for {url} hit a block page — escalating")
+                return None
+            if len(text) < 40:
+                logger.info(f"Direct fetch for {url} returned empty shell ({len(text)} chars) — escalating")
+                return None
 
         return {
             "url": url,

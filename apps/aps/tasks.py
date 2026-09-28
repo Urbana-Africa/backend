@@ -263,12 +263,18 @@ def send_delayed_designer_emails():
             continue
         if not has_fewer_than_one_product(designer):
             continue
+        # Atomic claim — with multiple scheduler workers, only one wins the
+        # update and sends; the rest see 0 rows and skip.
+        claimed = Designer.objects.filter(
+            id=designer.id, upload_reminder_sent_at__isnull=True
+        ).update(upload_reminder_sent_at=now)
+        if not claimed:
+            continue
         try:
             send_designer_product_upload_reminder(designer.user)
-            designer.upload_reminder_sent_at = now
-            designer.save(update_fields=["upload_reminder_sent_at"])
         except Exception as e:
             logger.error("[SCHEDULED] Designer 24h reminder failed: %s", e)
+            Designer.objects.filter(id=designer.id).update(upload_reminder_sent_at=None)
 
     # ── 72-hour reminder ───────────────────────────────────────────────
     # Window: 72h–96h after signup. Only sent once per designer.
@@ -284,12 +290,16 @@ def send_delayed_designer_emails():
             continue
         if not has_fewer_than_one_product(designer):
             continue
+        claimed = Designer.objects.filter(
+            id=designer.id, storefront_reminder_sent_at__isnull=True
+        ).update(storefront_reminder_sent_at=now)
+        if not claimed:
+            continue
         try:
             send_designer_storefront_reminder(designer.user)
-            designer.storefront_reminder_sent_at = now
-            designer.save(update_fields=["storefront_reminder_sent_at"])
         except Exception as e:
             logger.error("[SCHEDULED] Designer storefront reminder failed: %s", e)
+            Designer.objects.filter(id=designer.id).update(storefront_reminder_sent_at=None)
 
     # ── 7-day final reminder ───────────────────────────────────────────
     # Window: 7d–9d after signup. A single last-chance nudge for designers
@@ -306,12 +316,16 @@ def send_delayed_designer_emails():
             continue
         if not has_fewer_than_one_product(designer):
             continue
+        claimed = Designer.objects.filter(
+            id=designer.id, final_reminder_sent_at__isnull=True
+        ).update(final_reminder_sent_at=now)
+        if not claimed:
+            continue
         try:
             send_designer_storefront_reminder(designer.user)
-            designer.final_reminder_sent_at = now
-            designer.save(update_fields=["final_reminder_sent_at"])
         except Exception as e:
             logger.error("[SCHEDULED] Designer 7-day reminder failed: %s", e)
+            Designer.objects.filter(id=designer.id).update(final_reminder_sent_at=None)
 
 
 def send_delayed_customer_emails():
@@ -335,12 +349,16 @@ def send_delayed_customer_emails():
     for customer in customers_no_order:
         has_order = Order.objects.filter(customer=customer).exists()
         if not has_order:
+            claimed = Customer.objects.filter(
+                id=customer.id, browse_reminder_sent_at__isnull=True
+            ).update(browse_reminder_sent_at=now)
+            if not claimed:
+                continue
             try:
                 send_customer_browse_reminder(customer.user)
-                customer.browse_reminder_sent_at = now
-                customer.save(update_fields=["browse_reminder_sent_at"])
             except Exception as e:
                 logger.error("[SCHEDULED] Customer browse reminder failed: %s", e)
+                Customer.objects.filter(id=customer.id).update(browse_reminder_sent_at=None)
 
     # 2-3 days after delivery: review request
     two_days_after = now - timedelta(days=2)
@@ -353,12 +371,16 @@ def send_delayed_customer_emails():
         review_request_sent_at__isnull=True,
     )
     for item in delivered_items:
+        claimed = OrderItem.objects.filter(
+            item_id=item.item_id, review_request_sent_at__isnull=True
+        ).update(review_request_sent_at=now)
+        if not claimed:
+            continue
         try:
             send_customer_review_request(item)
-            item.review_request_sent_at = now
-            item.save(update_fields=["review_request_sent_at"])
         except Exception as e:
             logger.error("[SCHEDULED] Customer review request failed: %s", e)
+            OrderItem.objects.filter(item_id=item.item_id).update(review_request_sent_at=None)
 
 
 def process_scrape_jobs():

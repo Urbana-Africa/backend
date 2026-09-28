@@ -214,6 +214,16 @@ def _select_extract_provider(search_provider_name: str):
     return None
 
 
+def _first_url(value) -> str:
+    """Bright Data sometimes returns external_url as a list of links or
+    external_urls as [{url, title}] — normalise to a single URL string."""
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    if isinstance(value, dict):
+        value = value.get("url", "")
+    return str(value or "")
+
+
 def _looks_like_instagram_profile(raw_json) -> bool:
     return isinstance(raw_json, dict) and (
         "account" in raw_json
@@ -448,7 +458,9 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
                 email=email,
                 phone_number=phone,
                 social_media_links=socials,
-                website=(raw_json.get("external_url") or url)[:200],
+                website=(_first_url(raw_json.get("external_url"))
+                         or _first_url(raw_json.get("external_urls"))
+                         or url)[:200],
                 instagram_handle=instagram_handle,
                 country_code=(data.get("country_code") or "")[:10],
                 followers_count=followers,
@@ -564,9 +576,14 @@ def run_scrape_engine(job_id: str):
                 job.save(update_fields=['result_summary'])
                 return
 
-            if _lead_from_extracted(extracted, extract_provider.name, job):
-                created += 1
-            else:
+            try:
+                if _lead_from_extracted(extracted, extract_provider.name, job):
+                    created += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                # One malformed record shouldn't kill the whole job
+                logger.warning(f"Lead extraction failed for {url}: {e}")
                 failed += 1
 
         job.status = 'completed'

@@ -698,8 +698,13 @@ class DesignerProfileViewSet(DesignerBaseViewSet):
             "data": serializer.data
         })
 
-    @action(detail=False, methods=["post", "put"], url_path="setup")
+    @action(detail=False, methods=["post", "put"], url_path="setup", permission_classes=[IsAuthenticated])
     def setup_profile(self, request):
+        # Users who signed up before user_type was sent (or joined via the
+        # customer flow) land here as 'customer' — promote them to designer.
+        if request.user.user_type not in ("designer", "admin"):
+            request.user.user_type = "designer"
+            request.user.save(update_fields=["user_type"])
         profile, created = Designer.objects.get_or_create(user=request.user)
         # ================= FILE HANDLING =================
         lookbook_files = request.FILES.getlist('lookbook_files[]')

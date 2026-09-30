@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import re
 import threading
 from django.conf import settings
 from django.core.cache import cache
@@ -3274,6 +3275,17 @@ class SubscribeView(APIView):
         )
 
 
+def _strip_markdown(text):
+    """Remove markdown formatting (bold/italic/headings/bullets) from AI output."""
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.*?)__", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"\*(.*?)\*", r"\1", text)
+    text = re.sub(r"_(.*?)_", r"\1", text)
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.MULTILINE)
+    return text.strip()
+
+
 class AiSuggestDescriptionView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -3302,23 +3314,25 @@ class AiSuggestDescriptionView(APIView):
             client = genai.Client(api_key=gemini_key)
             model_name = "gemini-2.5-flash"
 
+            plain_text_rule = " Write plain text only: no markdown, no headings, no bullet points, no asterisks."
+
             if desc_type == "product":
-                prompt = f"Write a captivating product description for a fashion item named '{name}'. Focus on celebrating African craftsmanship, premium quality, and style versatility. Keep it under 100 words and make it engaging for international buyers."
+                prompt = f"Write a captivating product description for a fashion item named '{name}'. Focus on celebrating African craftsmanship, premium quality, and style versatility. Keep it under 100 words and make it engaging for international buyers.{plain_text_rule}"
             elif desc_type == "promotion":
-                prompt = f"Write an exciting promotion description for a marketing campaign titled '{title}' with a discount of '{discount}%'. Keep it under 60 words and create a sense of urgency."
+                prompt = f"Write an exciting promotion description for a marketing campaign titled '{title}' with a discount of '{discount}%'. Keep it under 60 words and create a sense of urgency.{plain_text_rule}"
             elif desc_type == "brand_story":
                 prompt = f"Write a captivating short brand story and bio for a fashion brand named '{name}'. "
                 if tagline:
                     prompt += f"The brand's tagline is '{tagline}'. "
-                prompt += "Focus on celebrating African fashion, unique design identity, and the brand's vision. Keep it engaging, professional, and under 150 words."
+                prompt += f"Focus on celebrating African fashion, unique design identity, and the brand's vision. Keep it engaging, professional, and under 150 words.{plain_text_rule}"
             else:
-                prompt = f"Write a concise support ticket description explaining an issue with the subject '{subject}' and category '{category}'. Write it from a designer's perspective seeking help from support. Keep it under 60 words."
+                prompt = f"Write a concise support ticket description explaining an issue with the subject '{subject}' and category '{category}'. Write it from a designer's perspective seeking help from support. Keep it under 60 words.{plain_text_rule}"
 
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
             )
-            suggestion = response.text.strip()
+            suggestion = _strip_markdown(response.text)
             return Response({"status": "success", "suggestion": suggestion})
         except Exception as e:
             import logging

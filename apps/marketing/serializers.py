@@ -4,6 +4,8 @@ from .models import (
     EmailTemplate,
     EmailCampaign,
     EmailLog,
+    LeadQualificationDecision,
+    LeadSuppression,
     ScrapeProviderConfig,
     ScrapeJob,
     ScrapeCall,
@@ -13,6 +15,12 @@ class DesignerLeadSerializer(serializers.ModelSerializer):
     class Meta:
         model = DesignerLead
         fields = '__all__'
+        read_only_fields = (
+            'qualification_type', 'qualification_reason', 'qualified_at',
+            'reviewed_by', 'assigned_to', 'converted_user',
+            'dedupe_key', 'provenance', 'confidence_score',
+            'date_discovered', 'date_updated', 'last_enriched_at',
+        )
 
 class EmailTemplateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -21,9 +29,25 @@ class EmailTemplateSerializer(serializers.ModelSerializer):
 
 class EmailCampaignSerializer(serializers.ModelSerializer):
     target_leads_details = DesignerLeadSerializer(source='target_leads', many=True, read_only=True)
-    
+    template_name = serializers.CharField(source='template.name', read_only=True, default=None)
+
     class Meta:
         model = EmailCampaign
+        fields = '__all__'
+        read_only_fields = (
+            'status', 'created_by', 'approved_by', 'approved_at',
+            'sent_count', 'failed_count', 'skipped_count',
+        )
+
+class LeadSuppressionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeadSuppression
+        fields = '__all__'
+        read_only_fields = ('created_by', 'created_at')
+
+class LeadQualificationDecisionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LeadQualificationDecision
         fields = '__all__'
 
 class EmailLogSerializer(serializers.ModelSerializer):

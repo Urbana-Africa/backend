@@ -453,6 +453,7 @@ class SupportTicketSerializer(serializers.ModelSerializer):
     submitter_email = serializers.SerializerMethodField()
     messages = TicketMessageSerializer(many=True, read_only=True)
     user_type = serializers.SerializerMethodField()
+    allowed_transitions = serializers.SerializerMethodField()
 
     class Meta:
         model = SupportTicket
@@ -477,6 +478,7 @@ class SupportTicketSerializer(serializers.ModelSerializer):
             "user_type",
             "messages",
             "assigned_agents",
+            "allowed_transitions",
             # write-only guest fields (for unauthenticated submissions)
             "guest_name",
             "guest_email",
@@ -496,6 +498,11 @@ class SupportTicketSerializer(serializers.ModelSerializer):
             }
             for agent in obj.assigned_agents.all()
         ]
+
+    def get_allowed_transitions(self, obj):
+        """SUP-02 — states this case may legally move to next."""
+        from apps.administrator.cases import allowed_transitions
+        return allowed_transitions(obj)
 
     def get_submitter_name(self, obj):
         if obj.user:

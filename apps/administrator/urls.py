@@ -64,6 +64,16 @@ router.register(r"tickets", AdminTicketViewSet, basename="admin-tickets")
 router.register(r"newsletters", AdminNewsletterViewSet, basename="admin-newsletters")
 router.register(r"newsletter-subscribers", AdminNewsletterSubscriberViewSet, basename="admin-newsletter-subscribers")
 
+# =====================================================
+# GOVERNANCE — audit & data health (Phase 0)
+# =====================================================
+router.register(r"audit-events", AuditEventViewSet, basename="admin-audit-events")
+router.register(r"data-quality", DataQualityCheckViewSet, basename="admin-data-quality")
+router.register(r"reconciliation-runs", ReconciliationRunViewSet, basename="admin-reconciliation-runs")
+router.register(r"reconciliation-exceptions", ReconciliationExceptionViewSet, basename="admin-reconciliation-exceptions")
+router.register(r"work-items", WorkItemViewSet, basename="admin-work-items")
+router.register(r"approvals", ApprovalRequestViewSet, basename="admin-approvals")
+
 urlpatterns = router.urls + [
     # Launch / Waitlist Admin Endpoints
     path("launch/", include("apps.launch.admin_urls")),

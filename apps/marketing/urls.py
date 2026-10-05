@@ -5,18 +5,23 @@ from .views import (
     EmailTemplateViewSet,
     EmailCampaignViewSet,
     EmailLogViewSet,
+    LeadSuppressionViewSet,
+    LeadQualificationDecisionViewSet,
     ScrapeProviderConfigViewSet,
     ScrapeJobViewSet,
     ScrapeCallViewSet,
     scrape_leads_placeholder,
     funnel_stats,
 )
+from .webhooks import ResendWebhookView
 
 router = DefaultRouter()
 router.register(r'leads', DesignerLeadViewSet)
 router.register(r'templates', EmailTemplateViewSet)
 router.register(r'campaigns', EmailCampaignViewSet)
 router.register(r'logs', EmailLogViewSet)
+router.register(r'suppressions', LeadSuppressionViewSet)
+router.register(r'qualification-decisions', LeadQualificationDecisionViewSet)
 router.register(r'scrape-providers', ScrapeProviderConfigViewSet)
 router.register(r'scrape-jobs', ScrapeJobViewSet)
 router.register(r'scrape-calls', ScrapeCallViewSet)
@@ -25,4 +30,5 @@ urlpatterns = [
     path('', include(router.urls)),
     path('scrape/', scrape_leads_placeholder, name='scrape-leads'),
     path('funnel-stats/', funnel_stats, name='funnel-stats'),
+    path('webhooks/resend/', ResendWebhookView.as_view(), name='resend-webhook'),
 ]

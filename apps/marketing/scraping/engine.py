@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from django.utils import timezone
 from django.conf import settings
 from django.db import close_old_connections, connection, transaction, IntegrityError
-from django.db.models import F, Q
+from django.db.models import Count, F, Q
 
 from ..models import (
     DesignerLead,
@@ -21,6 +21,12 @@ from ..models import (
     ScrapeCache,
     LeadEnrichment,
     LeadSuppression,
+    LeadQualificationDecision,
+)
+from ..qualification import (
+    HARD_REJECT_TYPES,
+    classify_instagram_profile,
+    llm_result_qualification,
 )
 from .registry import get_provider
 
@@ -34,46 +40,10 @@ PLATFORM_DOMAINS = {
 
 EMAIL_RE = re.compile(r"[\w.-]+@[\w.-]+\.[\w]{2,}")
 
-# Search engines rank directory-style accounts highly for broad location queries.
-# Qualification must happen on the extracted profile, before a lead is persisted.
-AGGREGATOR_RE = re.compile(
-    r"\b(?:directory|community|network|association|group|forum|marketplace|"
-    r"discover designers|find designers|top designers|best designers|"
-    r"fashion designers\b|bridal designers\b|"
-    r"designers in|fashion designers in|list of designers|featuring designers|"
-    r"promoting designers|connect(?:ing)? you (?:with|to) designers)\b", re.I
-)
-GENERIC_NAME_RE = re.compile(
-    r"^(?:(?:best|top|leading|affordable)\s+)?(?:fashion|bridal|clothing)\s+"
-    r"designers?\s+(?:in|at|from)\s+.+$|^(?:lagos|nigeria|abuja)\s+"
-    r"(?:fashion|bridal)\s+designers?$", re.I
-)
-DIRECT_WORK_RE = re.compile(
-    r"\b(?:bespoke|couture|atelier|tailor(?:ing)?|made.to.order|custom.made|"
-    r"ready.to.wear|rtw|bridalwear|wedding dresses|fashion house|"
-    r"clothing brand|fashion label|we (?:make|design|sew|create)|"
-    r"shop (?:our|the) collection|order (?:your|a) dress)\b", re.I
-)
-
 
 def _is_direct_instagram_designer(item: dict) -> bool:
-    """Require a distinct designer identity and evidence of its own work."""
-    name = str(item.get('full_name') or '').strip()
-    handle = str(item.get('account') or '').strip().lstrip('@')
-    bio = str(item.get('biography') or '').strip()
-    category = str(item.get('business_category_name') or item.get('category_name')
-                   or item.get('category') or '')
-    identity = f'{name} {handle.replace("_", " ").replace(".", " ")}'
-    if AGGREGATOR_RE.search(f'{identity} {bio} {category}'):
-        return False
-    if GENERIC_NAME_RE.match(name) and not DIRECT_WORK_RE.search(bio):
-        return False
-    if not (DIRECT_WORK_RE.search(bio) or re.search(
-        r'\b(?:fashion designer|clothing designer|bridal designer|fashion brand)\b',
-        f'{bio} {category}', re.I
-    )):
-        return False
-    return bool(name or handle)
+    """Kept for callers/tests — delegates to the qualification classifier."""
+    return classify_instagram_profile(item)[0] == 'direct_designer'
 
 
 def _is_platform_domain(domain: str) -> bool:
@@ -143,11 +113,17 @@ def _is_suppressed(brand_name: str, email: str, url: str) -> bool:
     if email and LeadSuppression.objects.filter(email__iexact=email).exists():
         return True
     if url:
-        domain = urlparse(url).netloc.lower()
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
         if domain.startswith("www."):
             domain = domain[4:]
         if domain and LeadSuppression.objects.filter(domain__iexact=domain).exists():
             return True
+        # Instagram handles are a first-class suppression key.
+        if "instagram.com" in domain:
+            handle = (parsed.path.strip("/").split("/")[0] or "").lstrip("@").lower()
+            if handle and LeadSuppression.objects.filter(handle__iexact=handle).exists():
+                return True
     return False
 
 
@@ -402,9 +378,9 @@ def _parse_extracted_text(job: ScrapeJob, text: str, url: str):
             output_text = output_text[:-3]
 
         data = json.loads(output_text.strip())
-        if data.get("is_direct_designer") is not True or not data.get("brand_name"):
-            return None
-        return data
+        # Return whatever the model extracted — the caller classifies it so
+        # rejected candidates still produce a qualification decision record.
+        return data if isinstance(data, dict) else None
     except Exception as e:
         duration = int(time.time() * 1000) - start
         try:
@@ -424,6 +400,24 @@ def _parse_extracted_text(job: ScrapeJob, text: str, url: str):
         return None
 
 
+def _record_rejection(job: ScrapeJob, url: str, name: str,
+                      decision: str, decided_by: str, reasons: list):
+    """Persist a qualification decision for a candidate rejected before it
+    could become a lead — keeps the qualified-per-100 yield honest."""
+    try:
+        LeadQualificationDecision.objects.create(
+            lead=None,
+            job=job,
+            candidate_name=(name or '')[:255],
+            candidate_url=(url or '')[:200],
+            decision=decision,
+            decided_by=decided_by,
+            reasons=reasons,
+        )
+    except Exception as e:
+        logger.warning(f"Could not record rejection for {url}: {e}")
+
+
 def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
     if not extracted:
         return None
@@ -431,15 +425,31 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
     raw_json = extracted.get("json") or {}
     text = extracted.get("text") or extracted.get("markdown") or extracted.get("html", "")
 
-    if _looks_like_instagram_profile(raw_json) and not _is_direct_instagram_designer(raw_json):
+    is_ig = _looks_like_instagram_profile(raw_json)
+    if is_ig:
+        qtype, qreasons = classify_instagram_profile(raw_json)
+        decided_by = 'rules'
+        candidate_name = raw_json.get('full_name') or raw_json.get('account') or ''
+    else:
+        qtype, qreasons = 'unclassified', []
+        decided_by = 'llm'
+        candidate_name = ''
+
+    if is_ig and qtype in HARD_REJECT_TYPES:
+        _record_rejection(job, url, candidate_name, qtype, decided_by, qreasons)
         return 'skipped'
 
     # Structured Instagram records are mapped directly; Gemini is only used
     # to parse unstructured page text.
-    used_gemini = not _looks_like_instagram_profile(raw_json)
+    used_gemini = not is_ig
     if used_gemini:
-        data = _parse_extracted_text(job, text, url) or {}
+        data = _parse_extracted_text(job, text, url)
         if not data:
+            return 'skipped'
+        qtype, qreasons = llm_result_qualification(data)
+        candidate_name = data.get('brand_name') or ''
+        if qtype in HARD_REJECT_TYPES:
+            _record_rejection(job, url, candidate_name, qtype, decided_by, qreasons)
             return 'skipped'
     else:
         data = _lead_data_from_instagram(raw_json, url)
@@ -516,7 +526,9 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
     if url:
         confidence += 0.1
 
-    needs_review = not email and not phone
+    # Uncertain profiles are persisted but land in the review queue instead
+    # of becoming outreach candidates.
+    needs_review = (not email and not phone) or qtype == 'uncertain'
 
     try:
         with transaction.atomic():
@@ -540,8 +552,10 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
                     'fetched_at': timezone.now().isoformat(),
                 },
                 source=f"{source_name} / Gemini" if used_gemini else source_name,
-                status="Discovered",
+                status="Needs Review" if qtype == 'uncertain' else "Discovered",
                 needs_review=needs_review,
+                qualification_type=qtype,
+                qualification_reason='; '.join(qreasons)[:1000],
                 dedupe_key=dedupe_key,
                 last_enriched_at=timezone.now(),
             )
@@ -553,6 +567,14 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
                 extraction_source=source_name,
                 confidence=confidence,
                 enrichment_status='completed',
+            )
+            LeadQualificationDecision.objects.create(
+                lead=lead,
+                job=job,
+                decision=qtype,
+                decided_by=decided_by,
+                reasons=qreasons,
+                confidence=confidence,
             )
     except IntegrityError:
         logger.info(f"Lead already exists (unique dedupe_key): {dedupe_key}")
@@ -681,6 +703,16 @@ def run_scrape_engine(job_id: str):
             else:
                 failed += 1
 
+        # Rejected candidates by qualification type — feeds the
+        # qualified-per-100-candidates yield metric.
+        rejections = dict(
+            LeadQualificationDecision.objects
+            .filter(job=job, lead__isnull=True)
+            .values_list('decision')
+            .annotate(n=Count('id'))
+            .values_list('decision', 'n')
+        )
+
         if stopped:
             job.result_summary = {
                 'urls_found': len(urls),
@@ -689,6 +721,7 @@ def run_scrape_engine(job_id: str):
                 'parse_failures': failed,
                 'search_provider': provider.name,
                 'extract_provider': extract_provider.name,
+                'rejections': rejections,
                 'stopped_reason': 'budget_exceeded'
             }
             job.save(update_fields=['result_summary'])
@@ -703,6 +736,7 @@ def run_scrape_engine(job_id: str):
             'parse_failures': failed,
             'search_provider': provider.name,
             'extract_provider': extract_provider.name,
+            'rejections': rejections,
         }
         job.save(update_fields=['status', 'completed_at', 'result_summary'])
 

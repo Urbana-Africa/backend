@@ -89,6 +89,7 @@ class User(AbstractUser, PermissionsMixin):
         ('product_manager', _('Product Manager')),
         ('marketer', _('Marketer')),
         ('c_level', _('C-Level Executive')),
+        ('finance', _('Finance Manager')),
     )
 
     admin_role = models.CharField(

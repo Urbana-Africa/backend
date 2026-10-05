@@ -5,10 +5,34 @@ from apps.utils.uuid_generator import generate_custom_id
 class DesignerLead(models.Model):
     STATUS_CHOICES = (
         ('Discovered', 'Discovered'),
+        ('Needs Review', 'Needs Review'),
+        ('Qualified', 'Qualified'),
+        ('Assigned', 'Assigned'),
         ('Contacted', 'Contacted'),
+        ('Replied', 'Replied'),
+        ('Meeting', 'Meeting'),
+        ('Applied', 'Applied'),
+        ('Approved', 'Approved'),
+        ('Activated', 'Activated'),
+        # Legacy stages kept for historical rows
         ('In Discussion', 'In Discussion'),
         ('Signed Up', 'Signed Up'),
         ('Rejected', 'Rejected'),
+        ('Suppressed', 'Suppressed'),
+    )
+
+    # What kind of account this lead actually is. Directory/community/
+    # aggregator/generic accounts must never become outreach targets.
+    QUALIFICATION_CHOICES = (
+        ('unclassified', 'Unclassified'),
+        ('direct_designer', 'Direct Designer'),
+        ('directory', 'Directory'),
+        ('community', 'Community / Group'),
+        ('aggregator', 'Aggregator / Ranking'),
+        ('agency', 'Agency'),
+        ('generic_account', 'Generic Account'),
+        ('uncertain', 'Uncertain'),
+        ('not_a_lead', 'Not a Lead'),
     )
 
     id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
@@ -33,6 +57,27 @@ class DesignerLead(models.Model):
         null=True,
         blank=True,
         related_name='reviewed_designer_leads'
+    )
+    qualification_type = models.CharField(
+        max_length=30, choices=QUALIFICATION_CHOICES,
+        default='unclassified', db_index=True,
+    )
+    qualification_reason = models.TextField(blank=True, default='')
+    qualified_at = models.DateTimeField(null=True, blank=True)
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_designer_leads'
+    )
+    merged_into = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='merged_duplicates',
+        help_text="Set when this duplicate was consolidated into another lead.",
     )
     dedupe_key = models.CharField(max_length=255, blank=True, null=True, unique=True, db_index=True)
     last_enriched_at = models.DateTimeField(null=True, blank=True)
@@ -60,11 +105,45 @@ class EmailTemplate(models.Model):
         return self.name
 
 class EmailCampaign(models.Model):
+    STATUS_CHOICES = (
+        ('draft', 'Draft'),
+        ('approved', 'Approved'),
+        ('sending', 'Sending'),
+        ('paused', 'Paused'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    )
+
     id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
     name = models.CharField(max_length=255)
     template = models.ForeignKey(EmailTemplate, on_delete=models.SET_NULL, null=True)
-    target_leads = models.ManyToManyField(DesignerLead, related_name='campaigns')
+    target_leads = models.ManyToManyField(DesignerLead, related_name='campaigns', blank=True)
     is_active = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    # Snapshot of message content so broadcasts and ad-hoc campaigns can send
+    # without a stored template; falls back to template fields when blank.
+    subject = models.CharField(max_length=255, blank=True, default='')
+    html_body = models.TextField(blank=True, default='')
+    # Segment definition used when target_leads is empty, e.g. {"search": "lagos"}.
+    # Empty filter = all qualified leads.
+    audience_filter = models.JSONField(default=dict, blank=True)
+    send_cap = models.PositiveIntegerField(
+        default=0,
+        help_text="Maximum successful sends. 0 = no cap.",
+    )
+    scheduled_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='created_campaigns',
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='approved_campaigns',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    sent_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    skipped_count = models.PositiveIntegerField(default=0)
     date_created = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -75,7 +154,11 @@ class EmailLog(models.Model):
     campaign = models.ForeignKey(EmailCampaign, on_delete=models.SET_NULL, null=True, blank=True)
     lead = models.ForeignKey(DesignerLead, on_delete=models.CASCADE)
     subject = models.CharField(max_length=255)
-    status = models.CharField(max_length=50, choices=(('Sent', 'Sent'), ('Failed', 'Failed'), ('Opened', 'Opened')))
+    status = models.CharField(max_length=50, choices=(
+        ('Sent', 'Sent'), ('Failed', 'Failed'), ('Opened', 'Opened'),
+        ('Suppressed', 'Suppressed'), ('Skipped', 'Skipped'),
+    ))
+    reason = models.CharField(max_length=255, blank=True, default='')
     sent_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -184,12 +267,76 @@ class LeadEnrichment(models.Model):
 
 class LeadSuppression(models.Model):
     """Leads that should never be scraped or emailed again."""
+    REASON_CHOICES = (
+        ('manual', 'Manual'),
+        ('unsubscribe', 'Unsubscribe'),
+        ('bounce', 'Bounce'),
+        ('complaint', 'Complaint'),
+        ('rejected', 'Rejected'),
+        ('request', 'Data Subject Request'),
+    )
+
     id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
     email = models.EmailField(blank=True, default='', db_index=True)
     domain = models.CharField(max_length=255, blank=True, default='', db_index=True)
+    handle = models.CharField(max_length=100, blank=True, default='', db_index=True)
     brand_name = models.CharField(max_length=255, db_index=True)
-    reason = models.CharField(max_length=50, default='manual')
+    reason = models.CharField(max_length=50, choices=REASON_CHOICES, default='manual')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='lead_suppressions'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = [['brand_name', 'domain']]
+
+
+class LeadQualificationDecision(models.Model):
+    """Append-only audit of automated and human qualification outcomes.
+
+    ``lead`` is null for candidates rejected at ingestion time (before a
+    DesignerLead row exists); ``candidate_*`` fields preserve what was seen.
+    """
+    DECISION_CHOICES = DesignerLead.QUALIFICATION_CHOICES[1:] + (
+        ('qualified', 'Qualified (human)'),
+        ('rejected', 'Rejected (human)'),
+        ('suppressed', 'Suppressed (human)'),
+        ('merged', 'Merged (human)'),
+    )
+    DECIDED_BY_CHOICES = (
+        ('rules', 'Rule classifier'),
+        ('llm', 'LLM'),
+        ('human', 'Human'),
+    )
+
+    id = models.CharField(primary_key=True, max_length=50, default=generate_custom_id, editable=False)
+    lead = models.ForeignKey(
+        DesignerLead, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='qualification_decisions',
+    )
+    job = models.ForeignKey(
+        'ScrapeJob', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='qualification_decisions',
+    )
+    candidate_name = models.CharField(max_length=255, blank=True, default='')
+    candidate_url = models.URLField(blank=True, default='')
+    decision = models.CharField(max_length=30, choices=DECISION_CHOICES)
+    decided_by = models.CharField(max_length=20, choices=DECIDED_BY_CHOICES)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='lead_qualification_decisions',
+    )
+    reasons = models.JSONField(default=list, blank=True)
+    confidence = models.FloatField(default=0.0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        target = self.lead_id or self.candidate_name or self.candidate_url
+        return f"{target}: {self.decision} ({self.decided_by})"

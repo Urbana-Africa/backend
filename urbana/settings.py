@@ -34,6 +34,12 @@ else:
     DESIGNER_URL = config("DESIGNER_URL", default="https://designer.urbanaafrica.com")
     ADMIN_URL = config("ADMIN_URL", default="https://admin.urbanaafrica.com")
 
+# Public API base used inside outbound links (e.g. marketing unsubscribe).
+API_URL = config(
+    "API_URL",
+    default="https://api.urbanaafrica.com" if IS_PRODUCTION else "http://127.0.0.1:8000",
+)
+
 # Canonical support / admin notification inboxes (never hardcode these in app code)
 SUPPORT_EMAIL = config("SUPPORT_EMAIL", default="support@urbanaafrica.com")
 ADMIN_NOTIFY_EMAIL = config("ADMIN_NOTIFY_EMAIL", default="admin@urbanaafrica.com")
@@ -436,6 +442,19 @@ RESEND_SMTP_PORT = 587
 RESEND_SMTP_USERNAME = config("RESEND_USERNAME", default="resend")
 RESEND_SMTP_HOST = "smtp.resend.com"
 RESEND_API_KEY = config("RESEND_API_KEY")
+# Resend delivery webhook (svix) signing secret — empty disables event
+# ingestion: the endpoint refuses unsigned events until configured.
+RESEND_WEBHOOK_SECRET = config("RESEND_WEBHOOK_SECRET", default="")
+# Audiences with more eligible leads than this require a different marketer
+# to approve than the creator (maker-checker for large sends).
+CAMPAIGN_MAKER_CHECKER_THRESHOLD = config(
+    "CAMPAIGN_MAKER_CHECKER_THRESHOLD", default=100, cast=int
+)
+# Manual payouts above this amount need a second approver (maker-checker;
+# the requester can never be the approver). USD-denominated.
+PAYOUT_DUAL_APPROVAL_THRESHOLD = config(
+    "PAYOUT_DUAL_APPROVAL_THRESHOLD", default=1000, cast=int
+)
 SMTP_USER = config("SMTP_USER")
 SMTP_HOST = config("SMTP_HOST")
 SMTP_PASSWORD = config("SMTP_PASSWORD")

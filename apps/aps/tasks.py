@@ -407,6 +407,53 @@ def process_scrape_jobs():
             logger.exception("[SCHEDULED] Scrape job %s failed", job.id)
 
 
+def process_email_campaigns():
+    """Pick up sending campaigns and process one bounded batch each.
+
+    Scheduled/approved campaigns flip to 'sending' when their time arrives;
+    progress, pause and idempotency all live on the EmailCampaign/EmailLog
+    rows so a restart never re-sends.
+    """
+    from apps.marketing.campaigns import process_due_campaigns
+    try:
+        process_due_campaigns()
+    except Exception:
+        logger.exception("[SCHEDULED] Email campaign sweep failed")
+
+
+def run_data_health_checks():
+    """Daily data-health sweep (PRD Phase 0).
+
+    Reconciles paid payments against orders, compares purchase events to
+    orders, and records dead-letter/webhook backlogs + metric staleness as
+    DataQualityCheck rows. Results are admin-visible via /manage/data-quality
+    and /manage/reconciliation-runs — never silently logged and dropped.
+    """
+    from apps.administrator.checks import run_all_checks
+    try:
+        summary = run_all_checks()
+        logger.info("[SCHEDULED] Data health checks: %s", summary)
+    except Exception:
+        logger.exception("[SCHEDULED] Data health checks failed")
+
+
+def sync_work_queues():
+    """Re-derive the unified work queue from source records (Phase 1).
+
+    Creates items for new actionable conditions, refreshes titles/priority/
+    source status on live ones, and auto-closes items whose condition
+    cleared. Runs every few minutes so staff queues stay current without
+    a human refresh.
+    """
+    from apps.administrator.queues import sync_work_queues as _sync
+    try:
+        stats = _sync()
+        if stats.get('created') or stats.get('auto_closed'):
+            logger.info("[SCHEDULED] Work-queue sync: %s", stats)
+    except Exception:
+        logger.exception("[SCHEDULED] Work-queue sync failed")
+
+
 def reset_monthly_scrape_spend():
     """Reset per-provider spend counters at the start of each month so the
     monthly_budget cap is actually monthly (not lifetime)."""

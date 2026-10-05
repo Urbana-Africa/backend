@@ -1298,10 +1298,27 @@ class SupportTicketReplyView(APIView):
         if not body:
             return Response({"status": "error", "message": "Message body is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Admin can update status alongside reply
-        if is_admin and "status" in request.data:
-            ticket.status = request.data["status"]
-            ticket.save(update_fields=["status"])
+        # Admin can update status alongside reply — validated through the
+        # SUP-02 transition map; the reply body serves as the reason.
+        if "status" in request.data:
+            from apps.administrator.capabilities import has_capability
+            from apps.administrator.cases import apply_ticket_transition
+            from apps.administrator.audit import record_audit
+            if not has_capability(request.user, 'support.manage'):
+                return Response({"status": "error", "message": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+            prior = ticket.status
+            err = apply_ticket_transition(
+                ticket, request.data["status"],
+                reason=(request.data.get("reason") or body).strip(),
+                evidence=request.data.get("evidence", ""),
+            )
+            if err:
+                return Response(err, status=status.HTTP_400_BAD_REQUEST)
+            record_audit(
+                request=request, action='support.ticket_status', entity=ticket,
+                before={'status': prior}, after={'status': ticket.status},
+                reason=(request.data.get("reason") or body).strip()[:500],
+            )
 
         msg = TicketMessage.objects.create(
             ticket=ticket,

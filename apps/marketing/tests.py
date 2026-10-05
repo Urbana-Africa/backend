@@ -1,12 +1,28 @@
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from rest_framework.test import APIClient
 
+from apps.marketing.campaigns import process_campaign_batch, process_due_campaigns
+from apps.marketing.eligibility import (
+    find_suppression,
+    lead_contactable,
+    lead_from_unsubscribe_token,
+    record_suppression,
+    unsubscribe_token_for,
+)
+from apps.marketing.email_services import compile_and_send_lead_email
 from apps.marketing.models import (
-    DesignerLead, LeadEnrichment, LeadSuppression,
+    DesignerLead, EmailCampaign, EmailLog, LeadEnrichment,
+    LeadQualificationDecision, LeadSuppression,
     ScrapeCall, ScrapeCache, ScrapeJob, ScrapeProviderConfig,
+)
+from apps.marketing.qualification import (
+    classify_existing_lead,
+    classify_instagram_profile,
 )
 from apps.marketing.scraping.engine import (
     BudgetExceeded,
@@ -456,3 +472,564 @@ class EngineEndToEndTests(TestCase):
         self.assertEqual(cfg.monthly_spend, Decimal("0"))
         call = ScrapeCall.objects.get(job=job, call_type="search")
         self.assertEqual(call.status, "error")
+
+
+def make_marketer():
+    user = get_user_model().objects.create_user(
+        email="mkt@example.com", password="x"
+    )
+    user.user_type = "admin"
+    user.admin_role = "marketer"
+    user.is_active = True
+    user.save()
+    return user
+
+
+def qualified_lead(**kw):
+    kw.setdefault("brand_name", "Good Brand")
+    kw.setdefault("status", "Qualified")
+    kw.setdefault("email", "hello@goodbrand.com")
+    kw.setdefault("qualification_type", "direct_designer")
+    return DesignerLead.objects.create(**kw)
+
+
+class QualificationClassifierTests(TestCase):
+    def test_directory_account_is_directory(self):
+        qtype, _ = classify_instagram_profile({
+            "account": "fashiondesignersinlagos",
+            "full_name": "Fashion Designers in Lagos",
+            "biography": "Discover the best designers in Lagos. DM to be featured.",
+        })
+        self.assertEqual(qtype, "directory")
+
+    def test_community_without_work_evidence(self):
+        qtype, _ = classify_instagram_profile({
+            "account": "lagostailorsnetwork",
+            "full_name": "Lagos Tailors Network",
+            "biography": "A community of tailors and fashion lovers in Lagos.",
+        })
+        self.assertEqual(qtype, "community")
+
+    def test_direct_brand(self):
+        qtype, _ = classify_instagram_profile({
+            "account": "starrycouture",
+            "full_name": "STARRY | Lagos Fashion Designer",
+            "biography": "Bespoke bridalwear made in Lagos. Book a fitting.",
+        })
+        self.assertEqual(qtype, "direct_designer")
+
+    def test_no_evidence_is_uncertain(self):
+        qtype, _ = classify_instagram_profile({
+            "account": "mysteryacct",
+            "full_name": "Mystery",
+            "biography": "Just vibes and photos",
+        })
+        self.assertEqual(qtype, "uncertain")
+
+
+class IngestionDecisionTests(TestCase):
+    def setUp(self):
+        self.job = make_job()
+
+    def test_rejected_candidate_records_decision(self):
+        extracted = ig_extracted("https://www.instagram.com/fashiondesignersinlagos/")
+        extracted["json"].update(
+            account="fashiondesignersinlagos",
+            full_name="Fashion Designers in Lagos",
+            biography="Discover designers in Lagos.",
+        )
+        res = _lead_from_extracted(extracted, "brightdata", self.job)
+        self.assertEqual(res, "skipped")
+        decision = LeadQualificationDecision.objects.get(job=self.job)
+        self.assertEqual(decision.decision, "directory")
+        self.assertIsNone(decision.lead)
+        self.assertEqual(decision.candidate_name, "Fashion Designers in Lagos")
+
+    def test_created_lead_records_decision(self):
+        lead = _lead_from_extracted(ig_extracted(), "brightdata", self.job)
+        self.assertEqual(lead.qualification_type, "direct_designer")
+        self.assertEqual(lead.status, "Discovered")
+        self.assertTrue(
+            LeadQualificationDecision.objects.filter(
+                lead=lead, decision="direct_designer", decided_by="rules"
+            ).exists()
+        )
+
+    def test_uncertain_profile_is_persisted_for_review(self):
+        rec = dict(
+            IG_RECORD,
+            biography="Just vibes and photos",
+            business_category_name="",
+            email_address="",
+        )
+        extracted = ig_extracted()
+        extracted["json"] = rec
+        lead = _lead_from_extracted(extracted, "brightdata", self.job)
+        self.assertIsNotNone(lead)
+        self.assertEqual(lead.qualification_type, "uncertain")
+        self.assertEqual(lead.status, "Needs Review")
+        self.assertTrue(lead.needs_review)
+
+
+class EligibilityTests(TestCase):
+    def test_qualified_lead_is_contactable(self):
+        ok, reasons = lead_contactable(qualified_lead())
+        self.assertTrue(ok)
+        self.assertEqual(reasons, [])
+
+    def test_discovered_lead_is_not_contactable(self):
+        lead = DesignerLead.objects.create(
+            brand_name="Raw Find", status="Discovered", email="x@raw.com"
+        )
+        ok, reasons = lead_contactable(lead)
+        self.assertFalse(ok)
+        self.assertTrue(any("not eligible" in r for r in reasons))
+
+    def test_suppression_blocks_by_email_handle_domain(self):
+        for field, value in (
+            ("email", "b@brand.com"),
+            ("handle", "thebrand"),
+            ("domain", "brand.com"),
+        ):
+            record_suppression(brand_name="B", reason="manual", **{field: value})
+            lead = qualified_lead(
+                brand_name="B", email="b@brand.com",
+                instagram_handle="thebrand", website="https://brand.com",
+            )
+            ok, reasons = lead_contactable(lead)
+            self.assertFalse(ok, field)
+            self.assertTrue(any("suppressed" in r for r in reasons))
+            LeadSuppression.objects.all().delete()
+
+    def test_frequency_cap_blocks(self):
+        lead = qualified_lead()
+        for _ in range(2):
+            EmailLog.objects.create(lead=lead, subject="s", status="Sent")
+        ok, reasons = lead_contactable(lead)
+        self.assertFalse(ok)
+        self.assertTrue(any("frequency cap" in r for r in reasons))
+
+    @patch("apps.marketing.email_services.resend_sendmail", return_value=True)
+    def test_send_to_suppressed_is_blocked_and_logged(self, mock_send):
+        lead = qualified_lead()
+        record_suppression(email="hello@goodbrand.com", reason="unsubscribe")
+        result = compile_and_send_lead_email(lead, None, "<p>x</p>", "subj")
+        self.assertFalse(result)
+        mock_send.assert_not_called()
+        log = EmailLog.objects.get(lead=lead)
+        self.assertEqual(log.status, "Suppressed")
+
+    @patch("apps.marketing.email_services.resend_sendmail", return_value=True)
+    def test_send_to_qualified_writes_sent_log(self, mock_send):
+        lead = qualified_lead()
+        result = compile_and_send_lead_email(lead, None, "<p>x</p>", "subj")
+        self.assertTrue(result)
+        mock_send.assert_called_once()
+        self.assertEqual(EmailLog.objects.get(lead=lead).status, "Sent")
+
+    def test_record_suppression_is_idempotent(self):
+        row1, created1 = record_suppression(email="a@b.com", reason="manual")
+        row2, created2 = record_suppression(email="a@b.com", reason="manual")
+        self.assertTrue(created1)
+        self.assertFalse(created2)
+        self.assertEqual(row1.id, row2.id)
+
+
+class CampaignFlowTests(TestCase):
+    def setUp(self):
+        self.lead_ok = qualified_lead(brand_name="A", email="a@x.com")
+        self.lead_supp = qualified_lead(brand_name="B", email="b@x.com")
+        record_suppression(email="b@x.com", reason="unsubscribe")
+        # Rejected lead is not in the filtered audience at all.
+        DesignerLead.objects.create(
+            brand_name="C", email="c@x.com", status="Rejected"
+        )
+        self.campaign = EmailCampaign.objects.create(
+            name="Test", subject="Hi", html_body="<p>hello</p>",
+            status="sending", audience_filter={},
+        )
+
+    @patch("apps.marketing.email_services.resend_sendmail", return_value=True)
+    def test_sweep_sends_only_to_eligible(self, mock_send):
+        res = process_campaign_batch(self.campaign)
+        self.assertEqual(res["sent"], 1)
+        self.assertEqual(res["skipped"], 1)
+        mock_send.assert_called_once()
+        self.campaign.refresh_from_db()
+        self.assertEqual(self.campaign.status, "completed")
+        self.assertEqual(
+            EmailLog.objects.get(lead=self.lead_supp).status, "Suppressed"
+        )
+        self.lead_ok.refresh_from_db()
+        self.assertEqual(self.lead_ok.status, "Contacted")
+
+    @patch("apps.marketing.email_services.resend_sendmail", return_value=True)
+    def test_sweep_is_idempotent(self, mock_send):
+        process_campaign_batch(self.campaign)
+        process_campaign_batch(self.campaign)
+        mock_send.assert_called_once()
+        self.assertEqual(EmailLog.objects.filter(status="Sent").count(), 1)
+
+    @patch("apps.marketing.email_services.resend_sendmail", return_value=True)
+    def test_paused_campaign_does_not_send(self, mock_send):
+        self.campaign.status = "paused"
+        self.campaign.save()
+        process_campaign_batch(self.campaign)
+        mock_send.assert_not_called()
+
+    @patch("apps.marketing.email_services.resend_sendmail", return_value=True)
+    def test_send_cap_stops_sends(self, mock_send):
+        qualified_lead(brand_name="D", email="d@x.com")
+        self.campaign.send_cap = 1
+        self.campaign.save()
+        process_campaign_batch(self.campaign)
+        self.assertEqual(mock_send.call_count, 1)
+        self.campaign.refresh_from_db()
+        self.assertEqual(self.campaign.status, "completed")
+
+    @patch("apps.marketing.email_services.resend_sendmail", return_value=True)
+    def test_scheduled_campaign_starts_when_due(self, mock_send):
+        self.campaign.status = "approved"
+        self.campaign.scheduled_at = timezone.now() - timezone.timedelta(minutes=1)
+        self.campaign.save()
+        process_due_campaigns()
+        self.campaign.refresh_from_db()
+        self.assertEqual(self.campaign.status, "completed")
+        mock_send.assert_called_once()
+
+
+class MarketingApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(make_marketer())
+
+    def test_broadcast_creates_sending_campaign(self):
+        qualified_lead()
+        res = self.client.post(
+            "/marketing/leads/send_broadcast/",
+            {"subject": "Hi", "html_body": "<p>x</p>"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 202, res.data)
+        camp = EmailCampaign.objects.get(id=res.data["campaign_id"])
+        self.assertEqual(camp.status, "sending")
+        self.assertEqual(camp.created_by.email, "mkt@example.com")
+
+    def test_broadcast_with_no_eligible_leads_fails(self):
+        DesignerLead.objects.create(brand_name="D", status="Discovered")
+        res = self.client.post(
+            "/marketing/leads/send_broadcast/",
+            {"subject": "Hi", "html_body": "<p>x</p>"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_send_email_blocked_for_discovered_lead(self):
+        lead = DesignerLead.objects.create(
+            brand_name="D", status="Discovered", email="d@x.com"
+        )
+        res = self.client.post(
+            f"/marketing/leads/{lead.id}/send_email/",
+            {"subject": "Hi", "html_body": "<p>x</p>"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 403)
+        self.assertIn("reasons", res.data)
+
+    def test_qualify_then_send_allowed(self):
+        lead = DesignerLead.objects.create(
+            brand_name="D", status="Needs Review",
+            email="d@x.com", needs_review=True,
+            qualification_type="uncertain",
+        )
+        res = self.client.post(f"/marketing/leads/{lead.id}/qualify/")
+        self.assertEqual(res.status_code, 200, res.data)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, "Qualified")
+        self.assertEqual(lead.qualification_type, "direct_designer")
+        self.assertIsNotNone(lead.qualified_at)
+        self.assertTrue(
+            LeadQualificationDecision.objects.filter(
+                lead=lead, decision="qualified", decided_by="human"
+            ).exists()
+        )
+
+    def test_reject_with_suppression(self):
+        lead = DesignerLead.objects.create(brand_name="Spam Dir", status="Discovered")
+        res = self.client.post(
+            f"/marketing/leads/{lead.id}/reject/",
+            {"reason": "directory", "suppress": True},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, "Rejected")
+        self.assertIsNotNone(find_suppression(lead))
+
+    def test_suppress_action(self):
+        lead = qualified_lead()
+        res = self.client.post(f"/marketing/leads/{lead.id}/suppress/")
+        self.assertEqual(res.status_code, 200)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, "Suppressed")
+        self.assertIsNotNone(find_suppression(lead))
+
+    def test_requalify_backfill(self):
+        DesignerLead.objects.create(
+            brand_name="Fashion Designers in Lagos", status="Discovered",
+        )
+        DesignerLead.objects.create(
+            brand_name="Thin Evidence", status="Discovered",
+        )
+        res = self.client.post("/marketing/leads/requalify/")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["hard_reject"], 1)
+        self.assertEqual(res.data["uncertain"], 1)
+        self.assertEqual(
+            DesignerLead.objects.get(brand_name="Fashion Designers in Lagos").status,
+            "Rejected",
+        )
+        self.assertEqual(
+            DesignerLead.objects.get(brand_name="Thin Evidence").status,
+            "Needs Review",
+        )
+
+    def test_unsubscribe_endpoint(self):
+        lead = qualified_lead()
+        token = unsubscribe_token_for(lead)
+        anon = APIClient()
+        res = anon.get(f"/marketing/leads/unsubscribe/?token={token}")
+        self.assertEqual(res.status_code, 200)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, "Suppressed")
+        self.assertIsNotNone(find_suppression(lead))
+        self.assertIs(lead_from_unsubscribe_token(token) is not None, True)
+
+    def test_unsubscribe_rejects_bad_token(self):
+        res = APIClient().get("/marketing/leads/unsubscribe/?token=bogus")
+        self.assertEqual(res.status_code, 400)
+
+    def test_campaign_approve_send_lifecycle(self):
+        qualified_lead()
+        camp = EmailCampaign.objects.create(
+            name="C", subject="s", html_body="<p>x</p>", status="draft",
+        )
+        res = self.client.post(f"/marketing/campaigns/{camp.id}/approve/")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["status"], "approved")
+        res = self.client.post(f"/marketing/campaigns/{camp.id}/send/")
+        self.assertEqual(res.status_code, 200, res.data)
+        camp.refresh_from_db()
+        self.assertEqual(camp.status, "sending")
+
+    def test_approve_requires_eligible_audience(self):
+        camp = EmailCampaign.objects.create(
+            name="Empty", subject="s", html_body="<p>x</p>", status="draft",
+        )
+        res = self.client.post(f"/marketing/campaigns/{camp.id}/approve/")
+        self.assertEqual(res.status_code, 400)
+
+
+class MergeTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = make_marketer()
+        self.client.force_authenticate(self.user)
+
+    def test_merge_consolidates_into_target(self):
+        target = qualified_lead(brand_name="Main Brand", email="main@x.com")
+        source = DesignerLead.objects.create(
+            brand_name="Dup Brand", email="dup@x.com",
+            instagram_handle="dup_ig", status="Needs Review",
+        )
+        EmailLog.objects.create(lead=source, subject="old", status="Sent")
+
+        res = self.client.post(
+            f"/marketing/leads/{source.id}/merge/",
+            {"target_id": target.id}, format="json",
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+
+        target.refresh_from_db()
+        source.refresh_from_db()
+        self.assertEqual(target.instagram_handle, "dup_ig")
+        self.assertTrue(EmailLog.objects.filter(lead=target, subject="old").exists())
+        self.assertEqual(source.status, "Rejected")
+        self.assertEqual(source.merged_into_id, target.id)
+        self.assertTrue(
+            LeadQualificationDecision.objects.filter(
+                lead=source, decision="merged", decided_by="human"
+            ).exists()
+        )
+
+    def test_merge_rejects_suppressed_target(self):
+        target = qualified_lead(brand_name="T", status="Suppressed")
+        source = DesignerLead.objects.create(brand_name="S")
+        res = self.client.post(
+            f"/marketing/leads/{source.id}/merge/",
+            {"target_id": target.id}, format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+
+class TestSendTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(make_marketer())
+        self.lead = qualified_lead()
+        self.camp = EmailCampaign.objects.create(
+            name="C", subject="Hello {{ brand_name }}",
+            html_body="<p>hi {{ brand_name }}</p>", status="draft",
+        )
+
+    @patch("apps.utils.email_sender.resend_sendmail", return_value=True)
+    def test_test_send_to_custom_email(self, mock_send):
+        res = self.client.post(
+            f"/marketing/campaigns/{self.camp.id}/test_send/",
+            {"email": "me@urbana.com", "lead_id": self.lead.id},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+        mock_send.assert_called_once()
+        self.assertIn("[TEST]", mock_send.call_args.kwargs["subject"])
+        log = EmailLog.objects.get(lead=self.lead)
+        self.assertTrue(log.reason.startswith("test_send"))
+
+    def test_test_send_blocked_for_suppressed_destination(self):
+        record_suppression(email="blocked@x.com", reason="unsubscribe")
+        res = self.client.post(
+            f"/marketing/campaigns/{self.camp.id}/test_send/",
+            {"email": "blocked@x.com"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 403)
+
+    def test_test_send_requires_destination(self):
+        res = self.client.post(
+            f"/marketing/campaigns/{self.camp.id}/test_send/", {}, format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+
+class MakerCheckerTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = make_marketer()
+        self.client.force_authenticate(self.user)
+
+    @override_settings(CAMPAIGN_MAKER_CHECKER_THRESHOLD=1)
+    def test_creator_cannot_approve_large_audience(self):
+        qualified_lead(brand_name="A", email="a@x.com")
+        qualified_lead(brand_name="B", email="b@x.com")
+        camp = EmailCampaign.objects.create(
+            name="Big", subject="s", html_body="<p>x</p>",
+            status="draft", created_by=self.user,
+        )
+        res = self.client.post(f"/marketing/campaigns/{camp.id}/approve/")
+        self.assertEqual(res.status_code, 403)
+        camp.refresh_from_db()
+        self.assertEqual(camp.status, "draft")
+
+    @override_settings(CAMPAIGN_MAKER_CHECKER_THRESHOLD=1)
+    def test_other_marketer_can_approve(self):
+        qualified_lead(brand_name="A", email="a@x.com")
+        qualified_lead(brand_name="B", email="b@x.com")
+        creator = get_user_model().objects.create_user(
+            email="creator@example.com", password="x"
+        )
+        camp = EmailCampaign.objects.create(
+            name="Big", subject="s", html_body="<p>x</p>",
+            status="draft", created_by=creator,
+        )
+        res = self.client.post(f"/marketing/campaigns/{camp.id}/approve/")
+        self.assertEqual(res.status_code, 200, res.data)
+
+    @override_settings(CAMPAIGN_MAKER_CHECKER_THRESHOLD=1)
+    def test_broadcast_over_threshold_becomes_draft(self):
+        qualified_lead(brand_name="A", email="a@x.com")
+        qualified_lead(brand_name="B", email="b@x.com")
+        res = self.client.post(
+            "/marketing/leads/send_broadcast/",
+            {"subject": "Hi", "html_body": "<p>x</p>"}, format="json",
+        )
+        self.assertEqual(res.status_code, 202, res.data)
+        self.assertTrue(res.data.get("requires_approval"))
+        camp = EmailCampaign.objects.get(id=res.data["campaign_id"])
+        self.assertEqual(camp.status, "draft")
+
+
+import base64
+import hashlib
+import hmac
+import time
+import json as _json
+
+
+def _svix_headers(body: bytes, secret: str, msg_id="msg_1", ts=None):
+    ts = ts or str(int(time.time()))
+    key = base64.b64decode(secret[len("whsec_"):])
+    signed = f"{msg_id}.{ts}.{body.decode('utf-8')}"
+    sig = base64.b64encode(
+        hmac.new(key, signed.encode("utf-8"), hashlib.sha256).digest()
+    ).decode()
+    return {
+        "HTTP_SVIX_ID": msg_id,
+        "HTTP_SVIX_TIMESTAMP": ts,
+        "HTTP_SVIX_SIGNATURE": f"v1,{sig}",
+    }
+
+
+class ResendWebhookTests(TestCase):
+    SECRET = "whsec_" + base64.b64encode(b"testsecret").decode()
+
+    def _post(self, payload, headers=None):
+        body = _json.dumps(payload).encode()
+        if headers is None:
+            headers = _svix_headers(body, self.SECRET)
+        return APIClient().post(
+            "/marketing/webhooks/resend/",
+            body,
+            content_type="application/json",
+            **headers,
+        )
+
+    @override_settings(RESEND_WEBHOOK_SECRET=SECRET)
+    def test_bounce_suppresses_address(self):
+        lead = qualified_lead(email="bounce@x.com")
+        res = self._post({
+            "type": "email.bounced",
+            "data": {"to": ["bounce@x.com"], "email_id": "e1"},
+        })
+        self.assertEqual(res.status_code, 200, res.content)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, "Suppressed")
+        self.assertIsNotNone(find_suppression(lead))
+        # Suppressed email can never be mailed again, even direct-send.
+        ok, _ = lead_contactable(lead)
+        self.assertFalse(ok)
+
+    @override_settings(RESEND_WEBHOOK_SECRET=SECRET)
+    def test_complaint_suppresses_address(self):
+        lead = qualified_lead(email="spam@x.com")
+        res = self._post({
+            "type": "email.complained", "data": {"to": ["spam@x.com"]}
+        })
+        self.assertEqual(res.status_code, 200)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, "Suppressed")
+
+    @override_settings(RESEND_WEBHOOK_SECRET=SECRET)
+    def test_invalid_signature_rejected(self):
+        res = self._post(
+            {"type": "email.bounced", "data": {"to": ["a@x.com"]}},
+            {"HTTP_SVIX_ID": "m", "HTTP_SVIX_TIMESTAMP": str(int(time.time())),
+             "HTTP_SVIX_SIGNATURE": "v1,bogus"},
+        )
+        self.assertEqual(res.status_code, 401)
+
+    @override_settings(RESEND_WEBHOOK_SECRET="")
+    def test_unconfigured_webhook_refuses_events(self):
+        res = APIClient().post(
+            "/marketing/webhooks/resend/", {}, format="json"
+        )
+        self.assertEqual(res.status_code, 503)

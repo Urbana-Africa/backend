@@ -386,10 +386,19 @@ class SupportTicket(BaseModel):
         URGENT = "urgent", "Urgent"
 
     class Status(models.TextChoices):
+        # SUP-02 case lifecycle: open(new) → triaged → investigating →
+        # awaiting_party → decision → action_pending → resolved/reopened.
+        # in_progress/waiting remain as legacy aliases in the transition map.
         OPEN = "open", "Open"
+        TRIAGED = "triaged", "Triaged"
         IN_PROGRESS = "in_progress", "In Progress"
+        INVESTIGATING = "investigating", "Investigating"
+        AWAITING_PARTY = "awaiting_party", "Awaiting Party"
         WAITING = "waiting", "Waiting on Designer"
+        DECISION = "decision", "Decision"
+        ACTION_PENDING = "action_pending", "Action Pending"
         RESOLVED = "resolved", "Resolved"
+        REOPENED = "reopened", "Reopened"
         CLOSED = "closed", "Closed"
 
     user = models.ForeignKey(

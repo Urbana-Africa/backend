@@ -13,6 +13,9 @@ from .tasks import (
     send_delayed_customer_emails,
     send_delayed_designer_emails,
     process_scrape_jobs,
+    process_email_campaigns,
+    run_data_health_checks,
+    sync_work_queues,
     reset_monthly_scrape_spend,
 )
 
@@ -108,6 +111,45 @@ def start():
         id="process_scrape_jobs_job",
         replace_existing=True,
         max_instances=1,
+        coalesce=True,
+    )
+
+    # -------------------------------------------------------
+    # Queued marketing campaign sends
+    # -------------------------------------------------------
+    scheduler.add_job(
+        process_email_campaigns,
+        trigger="interval",
+        minutes=1,
+        id="process_email_campaigns_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # -------------------------------------------------------
+    # Unified work-queue derivation (Phase 1)
+    # -------------------------------------------------------
+    scheduler.add_job(
+        sync_work_queues,
+        trigger="interval",
+        minutes=5,
+        id="sync_work_queues_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # -------------------------------------------------------
+    # Daily data-health checks (05:30 UTC — before the business day)
+    # -------------------------------------------------------
+    scheduler.add_job(
+        run_data_health_checks,
+        trigger="cron",
+        hour=5,
+        minute=30,
+        id="run_data_health_checks_job",
+        replace_existing=True,
         coalesce=True,
     )
 

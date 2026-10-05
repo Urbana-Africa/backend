@@ -10,6 +10,7 @@ from .models import (
     ScrapeCache,
     LeadEnrichment,
     LeadSuppression,
+    LeadQualificationDecision,
 )
 
 admin.site.register(ScrapeProviderConfig)
@@ -18,3 +19,4 @@ admin.site.register(ScrapeCall)
 admin.site.register(ScrapeCache)
 admin.site.register(LeadEnrichment)
 admin.site.register(LeadSuppression)
+admin.site.register(LeadQualificationDecision)

@@ -102,10 +102,16 @@ class AdminProductSerializer(AdminBaseSerializer):
     colors = ColorSerializer(many=True, read_only=True)
     sizes = SizesSerializer(many=True, read_only=True)
     designer = serializers.SerializerMethodField()
+    moderation_gate = serializers.SerializerMethodField()
 
     class Meta(AdminBaseSerializer.Meta):
         model = Product
         read_only_fields = ["slug", "sku", "created_at"]
+
+    def get_moderation_gate(self, obj):
+        """CAT-01 — the live moderation checklist shown on the product."""
+        from .gates import evaluate_product_moderation
+        return evaluate_product_moderation(obj)
 
     def get_designer(self, obj):
         try:
@@ -265,10 +271,16 @@ class AdminDesignerSerializer(serializers.ModelSerializer):
     phone_number = serializers.CharField(source="user.phone_number", read_only=True)
     lookbook_files = MediaAssetSerializer(many=True, read_only=True)
     products_count = serializers.SerializerMethodField()
+    approval_gate = serializers.SerializerMethodField()
 
     class Meta:
         model = Designer
         fields = "__all__"
+
+    def get_approval_gate(self, obj):
+        """DES-02 — onboarding completeness checklist shown on the record."""
+        from .gates import evaluate_designer_readiness
+        return evaluate_designer_readiness(obj)
 
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}"
@@ -389,3 +401,75 @@ class AdminNewsletterSubscriberSerializer(AdminBaseSerializer):
     class Meta(AdminBaseSerializer.Meta):
         model = NewsletterSubscriber
         read_only_fields = ["subscribed_at", "unsubscribed_at"]
+
+# =====================================================
+# GOVERNANCE (Phase 0 — audit & data health)
+# =====================================================
+
+from .models import (
+    AuditEvent, DataQualityCheck, ReconciliationRun, ReconciliationException,
+    WorkItem, ApprovalRequest,
+)
+
+
+class AuditEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AuditEvent
+        fields = '__all__'
+
+
+class DataQualityCheckSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DataQualityCheck
+        fields = '__all__'
+
+
+class ReconciliationExceptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReconciliationException
+        fields = '__all__'
+        read_only_fields = (
+            'id', 'run', 'entity_type', 'entity_id', 'issue', 'detail',
+            'resolved_by', 'resolved_at', 'created_at',
+        )
+
+
+class ReconciliationRunSerializer(serializers.ModelSerializer):
+    exceptions = ReconciliationExceptionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ReconciliationRun
+        fields = '__all__'
+
+
+class ApprovalRequestSerializer(serializers.ModelSerializer):
+    requested_by_email = serializers.CharField(
+        source='requested_by.email', read_only=True, default=''
+    )
+    decided_by_email = serializers.CharField(
+        source='decided_by.email', read_only=True, default=''
+    )
+
+    class Meta:
+        model = ApprovalRequest
+        fields = '__all__'
+        read_only_fields = (
+            'id', 'action', 'entity_type', 'entity_id', 'payload',
+            'requested_by', 'decided_by', 'decided_at', 'created_at',
+        )
+
+
+class WorkItemSerializer(serializers.ModelSerializer):
+    assigned_to_email = serializers.CharField(
+        source='assigned_to.email', read_only=True, default=''
+    )
+    is_overdue = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = WorkItem
+        fields = '__all__'
+        read_only_fields = (
+            'id', 'queue', 'entity_type', 'entity_id', 'title', 'detail',
+            'source_status', 'resolved_by', 'resolved_at',
+            'created_at', 'updated_at',
+        )

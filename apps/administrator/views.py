@@ -1,4 +1,5 @@
 from rest_framework import viewsets, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from .permissions import IsCLevel
 from rest_framework.views import APIView
@@ -7,17 +8,26 @@ from rest_framework.decorators import action
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
-from django.db.models import Q
+from django.contrib.auth import get_user_model
+from django.db.models import Count, Q
 from django.conf import settings
+from django.utils import timezone
 import logging
 import threading
+from decimal import Decimal
 from django.template.loader import render_to_string
 from apps.core.models import *
 from apps.customers.models import *
 from apps.designers.models import *
 from apps.pay.models import Withdrawal
+from .models import (
+    AuditEvent, DataQualityCheck, ReconciliationRun, ReconciliationException,
+    WorkItem, ApprovalRequest,
+)
 from apps.utils.pagination import StandardPagination
 from .serializers import *
+from .audit import record_audit
+from .capabilities import HasCapability, has_capability
 from apps.core.serializers import ProductSerializer
 from apps.utils.email_sender import resend_sendmail, wrap_email_html
 
@@ -30,8 +40,16 @@ logger = logging.getLogger(__name__)
 # =====================================================
 
 class AdminBaseViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAdminUser]
+    """Staff-facing CRUD. ``IsAdminUser`` is the staff gate; ``HasCapability``
+    enforces the named capability per domain — ``view_capability`` for safe
+    methods, ``manage_capability`` for mutations, ``action_capabilities`` for
+    per-action overrides. Leave the caps unset to keep staff-only behavior."""
+    permission_classes = [IsAdminUser, HasCapability]
     pagination_class = StandardPagination
+
+    view_capability = None
+    manage_capability = None
+    action_capabilities = {}
 
     filter_backends = [
         DjangoFilterBackend,
@@ -44,6 +62,8 @@ class AdminBaseViewSet(viewsets.ModelViewSet):
 # =====================================================
 
 class AdminCustomerViewSet(AdminBaseViewSet):
+    view_capability = 'customers.view'
+    manage_capability = 'customers.manage'
     queryset = Customer.objects.select_related("user")
     serializer_class = AdminCustomerSerializer
     search_fields = ["user__email", "user__username"]
@@ -52,16 +72,22 @@ class AdminCustomerViewSet(AdminBaseViewSet):
 
 
 class AdminAddressViewSet(AdminBaseViewSet):
+    view_capability = 'customers.view'
+    manage_capability = 'customers.manage'
     queryset = Address.objects.select_related("customer")
     serializer_class = AdminAddressSerializer
 
 
 class AdminWishlistViewSet(AdminBaseViewSet):
+    view_capability = 'customers.view'
+    manage_capability = 'customers.manage'
     queryset = Wishlist.objects.all()
     serializer_class = AdminWishlistSerializer
 
 
 class AdminCartItemViewSet(AdminBaseViewSet):
+    view_capability = 'customers.view'
+    manage_capability = 'customers.manage'
     queryset = CartItem.objects.all()
     serializer_class = AdminCartItemSerializer
 
@@ -70,6 +96,11 @@ class AdminCartItemViewSet(AdminBaseViewSet):
 # =====================================================
 
 class AdminProductViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
+    action_capabilities = {
+        'publish': 'catalog.publish', 'unpublish': 'catalog.publish',
+    }
     queryset = Product.objects.select_related(
         "user", "category", "brand", "currency"
     ).prefetch_related("sizes", "media")
@@ -150,6 +181,13 @@ class AdminProductViewSet(AdminBaseViewSet):
         product.is_admin_published = False
         product.save()
 
+        record_audit(
+            request=request, action='catalog.unpublish', entity=product,
+            before={'is_admin_published': True},
+            after={'is_admin_published': False},
+            reason=comment or ', '.join(reasons),
+        )
+
         # In-app notification
         Notification.objects.create(
             user=product.user,
@@ -191,9 +229,32 @@ class AdminProductViewSet(AdminBaseViewSet):
 
     @action(detail=True, methods=["patch"], url_path="publish")
     def publish(self, request, pk=None):
+        """CAT-01 — publishing runs moderation checks (media, price,
+        description, categorization). A failing product needs an
+        ``exception_reason`` which lands in the audit record."""
         product = self.get_object()
+        from .gates import evaluate_product_moderation
+        gate = evaluate_product_moderation(product)
+        exception_reason = (request.data.get('exception_reason')
+                            or '').strip()
+        if not gate['passed'] and not exception_reason:
+            return Response(
+                {"status": "error",
+                 "message": "Product fails moderation checks — provide "
+                            "exception_reason to publish anyway.",
+                 "checks": gate['checks']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         product.is_admin_published = True
         product.save()
+
+        record_audit(
+            request=request, action='catalog.publish', entity=product,
+            before={'is_admin_published': False},
+            after={'is_admin_published': True, 'checks': gate['checks'],
+                   'exception': exception_reason},
+        )
 
         # In-app notification
         Notification.objects.create(
@@ -247,41 +308,57 @@ class AdminProductViewSet(AdminBaseViewSet):
 
 
 class AdminCategoryViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = Category.objects.all()
     serializer_class = AdminCategorySerializer
 
 
 class AdminBrandViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = Brand.objects.all()
     serializer_class = AdminBrandSerializer
 
 
 class AdminCurrencyViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = Currency.objects.all()
     serializer_class = AdminCurrencySerializer
 
 
 class AdminSizesViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = Sizes.objects.all()
     serializer_class = AdminSizesSerializer
 
 
 class AdminMediaAssetViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = MediaAsset.objects.all()
     serializer_class = AdminMediaAssetSerializer
 
 
 class AdminReviewViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = Review.objects.select_related("product", "customer")
     serializer_class = AdminReviewSerializer
 
 
 class AdminShippingMethodViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = ShippingMethod.objects.all()
     serializer_class = AdminShippingMethodSerializer
 
 
 class AdminCountryViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = Country.objects.all()
     serializer_class = AdminCountrySerializer
 
@@ -290,6 +367,8 @@ class AdminCountryViewSet(AdminBaseViewSet):
 # ORDER MANAGEMENT
 # =====================================================
 class AdminOrderViewSet(AdminBaseViewSet):
+    view_capability = 'orders.view'
+    manage_capability = 'orders.edit_fulfillment'
     queryset = Order.objects.select_related("customer", "invoice")
     serializer_class = AdminOrderSerializer
     filterset_fields = ["status"]
@@ -297,8 +376,112 @@ class AdminOrderViewSet(AdminBaseViewSet):
     ordering_fields = ["created_at"]
     ordering = ["-created_at"]
 
+    @action(detail=True, methods=["get"])
+    def timeline(self, request, pk=None):
+        """OPS-01 — one chronological view of everything that happened to an
+        order: creation, payment, items, escrow, tracking, returns, disputes
+        and staff audit actions. A support agent answers 'what happened'
+        without switching systems."""
+        order = self.get_object()
+        events = []
+
+        def ev(ts, type_, summary, **meta):
+            if ts:
+                events.append({'at': ts.isoformat(), 'type': type_,
+                               'summary': summary, 'meta': meta})
+
+        ev(order.created_at, 'order.created',
+           f"Order {order.order_id} created — {order.status}",
+           status=order.status, total=str(order.total_amount))
+
+        payment = getattr(order.invoice, 'payment', None) if order.invoice else None
+        if payment:
+            ev(payment.date_time_added, 'payment.attempt',
+               f"Payment {payment.reference} — {payment.status}",
+               status=payment.status, processor=payment.processor,
+               amount=str(payment.amount), currency=payment.currency)
+            if payment.is_paid and payment.date_time_paid:
+                ev(payment.date_time_paid, 'payment.confirmed',
+                   f"Payment {payment.reference} confirmed via "
+                   f"{payment.processor or 'provider'}",
+                   amount=str(payment.amount), currency=payment.currency)
+
+        item_ids = []
+        items = order.items.select_related('designer', 'escrow').all()
+        for item in items:
+            item_ids.append(str(item.item_id))
+            ev(item.created_at, 'item.created',
+               f"Item {item.item_id} added — {item.status}",
+               status=item.status, designer_status=item.designer_status,
+               designer=getattr(item.designer, 'email', ''),
+               sub_total=str(item.sub_total))
+            if item.delivered_at:
+                ev(item.delivered_at, 'item.delivered',
+                   f"Item {item.item_id} delivered",
+                   customer_status=item.customer_status)
+            esc = getattr(item, 'escrow', None)
+            if esc:
+                ev(esc.created_at, 'escrow.held',
+                   f"Escrow of {esc.amount} held for item {item.item_id}",
+                   escrow_status=esc.status,
+                   commission=str(esc.platform_commission))
+                if esc.released_at:
+                    ev(esc.released_at, 'escrow.released',
+                       f"Escrow released to designer for item {item.item_id}",
+                       amount=str(esc.amount))
+            for rr in item.return_requests.all():
+                ev(rr.created_at, 'return.requested',
+                   f"Return {rr.return_id} requested — {rr.reason}",
+                   status=rr.status)
+                if rr.resolved_at:
+                    ev(rr.resolved_at, 'return.resolved',
+                       f"Return {rr.return_id} resolved — {rr.status}",
+                       status=rr.status)
+                dispute = getattr(rr, 'dispute', None)
+                if dispute:
+                    ev(dispute.created_at, 'dispute.opened',
+                       f"Dispute {dispute.dispute_id} opened by "
+                       f"{getattr(dispute.opened_by, 'email', '')}",
+                       status=dispute.status)
+                    if dispute.resolved_at:
+                        ev(dispute.resolved_at, 'dispute.resolved',
+                           f"Dispute {dispute.dispute_id} resolved — "
+                           f"{dispute.resolution or dispute.status}",
+                           refund=str(dispute.refund_amount or ''))
+
+        tracking = getattr(order, 'tracking', None)
+        if tracking:
+            ev(tracking.last_updated, 'tracking.update',
+               f"Tracking {tracking.tracking_number}: {tracking.current_status}",
+               carrier=tracking.carrier or '',
+               eta=str(tracking.estimated_delivery or ''))
+
+        for a in AuditEvent.objects.filter(
+            Q(entity_type='Order', entity_id__in=(order.order_id, str(order.pk)))
+            | Q(entity_type='OrderItem', entity_id__in=item_ids)
+        ).order_by('created_at'):
+            ev(a.created_at, 'audit',
+               f"{a.action} by {a.actor_email or 'system'}",
+               actor=a.actor_email, before=a.before, after=a.after)
+
+        events.sort(key=lambda e: e['at'])
+        return Response({
+            'order': order.order_id,
+            'status': order.status,
+            'customer': getattr(getattr(order, 'customer', None), 'email', '') or
+                        getattr(getattr(getattr(order, 'customer', None), 'user', None), 'email', ''),
+            'events': events,
+            'meta': {
+                'note': ('Item-level status transitions are derived from '
+                         'available timestamps; full transition history lands '
+                         'with the Phase-1 state machine.'),
+            },
+        })
+
 
 class AdminOrderItemViewSet(AdminBaseViewSet):
+    view_capability = 'orders.view'
+    manage_capability = 'orders.edit_fulfillment'
     queryset = OrderItem.objects.select_related("order", "product")
     serializer_class = AdminOrderItemSerializer
 
@@ -318,6 +501,11 @@ class AdminOrderItemViewSet(AdminBaseViewSet):
             order_item.packaging_rejection_reason = ""
             
         order_item.save()
+
+        record_audit(
+            request=request, action='orders.review_packaging',
+            entity=order_item, after={'status': status_val}, reason=reason,
+        )
         
         # Trigger email to designer
         from django.utils.html import escape
@@ -358,6 +546,8 @@ class AdminOrderItemViewSet(AdminBaseViewSet):
 
 
 class AdminOrderTrackingViewSet(AdminBaseViewSet):
+    view_capability = 'orders.view'
+    manage_capability = 'orders.edit_fulfillment'
     queryset = OrderTracking.objects.select_related("order")
     serializer_class = AdminOrderTrackingSerializer
 
@@ -418,6 +608,8 @@ class AdminOrderTrackingViewSet(AdminBaseViewSet):
 # =====================================================
 
 class AdminReturnRequestViewSet(AdminBaseViewSet):
+    view_capability = 'support.view'
+    manage_capability = 'support.manage'
     queryset = ReturnRequest.objects.select_related(
         "order_item",
         "order_item__order"
@@ -473,6 +665,12 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
             instance.status = ReturnRequest.Status.APPROVED
             instance.save()
 
+            record_audit(
+                request=request, action='support.return_approve',
+                entity=instance,
+                after={'status': 'approved', 'order': order.order_id},
+            )
+
             subject = f"Your Return Request #{instance.return_id} Has Been Approved"
 
             message = render_to_string(
@@ -492,6 +690,11 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
             instance.status = ReturnRequest.Status.REJECTED
             instance.reject_reason = reason
             instance.save()
+
+            record_audit(
+                request=request, action='support.return_reject',
+                entity=instance, after={'status': 'rejected'}, reason=reason,
+            )
 
             subject = f"Your Return Request #{instance.return_id} Was Rejected"
 
@@ -531,6 +734,8 @@ class AdminReturnRequestViewSet(AdminBaseViewSet):
 
 
 class AdminDisputeViewSet(AdminBaseViewSet):
+    view_capability = 'support.view'
+    manage_capability = 'support.manage'
     queryset = Dispute.objects.select_related(
         "return_request",
         "return_request__order_item",
@@ -551,6 +756,9 @@ class AdminDisputeViewSet(AdminBaseViewSet):
         """
         POST /admin/disputes/{dispute_id}/resolve
         Resolves a dispute and updates the return request status.
+        A resolution carrying ``refund_amount`` moves money — per the PRD
+        rights table support staff can only *request* refunds, so that path
+        additionally requires the ``finance.refund`` capability.
         """
         instance = self.get_object()
         resolution = request.data.get("resolution")
@@ -563,6 +771,28 @@ class AdminDisputeViewSet(AdminBaseViewSet):
                 status=400
             )
 
+        try:
+            has_refund = refund_amount is not None \
+                and Decimal(str(refund_amount)) > 0
+        except Exception:
+            return Response({"detail": "Invalid refund_amount."}, status=400)
+
+        if has_refund and not has_capability(request.user, 'finance.refund'):
+            record_audit(
+                request=request, action='permission.denied',
+                entity_type='capability', entity_id='finance.refund',
+                after={'path': request.path, 'dispute': instance.dispute_id,
+                       'refund_amount': str(refund_amount)},
+                reason='dispute refund requires finance.refund',
+            )
+            return Response(
+                {"detail": "Resolving with a refund requires the "
+                           "finance.refund capability. Support staff can "
+                           "request the refund instead."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        prior_status = instance.status
         instance.resolution = resolution
         instance.admin_notes = admin_notes
         if refund_amount:
@@ -571,6 +801,15 @@ class AdminDisputeViewSet(AdminBaseViewSet):
         instance.status = Dispute.Status.RESOLVED
         instance.resolved_at = timezone.now()
         instance.save()
+
+        record_audit(
+            request=request, action='support.dispute_resolve',
+            entity=instance,
+            before={'status': prior_status},
+            after={'resolution': resolution, 'status': 'resolved',
+                   'refund_amount': str(refund_amount or '')},
+            reason=admin_notes,
+        )
 
         # Update associated return request
         return_req = instance.return_request
@@ -597,6 +836,8 @@ class AdminDisputeViewSet(AdminBaseViewSet):
 
 
 class AdminDesignerViewSet(AdminBaseViewSet):
+    view_capability = 'designers.view'
+    manage_capability = 'designers.manage'
     queryset = Designer.objects.select_related("user")
     serializer_class = AdminDesignerSerializer
 
@@ -707,11 +948,34 @@ class AdminDesignerViewSet(AdminBaseViewSet):
         changes status — the admin UI updates via partial_update, not the
         update-status action, so hooks live here to keep emails consistent."""
         previous_status = serializer.instance.status
+
+        # DES-02 — approval through PATCH gets the same readiness gate.
+        gate = None
+        new_status = serializer.validated_data.get('status')
+        if new_status == Designer.Status.APPROVED:
+            from .gates import evaluate_designer_readiness
+            gate = evaluate_designer_readiness(serializer.instance)
+            reasons = serializer.validated_data.get('status_reasons') or []
+            if not gate['passed'] and not reasons:
+                raise ValidationError({
+                    'detail': 'Approval requires all mandatory checks or a '
+                              'documented exception via status_reasons.',
+                    'checks': gate['checks'],
+                })
+
         designer = serializer.save()
         if designer.status != previous_status:
             if designer.status == Designer.Status.APPROVED and not designer.is_verified:
                 designer.is_verified = True
                 designer.save(update_fields=["is_verified"])
+            record_audit(
+                request=self.request, action='designer.status_change',
+                entity=designer,
+                before={'status': previous_status},
+                after={'status': designer.status,
+                       'reasons': designer.status_reasons,
+                       **({'checks': gate['checks']} if gate else {})},
+            )
             self._send_status_notifications(designer, designer.status)
 
     @action(detail=True, methods=["patch"], url_path="update-status")
@@ -736,6 +1000,21 @@ class AdminDesignerViewSet(AdminBaseViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # DES-02 — approval requires readiness evidence or an exception.
+        gate = None
+        if new_status == Designer.Status.APPROVED:
+            from .gates import evaluate_designer_readiness
+            gate = evaluate_designer_readiness(designer)
+            if not gate['passed'] and not status_reasons:
+                return Response(
+                    {"detail": "Designer approval requires all mandatory "
+                               "checks or a documented exception via "
+                               "status_reasons.",
+                     "checks": gate['checks']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        prior_status = designer.status
         designer.status = new_status
         designer.status_reasons = status_reasons
 
@@ -744,6 +1023,13 @@ class AdminDesignerViewSet(AdminBaseViewSet):
             designer.is_verified = True
 
         designer.save()
+
+        record_audit(
+            request=request, action='designer.status_change', entity=designer,
+            before={'status': prior_status},
+            after={'status': new_status, 'reasons': status_reasons,
+                   **({'checks': gate['checks']} if gate else {})},
+        )
 
         self._send_status_notifications(designer, new_status)
 
@@ -755,16 +1041,22 @@ class AdminDesignerViewSet(AdminBaseViewSet):
         })
 
 class AdminDesignerProductViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = DesignerProduct.objects.select_related("designer", "product")
     serializer_class = AdminDesignerProductSerializer
 
 
 class AdminCollectionViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = Collection.objects.select_related("designer")
     serializer_class = AdminCollectionSerializer
 
 
 class AdminSmartCollectionViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = SmartCollection.objects.prefetch_related("products")
     serializer_class = AdminSmartCollectionSerializer
     filterset_fields = ["collection_type", "is_active"]
@@ -774,45 +1066,111 @@ class AdminSmartCollectionViewSet(AdminBaseViewSet):
 
 
 class AdminDesignerAnalyticsViewSet(AdminBaseViewSet):
+    view_capability = 'designers.view'
+    manage_capability = 'designers.manage'
     queryset = DesignerAnalytics.objects.select_related("designer")
     serializer_class = AdminDesignerAnalyticsSerializer
 
 
 class AdminShippingOptionViewSet(AdminBaseViewSet):
+    view_capability = 'designers.view'
+    manage_capability = 'designers.manage'
     queryset = ShippingOption.objects.select_related("designer")
     serializer_class = AdminShippingOptionSerializer
 
 
 class AdminDesignerOrderViewSet(AdminBaseViewSet):
+    view_capability = 'designers.view'
+    manage_capability = 'designers.manage'
     queryset = DesignerOrder.objects.select_related("user", "order_item")
     serializer_class = AdminDesignerOrderSerializer
 
 
 class AdminShipmentTrackingViewSet(AdminBaseViewSet):
+    view_capability = 'designers.view'
+    manage_capability = 'designers.manage'
     queryset = ShipmentTracking.objects.select_related("order")
     serializer_class = AdminShipmentTrackingSerializer
 
 
 class AdminInventoryAlertViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = InventoryAlert.objects.select_related("designer_product")
     serializer_class = AdminInventoryAlertSerializer
 
 
 class AdminPromotionViewSet(AdminBaseViewSet):
+    view_capability = 'catalog.view'
+    manage_capability = 'catalog.manage'
     queryset = Promotion.objects.select_related("designer")
     serializer_class = AdminPromotionSerializer
 
 
 class AdminWithdrawalViewSet(AdminBaseViewSet):
+    """Payout processing — finance-only (FIN-03). ``mark_completed`` must
+    carry settlement evidence (provider transfer id or manual-proof
+    reference); a bare status flip is not a settlement."""
+    view_capability = 'finance.view'
+    manage_capability = 'finance.approve_payout'
     queryset = Withdrawal.objects.select_related("user")
     serializer_class = AdminWithdrawalSerializer
 
     @action(detail=True, methods=['post'])
     def mark_completed(self, request, pk=None):
+        """Manual settlement (FIN-03). Requires settlement evidence; above
+        ``PAYOUT_DUAL_APPROVAL_THRESHOLD`` a second finance-capable staff
+        member must approve the recorded request — the maker can never
+        be the checker."""
+        from .approvals import payout_dual_threshold, request_approval
+
         withdrawal = self.get_object()
+        reference = (request.data.get('settlement_reference')
+                     or request.data.get('reference') or '').strip()
+        note = (request.data.get('note') or '').strip()
+        if not reference:
+            return Response(
+                {"status": "error",
+                 "message": "settlement_reference is required — manual "
+                            "settlement needs provider/manual proof (FIN-03)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if withdrawal.status == 'completed':
+            return Response(
+                {"status": "error", "message": "Withdrawal already completed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if withdrawal.amount > payout_dual_threshold():
+            approval = request_approval(
+                request=request, action='finance.payout_settled',
+                entity=withdrawal,
+                payload={'settlement_reference': reference, 'note': note,
+                         'amount': str(withdrawal.amount)},
+                reason=note or 'manual settlement request',
+            )
+            return Response(
+                {"status": "approval_required",
+                 "message": "Amount exceeds the dual-approval threshold — "
+                            "a second approver must confirm via "
+                            "/manage/approvals.",
+                 "approval_id": approval.id},
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        before = {'status': withdrawal.status,
+                  'flutterwave_transfer_id': withdrawal.flutterwave_transfer_id}
         withdrawal.status = "completed"
         withdrawal.processed_at = timezone.now()
+        withdrawal.flutterwave_transfer_id = reference
         withdrawal.save()
+        record_audit(
+            request=request, action='finance.payout_settled',
+            entity=withdrawal, before=before,
+            after={'status': 'completed', 'settlement_reference': reference,
+                   'amount': str(withdrawal.amount)},
+            reason=(request.data.get('note') or 'manual settlement'),
+        )
         return Response({"status": "success", "message": "Withdrawal marked as completed."})
 
     @action(detail=True, methods=['post'])
@@ -823,6 +1181,13 @@ class AdminWithdrawalViewSet(AdminBaseViewSet):
         withdrawal.processed_at = timezone.now()
         withdrawal.flutterwave_transfer_id = f"auto_{withdrawal.id}"
         withdrawal.save()
+        record_audit(
+            request=request, action='finance.payout_auto',
+            entity=withdrawal,
+            after={'status': 'completed',
+                   'transfer_id': withdrawal.flutterwave_transfer_id,
+                   'amount': str(withdrawal.amount)},
+        )
         return Response({"status": "success", "message": "Automated payout triggered and completed successfully."})
 
 
@@ -871,6 +1236,8 @@ from apps.core.serializers import SupportTicketSerializer, TicketMessageSerializ
 
 
 class AdminTicketViewSet(AdminBaseViewSet):
+    view_capability = 'support.view'
+    manage_capability = 'support.manage'
     queryset = SupportTicket.objects.select_related("user").prefetch_related("messages")
     serializer_class = SupportTicketSerializer
     filterset_fields = ["status", "category", "priority"]
@@ -893,6 +1260,12 @@ class AdminTicketViewSet(AdminBaseViewSet):
             sender=request.user,
             body=body,
             is_internal=request.data.get("is_internal", False),
+        )
+
+        record_audit(
+            request=request, action='support.ticket_reply', entity=ticket,
+            after={'message_id': str(msg.pk),
+                   'internal': bool(msg.is_internal)},
         )
 
         # Update ticket status if it was open
@@ -942,8 +1315,26 @@ class AdminTicketViewSet(AdminBaseViewSet):
                 {"status": "error", "message": f"Invalid status. Choose from {valid_statuses}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        ticket.status = new_status
-        ticket.save()
+        from .cases import apply_ticket_transition
+        reason = (request.data.get('reason') or '').strip()
+        evidence = (request.data.get('evidence') or '').strip()
+        prior_status = ticket.status
+        err = apply_ticket_transition(
+            ticket, new_status, reason=reason, evidence=evidence,
+        )
+        if err:
+            record_audit(
+                request=request, action='support.ticket_status.denied',
+                entity=ticket, before={'status': prior_status},
+                after={'attempted': new_status}, reason=err['message'],
+            )
+            return Response(err, status=status.HTTP_400_BAD_REQUEST)
+        record_audit(
+            request=request, action='support.ticket_status', entity=ticket,
+            before={'status': prior_status},
+            after={'status': new_status, 'evidence': evidence},
+            reason=reason,
+        )
         return Response(
             {"status": "success", "message": "Status updated.", "data": SupportTicketSerializer(ticket).data},
             status=status.HTTP_200_OK,
@@ -960,11 +1351,15 @@ class AdminGlobalSearchView(APIView):
             return Response({"status": "success", "query": q, "results": []})
 
         results = []
+        caps = lambda c: has_capability(request.user, c)
 
         # Designers
-        designers = Designer.objects.filter(
-            Q(brand_name__icontains=q) | Q(country__icontains=q) | Q(user__email__icontains=q) | Q(user__username__icontains=q)
-        )[:5]
+        designers = (
+            Designer.objects.filter(
+                Q(brand_name__icontains=q) | Q(country__icontains=q) | Q(user__email__icontains=q) | Q(user__username__icontains=q)
+            )[:5]
+            if caps('designers.view') else []
+        )
         for d in designers:
             results.append({
                 "type": "designer",
@@ -976,9 +1371,12 @@ class AdminGlobalSearchView(APIView):
             })
 
         # Products
-        products = Product.objects.filter(
-            Q(name__icontains=q) | Q(sku__icontains=q)
-        )[:5]
+        products = (
+            Product.objects.filter(
+                Q(name__icontains=q) | Q(sku__icontains=q)
+            )[:5]
+            if caps('catalog.view') else []
+        )
         for p in products:
             results.append({
                 "type": "product",
@@ -990,9 +1388,12 @@ class AdminGlobalSearchView(APIView):
             })
 
         # Orders (OrderItem)
-        order_items = OrderItem.objects.filter(
-            Q(order__order_id__icontains=q) | Q(order__status__icontains=q) | Q(product__name__icontains=q)
-        ).select_related("order", "product")[:5]
+        order_items = (
+            OrderItem.objects.filter(
+                Q(order__order_id__icontains=q) | Q(order__status__icontains=q) | Q(product__name__icontains=q)
+            ).select_related("order", "product")[:5]
+            if caps('orders.view') else []
+        )
         for item in order_items:
             results.append({
                 "type": "order",
@@ -1004,9 +1405,12 @@ class AdminGlobalSearchView(APIView):
             })
 
         # Customers
-        customers = Customer.objects.select_related("user").filter(
-            Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(user__first_name__icontains=q) | Q(user__last_name__icontains=q) | Q(phone__icontains=q)
-        )[:5]
+        customers = (
+            Customer.objects.select_related("user").filter(
+                Q(user__email__icontains=q) | Q(user__username__icontains=q) | Q(user__first_name__icontains=q) | Q(user__last_name__icontains=q) | Q(phone__icontains=q)
+            )[:5]
+            if caps('customers.view') else []
+        )
         for c in customers:
             results.append({
                 "type": "customer",
@@ -1018,9 +1422,12 @@ class AdminGlobalSearchView(APIView):
             })
 
         # Returns
-        returns = ReturnRequest.objects.filter(
-            Q(return_id__icontains=q) | Q(status__icontains=q)
-        ).select_related("order_item__order")[:5]
+        returns = (
+            ReturnRequest.objects.filter(
+                Q(return_id__icontains=q) | Q(status__icontains=q)
+            ).select_related("order_item__order")[:5]
+            if caps('support.view') else []
+        )
         for r in returns:
             results.append({
                 "type": "return",
@@ -1032,9 +1439,12 @@ class AdminGlobalSearchView(APIView):
             })
 
         # Disputes
-        disputes = Dispute.objects.filter(
-            Q(id__icontains=q) | Q(return_request__return_id__icontains=q)
-        ).select_related("return_request")[:5]
+        disputes = (
+            Dispute.objects.filter(
+                Q(id__icontains=q) | Q(return_request__return_id__icontains=q)
+            ).select_related("return_request")[:5]
+            if caps('support.view') else []
+        )
         for d in disputes:
             results.append({
                 "type": "dispute",
@@ -1046,9 +1456,12 @@ class AdminGlobalSearchView(APIView):
             })
 
         # Tickets
-        tickets = SupportTicket.objects.filter(
-            Q(subject__icontains=q) | Q(reference__icontains=q) | Q(description__icontains=q)
-        )[:5]
+        tickets = (
+            SupportTicket.objects.filter(
+                Q(subject__icontains=q) | Q(reference__icontains=q) | Q(description__icontains=q)
+            )[:5]
+            if caps('support.view') else []
+        )
         for t in tickets:
             results.append({
                 "type": "ticket",
@@ -1060,9 +1473,12 @@ class AdminGlobalSearchView(APIView):
             })
 
         # Smart Collections
-        collections = SmartCollection.objects.filter(
-            Q(title__icontains=q) | Q(description__icontains=q)
-        )[:5]
+        collections = (
+            SmartCollection.objects.filter(
+                Q(title__icontains=q) | Q(description__icontains=q)
+            )[:5]
+            if caps('catalog.view') else []
+        )
         for c in collections:
             results.append({
                 "type": "collection",
@@ -1093,19 +1509,33 @@ class CLevelDashboardAnalyticsView(APIView):
         thirty_days_ago = now - datetime.timedelta(days=30)
         six_months_ago = now - datetime.timedelta(days=180)
 
+        # Canonical money truth (PRD §8): only provider-confirmed payments —
+        # invoice.payment.is_paid, not soft-deleted. Order/item status labels
+        # are operational, never financial truth.
+        PAID = {
+            'order__invoice__payment__is_paid': True,
+            'order__invoice__payment__is_deleted': False,
+        }
+
         # ---------------------------------------------------------
         # 1. Financial Analytics (Revenue & Expenses)
         # ---------------------------------------------------------
-        
-        # Current Top Level Totals
-        total_gmv = OrderItem.objects.filter(
-            status__in=['delivered', 'processing', 'shipped']
-        ).aggregate(total=Sum('amount'))['total'] or 0
 
-        # Revenue is GMV. Expenses are Payouts to Designers via Escrow.
-        total_payouts = Escrow.objects.aggregate(
+        # GMV = merchandise value of PAID items at checkout (excludes
+        # shipping). OrderItem.sub_total = amount * quantity.
+        total_gmv = OrderItem.objects.filter(
+            **PAID,
+        ).aggregate(total=Sum('sub_total'))['total'] or 0
+
+        # Payouts = designer share of escrow actually RELEASED to wallets.
+        # Held escrow is a liability, not an expense — reported separately.
+        total_payouts = Escrow.objects.filter(status='released').aggregate(
             payouts=Sum(F('amount') - F('platform_commission'))
         )['payouts'] or 0
+        held_escrow = Escrow.objects.filter(status='held').aggregate(
+            total=Sum('amount'))['total'] or 0
+        commission_recognized = Escrow.objects.filter(status='released').aggregate(
+            total=Sum('platform_commission'))['total'] or 0
 
         # Time-Series Revenue vs Expenses (Daily for the last 30 days)
         daily_financials_qs = Escrow.objects.filter(created_at__gte=thirty_days_ago).annotate(
@@ -1179,12 +1609,15 @@ class CLevelDashboardAnalyticsView(APIView):
         
         monthly_growth = sorted(list(growth_dict.values()), key=lambda x: datetime.datetime.strptime(x['date'], '%b %Y'))
 
-        # Shipping Costs (Revenue from shipping)
-        total_shipping_revenue = Order.objects.aggregate(total=Sum('shipping_amount'))['total'] or 0
+        # Shipping Costs (Revenue from shipping — paid orders only)
+        total_shipping_revenue = Order.objects.filter(
+            invoice__payment__is_paid=True,
+            invoice__payment__is_deleted=False,
+        ).aggregate(total=Sum('shipping_amount'))['total'] or 0
 
-        # Top Products
+        # Top Products — paid order items only
         top_products_qs = OrderItem.objects.filter(
-            status__in=['delivered', 'processing', 'shipped']
+            **PAID,
         ).values('product__name').annotate(
             units_sold=Sum('quantity'),
             revenue=Sum('sub_total')
@@ -1199,10 +1632,15 @@ class CLevelDashboardAnalyticsView(APIView):
             for entry in top_products_qs
         ]
 
+        # Latest reconciliation status — freshness/trust metadata for execs.
+        last_recon = ReconciliationRun.objects.order_by('-started_at').first()
+
         data = {
             "financials": {
                 "total_gmv": float(total_gmv),
                 "total_payouts": float(total_payouts),
+                "held_escrow": float(held_escrow),
+                "commission_recognized": float(commission_recognized),
                 "total_shipping": float(total_shipping_revenue),
                 "daily_series": daily_financials,
                 "monthly_series": monthly_financials,
@@ -1218,7 +1656,40 @@ class CLevelDashboardAnalyticsView(APIView):
             },
             "products": {
                 "top_products": top_products
-            }
+            },
+            "meta": {
+                "generated_at": now.isoformat(),
+                "currency": "mixed",
+                "currency_note": (
+                    "Amounts are aggregated across transaction currencies; "
+                    "per-currency separation lands with FIN-05."
+                ),
+                "reconciliation": {
+                    "last_run_status": getattr(last_recon, 'status', None),
+                    "last_run_at": (
+                        last_recon.started_at.isoformat() if last_recon else None
+                    ),
+                    "open_exceptions": (
+                        ReconciliationException.objects
+                        .filter(status='open').count()
+                    ),
+                },
+                "definitions": {
+                    "total_gmv": "Merchandise value (sub_total) of paid order items — provider-confirmed payments only.",
+                    "total_payouts": "Designer share (amount - commission) of released escrow.",
+                    "held_escrow": "Escrow still held — liability, not expense.",
+                    "commission_recognized": "Platform commission on released escrow.",
+                    "total_shipping": "Shipping amounts on paid orders.",
+                    "total_users": "Customer accounts (all time).",
+                    "active_designers": "Designers with status 'approved'.",
+                },
+                "sources": {
+                    "payments": "pay.Payment (is_paid, not deleted)",
+                    "orders": "customers.Order via invoice.payment",
+                    "escrow": "pay.Escrow",
+                    "growth": "customers.Customer / designers.Designer signups",
+                },
+            },
         }
 
         return Response(data, status=status.HTTP_200_OK)
@@ -1233,7 +1704,9 @@ from apps.newsletter.models import Newsletter, NewsletterSubscriber
 class AdminNewsletterSubscriberViewSet(viewsets.ModelViewSet):
     queryset = NewsletterSubscriber.objects.all()
     serializer_class = AdminNewsletterSubscriberSerializer
-    permission_classes = [IsMarketer]
+    permission_classes = [IsMarketer, HasCapability]
+    view_capability = 'marketing.view'
+    manage_capability = 'marketing.configure'
     pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ["is_active"]
@@ -1245,7 +1718,10 @@ class AdminNewsletterSubscriberViewSet(viewsets.ModelViewSet):
 class AdminNewsletterViewSet(viewsets.ModelViewSet):
     queryset = Newsletter.objects.all()
     serializer_class = AdminNewsletterSerializer
-    permission_classes = [IsMarketer]
+    permission_classes = [IsMarketer, HasCapability]
+    view_capability = 'marketing.view'
+    manage_capability = 'marketing.configure'
+    action_capabilities = {'send_newsletter': 'marketing.send'}
     pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ["is_draft"]
@@ -1304,3 +1780,376 @@ class AdminNewsletterViewSet(viewsets.ModelViewSet):
             "status": "success",
             "message": f"Newsletter is being dispatched to {active_subscribers.count()} subscribers."
         }, status=status.HTTP_200_OK)
+
+# =====================================================
+# GOVERNANCE — audit events & data health (Phase 0)
+# =====================================================
+
+class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
+    """Append-only audit trail — read/search only, no mutation endpoints."""
+    queryset = AuditEvent.objects.all()
+    serializer_class = AuditEventSerializer
+    permission_classes = [HasCapability]
+    required_capability = 'audit.view'
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['action', 'entity_type', 'entity_id', 'actor_email', 'actor_role']
+    search_fields = ['actor_email', 'entity_id', 'action', 'reason']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+
+
+class DataQualityCheckViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = DataQualityCheck.objects.all()
+    serializer_class = DataQualityCheckSerializer
+    permission_classes = [HasCapability]
+    required_capability = 'health.view'
+    action_capabilities = {'run': 'health.manage'}
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ['check_name', 'status']
+    ordering_fields = ['checked_at']
+    ordering = ['-checked_at']
+
+    @action(detail=False, methods=['post'])
+    def run(self, request):
+        """Manually trigger the health sweep (ops/superadmin only)."""
+        from .checks import run_all_checks
+        days = int(request.data.get('days') or 30)
+        summary = run_all_checks(days=min(max(days, 1), 90), actor=request.user)
+        record_audit(
+            request=request, action='health.run',
+            entity_type='DataQualitySweep', entity_id='',
+            after=summary,
+        )
+        return Response(summary, status=status.HTTP_202_ACCEPTED)
+
+
+class ReconciliationRunViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = ReconciliationRun.objects.all()
+    serializer_class = ReconciliationRunSerializer
+    permission_classes = [HasCapability]
+    required_capability = 'finance.view'
+    action_capabilities = {'run': 'finance.reconcile'}
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ['name', 'status']
+    ordering_fields = ['started_at']
+    ordering = ['-started_at']
+
+    @action(detail=False, methods=['post'])
+    def run(self, request):
+        from .checks import reconcile_payments_vs_orders
+        days = int(request.data.get('days') or 30)
+        run = reconcile_payments_vs_orders(days=min(max(days, 1), 90),
+                                           actor=request.user)
+        record_audit(
+            request=request, action='reconciliation.run',
+            entity=run, after={'status': run.status,
+                               'exceptions': run.exception_count},
+        )
+        return Response(ReconciliationRunSerializer(run).data,
+                        status=status.HTTP_202_ACCEPTED)
+
+
+class ReconciliationExceptionViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = ReconciliationException.objects.select_related(
+        'run', 'resolved_by',
+    )
+    serializer_class = ReconciliationExceptionSerializer
+    permission_classes = [HasCapability]
+    required_capability = 'finance.view'
+    action_capabilities = {'resolve': 'finance.reconcile'}
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ['status', 'issue', 'entity_type', 'run']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+
+    @action(detail=True, methods=['post'])
+    def resolve(self, request, pk=None):
+        exc = self.get_object()
+        note = (request.data.get('note') or '').strip()
+        if exc.status == 'resolved':
+            return Response({'error': 'Exception already resolved'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        exc.status = 'resolved'
+        exc.resolved_by = request.user
+        exc.resolved_at = timezone.now()
+        exc.resolution_note = note
+        exc.save(update_fields=['status', 'resolved_by', 'resolved_at',
+                                'resolution_note'])
+        record_audit(
+            request=request, action='reconciliation.resolve',
+            entity=exc, reason=note,
+            after={'issue': exc.issue, 'entity': f'{exc.entity_type}:{exc.entity_id}'},
+        )
+        return Response(ReconciliationExceptionSerializer(exc).data)
+
+
+# =====================================================
+# WORK QUEUES (Phase 1 — operate safely)
+# =====================================================
+
+class WorkItemViewSet(viewsets.ReadOnlyModelViewSet):
+    """Unified staff work queue. Items are derived from source records by
+    the periodic ``sync_work_queues`` sweep (or the manual ``sync`` action);
+    humans assign/start/resolve/close — never edit source links."""
+    queryset = WorkItem.objects.select_related('assigned_to', 'resolved_by')
+    serializer_class = WorkItemSerializer
+    permission_classes = [HasCapability]
+    required_capability = 'work.view'
+    action_capabilities = {
+        'assign': 'work.manage', 'start': 'work.manage',
+        'resolve': 'work.manage', 'close': 'work.manage',
+        'reopen': 'work.manage', 'escalate': 'work.manage',
+        'sync': 'work.manage', 'priority': 'work.manage',
+    }
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['queue', 'status', 'priority', 'assigned_to', 'escalated']
+    search_fields = ['title', 'entity_id']
+    ordering_fields = ['due_at', 'created_at', 'priority']
+    ordering = ['status', 'due_at', '-created_at']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        p = self.request.query_params
+        if p.get('overdue', '').lower() in ('true', '1', 'yes'):
+            qs = qs.filter(due_at__lt=timezone.now(),
+                           status__in=('open', 'in_progress'))
+        if p.get('mine', '').lower() in ('true', '1', 'yes'):
+            qs = qs.filter(assigned_to=self.request.user)
+        if p.get('open', '').lower() in ('true', '1', 'yes'):
+            qs = qs.filter(status__in=('open', 'in_progress'))
+        return qs
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        rows = WorkItem.objects.filter(status__in=('open', 'in_progress'))
+        by_queue = {
+            r['queue']: r['count']
+            for r in rows.values('queue').annotate(count=Count('id'))
+        }
+        return Response({
+            'by_queue': by_queue,
+            'overdue': rows.filter(due_at__lt=timezone.now()).count(),
+            'unassigned': rows.filter(assigned_to__isnull=True).count(),
+            'mine': rows.filter(assigned_to=request.user).count(),
+            'total_open': rows.count(),
+        })
+
+    @action(detail=True, methods=['post'])
+    def assign(self, request, pk=None):
+        item = self.get_object()
+        user_id = request.data.get('user_id')
+        if user_id in (None, ''):
+            assignee = request.user  # claim for self
+        else:
+            assignee = get_user_model().objects.filter(id=user_id).first()
+            if not assignee or getattr(assignee, 'user_type', '') != 'admin':
+                return Response({'error': 'Assignee must be a staff user'},
+                                status=status.HTTP_400_BAD_REQUEST)
+        before = {'assigned_to': getattr(item.assigned_to, 'email', None)}
+        item.assigned_to = assignee
+        if item.status == 'open':
+            item.status = 'in_progress'
+        item.save(update_fields=['assigned_to', 'status', 'updated_at'])
+        record_audit(
+            request=request, action='work.assign', entity=item, before=before,
+            after={'assigned_to': assignee.email, 'status': item.status},
+        )
+        return Response(WorkItemSerializer(item).data)
+
+    @action(detail=True, methods=['post'])
+    def start(self, request, pk=None):
+        item = self.get_object()
+        if item.status != 'open':
+            return Response({'error': f'Only open items can start ({item.status})'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        item.status = 'in_progress'
+        if not item.assigned_to:
+            item.assigned_to = request.user
+        item.save(update_fields=['status', 'assigned_to', 'updated_at'])
+        record_audit(request=request, action='work.start', entity=item)
+        return Response(WorkItemSerializer(item).data)
+
+    @action(detail=True, methods=['post'])
+    def resolve(self, request, pk=None):
+        item = self.get_object()
+        note = (request.data.get('note') or '').strip()
+        if item.status in ('resolved', 'closed'):
+            return Response({'error': f'Item already {item.status}'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        item.status = 'resolved'
+        item.resolved_by = request.user
+        item.resolved_at = timezone.now()
+        item.resolution_note = note
+        item.save(update_fields=['status', 'resolved_by', 'resolved_at',
+                                 'resolution_note', 'updated_at'])
+        record_audit(request=request, action='work.resolve', entity=item,
+                     reason=note)
+        return Response(WorkItemSerializer(item).data)
+
+    @action(detail=True, methods=['post'])
+    def close(self, request, pk=None):
+        item = self.get_object()
+        note = (request.data.get('note') or '').strip()
+        if item.status == 'closed':
+            return Response({'error': 'Item already closed'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        item.status = 'closed'
+        item.resolved_by = request.user
+        item.resolved_at = timezone.now()
+        item.resolution_note = note
+        item.save(update_fields=['status', 'resolved_by', 'resolved_at',
+                                 'resolution_note', 'updated_at'])
+        record_audit(request=request, action='work.close', entity=item,
+                     reason=note)
+        return Response(WorkItemSerializer(item).data)
+
+    @action(detail=True, methods=['post'])
+    def reopen(self, request, pk=None):
+        item = self.get_object()
+        if item.status not in ('resolved', 'closed'):
+            return Response({'error': f'Item is not resolved ({item.status})'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        item.status = 'open'
+        item.resolved_by = None
+        item.resolved_at = None
+        item.resolution_note = ''
+        item.save(update_fields=['status', 'resolved_by', 'resolved_at',
+                                 'resolution_note', 'updated_at'])
+        record_audit(request=request, action='work.reopen', entity=item,
+                     reason=(request.data.get('note') or ''))
+        return Response(WorkItemSerializer(item).data)
+
+    @action(detail=True, methods=['post'])
+    def escalate(self, request, pk=None):
+        item = self.get_object()
+        item.escalated = True
+        if item.priority != 'urgent':
+            item.priority = 'urgent'
+        item.save(update_fields=['escalated', 'priority', 'updated_at'])
+        record_audit(request=request, action='work.escalate', entity=item,
+                     reason=(request.data.get('reason') or ''))
+        return Response(WorkItemSerializer(item).data)
+
+    @action(detail=True, methods=['post'])
+    def priority(self, request, pk=None):
+        item = self.get_object()
+        new = request.data.get('priority')
+        if new not in dict(WorkItem.PRIORITY_CHOICES):
+            return Response({'error': 'Invalid priority'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        before = {'priority': item.priority}
+        item.priority = new
+        item.save(update_fields=['priority', 'updated_at'])
+        record_audit(request=request, action='work.priority', entity=item,
+                     before=before, after={'priority': new})
+        return Response(WorkItemSerializer(item).data)
+
+    @action(detail=False, methods=['post'])
+    def sync(self, request):
+        """Manually re-derive work items from sources."""
+        from .queues import sync_work_queues
+        stats = sync_work_queues()
+        record_audit(request=request, action='work.sync',
+                     entity_type='WorkItem', after=stats)
+        return Response(stats, status=status.HTTP_202_ACCEPTED)
+
+
+class ApprovalRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """Maker-checker approvals (PRD §5). The initiator can never approve
+    their own request; approval executes the recorded action and every
+    step writes an immutable audit event."""
+    queryset = ApprovalRequest.objects.select_related(
+        'requested_by', 'decided_by'
+    )
+    serializer_class = ApprovalRequestSerializer
+    permission_classes = [HasCapability]
+    required_capability = 'finance.view'
+    action_capabilities = {
+        'approve': 'finance.approve_payout', 'reject': 'finance.approve_payout',
+    }
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['status', 'action', 'entity_type']
+    search_fields = ['entity_id', 'reason']
+    ordering = ['-created_at']
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        from .approvals import execute_approval
+
+        approval = self.get_object()
+        if approval.status == 'executed':
+            return Response({'error': 'Request already executed'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if approval.status not in ('pending', 'approved'):
+            return Response(
+                {'error': f'Cannot approve a {approval.status} request'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if (approval.requested_by_id
+                and approval.requested_by_id == request.user.id):
+            record_audit(
+                request=request, action='permission.denied',
+                entity=approval,
+                reason='initiator cannot approve own request',
+            )
+            return Response(
+                {'error': 'The requester cannot approve their own request '
+                          '(maker-checker).'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if approval.status == 'pending':
+            approval.status = 'approved'
+            approval.decided_by = request.user
+            approval.decided_at = timezone.now()
+            approval.save(update_fields=['status', 'decided_by', 'decided_at'])
+            record_audit(
+                request=request, action='approval.approved', entity=approval,
+                after={'for': approval.action,
+                       'entity_id': approval.entity_id},
+                reason=(request.data.get('note') or ''),
+            )
+
+        try:
+            result = execute_approval(approval, request)
+        except Exception as exc:
+            logger.exception('Approval execution failed for %s', approval.id)
+            return Response(
+                {'error': f'Approved but execution failed: {exc}',
+                 'approval_status': approval.status},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({
+            'status': 'executed', 'approval_id': approval.id,
+            'result': result,
+        })
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        approval = self.get_object()
+        if approval.status not in ('pending', 'approved'):
+            return Response(
+                {'error': f'Cannot reject a {approval.status} request'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if (approval.requested_by_id
+                and approval.requested_by_id == request.user.id):
+            return Response(
+                {'error': 'The requester cannot reject their own request.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        approval.status = 'rejected'
+        approval.decided_by = request.user
+        approval.decided_at = timezone.now()
+        approval.save(update_fields=['status', 'decided_by', 'decided_at'])
+        record_audit(
+            request=request, action='approval.rejected', entity=approval,
+            reason=(request.data.get('reason') or ''),
+        )
+        return Response(ApprovalRequestSerializer(approval).data)

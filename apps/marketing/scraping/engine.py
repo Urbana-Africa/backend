@@ -34,6 +34,47 @@ PLATFORM_DOMAINS = {
 
 EMAIL_RE = re.compile(r"[\w.-]+@[\w.-]+\.[\w]{2,}")
 
+# Search engines rank directory-style accounts highly for broad location queries.
+# Qualification must happen on the extracted profile, before a lead is persisted.
+AGGREGATOR_RE = re.compile(
+    r"\b(?:directory|community|network|association|group|forum|marketplace|"
+    r"discover designers|find designers|top designers|best designers|"
+    r"fashion designers\b|bridal designers\b|"
+    r"designers in|fashion designers in|list of designers|featuring designers|"
+    r"promoting designers|connect(?:ing)? you (?:with|to) designers)\b", re.I
+)
+GENERIC_NAME_RE = re.compile(
+    r"^(?:(?:best|top|leading|affordable)\s+)?(?:fashion|bridal|clothing)\s+"
+    r"designers?\s+(?:in|at|from)\s+.+$|^(?:lagos|nigeria|abuja)\s+"
+    r"(?:fashion|bridal)\s+designers?$", re.I
+)
+DIRECT_WORK_RE = re.compile(
+    r"\b(?:bespoke|couture|atelier|tailor(?:ing)?|made.to.order|custom.made|"
+    r"ready.to.wear|rtw|bridalwear|wedding dresses|fashion house|"
+    r"clothing brand|fashion label|we (?:make|design|sew|create)|"
+    r"shop (?:our|the) collection|order (?:your|a) dress)\b", re.I
+)
+
+
+def _is_direct_instagram_designer(item: dict) -> bool:
+    """Require a distinct designer identity and evidence of its own work."""
+    name = str(item.get('full_name') or '').strip()
+    handle = str(item.get('account') or '').strip().lstrip('@')
+    bio = str(item.get('biography') or '').strip()
+    category = str(item.get('business_category_name') or item.get('category_name')
+                   or item.get('category') or '')
+    identity = f'{name} {handle.replace("_", " ").replace(".", " ")}'
+    if AGGREGATOR_RE.search(f'{identity} {bio} {category}'):
+        return False
+    if GENERIC_NAME_RE.match(name) and not DIRECT_WORK_RE.search(bio):
+        return False
+    if not (DIRECT_WORK_RE.search(bio) or re.search(
+        r'\b(?:fashion designer|clothing designer|bridal designer|fashion brand)\b',
+        f'{bio} {category}', re.I
+    )):
+        return False
+    return bool(name or handle)
+
 
 def _is_platform_domain(domain: str) -> bool:
     """Suffix-aware match so subdomains (help.instagram.com etc.) count."""
@@ -270,7 +311,8 @@ def _lead_data_from_instagram(item: dict, url: str) -> dict:
     )
     return {
         "brand_name": (item.get("full_name") or account or ""),
-        "designer_name": item.get("full_name") or "",
+        # A profile display name is usually the brand, not the person's name.
+        "designer_name": "",
         "email": email,
         "phone_number": item.get("business_phone_number") or item.get("contact_phone_number") or "",
         "social_media_links": {"instagram": url},
@@ -301,9 +343,10 @@ def _parse_extracted_text(job: ScrapeJob, text: str, url: str):
 
     prompt = f"""
     You are an expert data extractor. Review the following text extracted from a webpage ({url}) and extract the details of an African fashion designer or fashion brand.
-    If there are multiple designers mentioned, just extract the main one or the first one. If no designer is found, return empty strings.
+    Only identify the owner of this page. Directories, rankings, communities, group pages, marketplaces, and articles about multiple designers are not leads. Do not select the first designer mentioned on those pages.
 
     Extract these fields:
+    - is_direct_designer: Boolean. True only when this page belongs to a specific designer or fashion brand that creates or sells its own designs.
     - brand_name: Name of the fashion brand.
     - designer_name: Name of the designer (if available).
     - email: Any contact email address.
@@ -359,7 +402,7 @@ def _parse_extracted_text(job: ScrapeJob, text: str, url: str):
             output_text = output_text[:-3]
 
         data = json.loads(output_text.strip())
-        if not data.get("brand_name"):
+        if data.get("is_direct_designer") is not True or not data.get("brand_name"):
             return None
         return data
     except Exception as e:
@@ -388,11 +431,16 @@ def _lead_from_extracted(extracted, provider_name: str, job: ScrapeJob):
     raw_json = extracted.get("json") or {}
     text = extracted.get("text") or extracted.get("markdown") or extracted.get("html", "")
 
+    if _looks_like_instagram_profile(raw_json) and not _is_direct_instagram_designer(raw_json):
+        return 'skipped'
+
     # Structured Instagram records are mapped directly; Gemini is only used
     # to parse unstructured page text.
     used_gemini = not _looks_like_instagram_profile(raw_json)
     if used_gemini:
         data = _parse_extracted_text(job, text, url) or {}
+        if not data:
+            return 'skipped'
     else:
         data = _lead_data_from_instagram(raw_json, url)
 

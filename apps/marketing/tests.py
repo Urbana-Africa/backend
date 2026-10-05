@@ -14,6 +14,7 @@ from apps.marketing.scraping.engine import (
     _first_url,
     _get_cached_or_extract,
     _is_platform_domain,
+    _is_direct_instagram_designer,
     _is_suppressed,
     _lead_data_from_instagram,
     _lead_from_extracted,
@@ -119,6 +120,31 @@ class PureHelpersTests(TestCase):
         data = _lead_data_from_instagram(rec, "https://ig.com/x/")
         self.assertEqual(data["email"], "hello@testbrand.com")
 
+    def test_instagram_qualification(self):
+        self.assertTrue(_is_direct_instagram_designer(IG_RECORD))
+        self.assertFalse(_is_direct_instagram_designer({
+            "account": "fashiondesignersinlagos",
+            "full_name": "Fashion Designers in Lagos",
+            "biography": "Discover the best designers in Lagos. DM to be featured.",
+            "business_category_name": "Fashion Designer",
+        }))
+        self.assertFalse(_is_direct_instagram_designer({
+            "account": "bestfashiondesignerlagos",
+            "full_name": "BEST FASHION DESIGNER IN GBAGADA, LAGOS, NIGERIA",
+            "biography": "Fashion designer in Lagos",
+            "business_category_name": "Fashion Designer",
+        }))
+        self.assertFalse(_is_direct_instagram_designer({
+            "account": "naijafashiondesigners",
+            "full_name": "Naija Fashion Designers|Fashion Designer in Lagos",
+            "biography": "Fashion designer in Lagos",
+        }))
+        self.assertTrue(_is_direct_instagram_designer({
+            "account": "starrycouture",
+            "full_name": "STARRY | LAGOS FASHION DESIGNER",
+            "biography": "Bespoke bridalwear made in Lagos. Book a fitting.",
+        }))
+
 
 class BudgetTests(TestCase):
     def setUp(self):
@@ -154,6 +180,7 @@ class LeadCreationTests(TestCase):
         lead = _lead_from_extracted(ig_extracted(), "brightdata", self.job)
         self.assertIsNotNone(lead)
         self.assertEqual(lead.brand_name, "Test Brand")
+        self.assertEqual(lead.designer_name, "")
         self.assertEqual(lead.instagram_handle, "testbrand")
         self.assertEqual(lead.email, "hello@testbrand.com")
         self.assertEqual(lead.website, "https://testbrand.com")
@@ -202,6 +229,26 @@ class LeadCreationTests(TestCase):
         lead = _lead_from_extracted(extracted, "brightdata", self.job)
         self.assertTrue(lead.needs_review)
         self.assertEqual(lead.email, "")
+
+    def test_directory_profile_is_not_saved(self):
+        extracted = ig_extracted("https://www.instagram.com/fashiondesignersinlagos/")
+        extracted["json"].update(
+            account="fashiondesignersinlagos",
+            full_name="Fashion Designers in Lagos",
+            biography="Discover designers in Lagos. DM to be featured.",
+        )
+        self.assertEqual(_lead_from_extracted(extracted, "brightdata", self.job), "skipped")
+        self.assertFalse(DesignerLead.objects.exists())
+
+    @patch("apps.marketing.scraping.engine._parse_extracted_text", return_value=None)
+    def test_unqualified_web_page_is_not_saved(self, parse):
+        extracted = {
+            "url": "https://example.com/fashion-designers-lagos",
+            "json": {"full_name": "First designer mentioned"},
+            "text": "A list of Lagos designers",
+        }
+        self.assertEqual(_lead_from_extracted(extracted, "brightdata", self.job), "skipped")
+        self.assertFalse(DesignerLead.objects.exists())
 
 
 class CacheAndRefundTests(TestCase):

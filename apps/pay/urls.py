@@ -2,6 +2,12 @@ from django.urls import path
 
 from apps.pay.confirm import FlutterwaveConfirmView, StripeConfirmView
 from apps.pay.initialize import InitializeFlutterwavePayment, InitializeStripePayment
+from apps.pay.flutterwave_direct import (
+    FlutterwaveDirectAuthorizeView,
+    FlutterwaveDirectChargeView,
+    FlutterwaveDirectStatusView,
+    FlutterwaveUnsupportedView,
+)
 from apps.pay.webhooks import FlutterwaveWebhookView, StripeWebhookView, ShippoWebhookView
 from . import views as payviews
 from rest_framework.routers import DefaultRouter
@@ -62,6 +68,12 @@ urlpatterns = [
     path("confirm/stripe/", StripeConfirmView.as_view()),
     path("init/flutterwave/", InitializeFlutterwavePayment.as_view()),
     path("init/stripe/", InitializeStripePayment.as_view()),
+
+    # ─── Flutterwave direct charge (lib/flutterwave createDirectChargeApi) ───
+    path("flutterwave/charge/", FlutterwaveDirectChargeView.as_view()),
+    path("flutterwave/authorize/", FlutterwaveDirectAuthorizeView.as_view()),
+    path("flutterwave/status/", FlutterwaveDirectStatusView.as_view()),
+    path("flutterwave/unsupported/<str:feature>/", FlutterwaveUnsupportedView.as_view()),
 
     # ─── Bank account / bank list ─────────────────────────────────────────────
     path("account", AccountDetailView.as_view(), name="account-detail"),

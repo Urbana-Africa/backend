@@ -119,8 +119,16 @@ class InitializeFlutterwavePayment(BaseInitializeInvoicePayment):
 
         # Log attempt and use its reference
         attempt = self.log_attempt(invoice)
+        attempt.user = request.user
+        attempt.amount = invoice.amount
+        attempt.currency = "USD"
+        attempt.status = "pending"
+        attempt.save(update_fields=["user", "amount", "currency", "status"])
 
-        # Return values for Flutterwave modal (charge in USD)
+        # Direct-charge checkout metadata (rails offered on the active API)
+        from .flutterwave_direct import checkout_meta
+
+        # Return values for Flutterwave checkout (charge in USD)
         return Response({
             "status": "success",
             "processor": "flutterwave",
@@ -132,6 +140,7 @@ class InitializeFlutterwavePayment(BaseInitializeInvoicePayment):
             "email": email,
             "customer_name": request.user.get_full_name(),
             "description": invoice.purpose or "Invoice Payment",
+            **checkout_meta("USD"),
         })
 
 

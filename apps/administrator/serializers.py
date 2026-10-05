@@ -408,7 +408,8 @@ class AdminNewsletterSubscriberSerializer(AdminBaseSerializer):
 
 from .models import (
     AuditEvent, DataQualityCheck, ReconciliationRun, ReconciliationException,
-    WorkItem, ApprovalRequest,
+    WorkItem, ApprovalRequest, Case, PolicyVersion, PrivacyRequest,
+    Incident, CapabilityGrant,
 )
 
 
@@ -473,3 +474,74 @@ class WorkItemSerializer(serializers.ModelSerializer):
             'source_status', 'resolved_by', 'resolved_at',
             'created_at', 'updated_at',
         )
+
+
+class CaseSerializer(serializers.ModelSerializer):
+    owner_email = serializers.CharField(
+        source='owner.email', read_only=True, default='')
+    allowed_transitions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Case
+        fields = '__all__'
+        read_only_fields = ('id', 'case_ref', 'created_at', 'updated_at',
+                            'resolved_at')
+
+    def get_allowed_transitions(self, obj):
+        from .cases import TICKET_TRANSITIONS
+        return sorted(TICKET_TRANSITIONS.get(obj.status, set()))
+
+
+class PolicyVersionSerializer(serializers.ModelSerializer):
+    created_by_email = serializers.CharField(
+        source='created_by.email', read_only=True, default='')
+    approved_by_email = serializers.CharField(
+        source='approved_by.email', read_only=True, default='')
+
+    class Meta:
+        model = PolicyVersion
+        fields = '__all__'
+        read_only_fields = ('id', 'version', 'created_by', 'approved_by',
+                            'created_at')
+
+
+class PrivacyRequestSerializer(serializers.ModelSerializer):
+    handler_email = serializers.CharField(
+        source='handler.email', read_only=True, default='')
+    subject_user_email = serializers.CharField(
+        source='subject_user.email', read_only=True, default='')
+    is_overdue = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PrivacyRequest
+        fields = '__all__'
+        read_only_fields = ('id', 'created_at', 'updated_at', 'verified_at',
+                            'completed_at')
+
+    def get_is_overdue(self, obj):
+        return bool(
+            obj.due_at and obj.due_at < timezone.now()
+            and obj.status not in ('completed', 'rejected'))
+
+
+class IncidentSerializer(serializers.ModelSerializer):
+    owner_email = serializers.CharField(
+        source='owner.email', read_only=True, default='')
+
+    class Meta:
+        model = Incident
+        fields = '__all__'
+        read_only_fields = ('id', 'created_at', 'updated_at', 'resolved_at')
+
+
+class CapabilityGrantSerializer(serializers.ModelSerializer):
+    user_email = serializers.CharField(
+        source='user.email', read_only=True, default='')
+    granted_by_email = serializers.CharField(
+        source='granted_by.email', read_only=True, default='')
+    is_active = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = CapabilityGrant
+        fields = '__all__'
+        read_only_fields = ('id', 'granted_by', 'created_at', 'revoked_at')

@@ -11,6 +11,7 @@ A denied capability check writes an ``AuditEvent`` (action
 """
 import logging
 
+from django.utils import timezone
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,32 @@ ROLE_CAPABILITIES = {
         'designers.view', 'support.view',
         'finance.view', 'analytics.view', 'work.view',
     },
+    # Risk/compliance: privacy requests, incident review, holds — read-mostly
+    # across domains, never money movement.
+    'risk': {
+        'customers.view', 'orders.view', 'support.view', 'designers.view',
+        'catalog.view', 'privacy.view', 'privacy.manage', 'risk.view',
+        'risk.manage', 'audit.view', 'health.view', 'work.view',
+        'work.manage',
+    },
+    # Analyst: read everything needed to validate metrics — no mutations.
+    'analyst': {
+        'dashboard.view', 'analytics.view', 'audit.view', 'health.view',
+        'orders.view', 'catalog.view', 'customers.view', 'designers.view',
+        'support.view', 'finance.view', 'marketing.view', 'work.view',
+    },
+    # Operations manager: cross-team exceptions and assignments.
+    'operations': {
+        'orders.view', 'orders.edit_fulfillment', 'catalog.view',
+        'customers.view', 'designers.view', 'support.view',
+        'health.view', 'work.view', 'work.manage', 'audit.view',
+    },
+    # Designer success: onboarding, coaching, lifecycle queues.
+    'designer_success': {
+        'designers.view', 'designers.manage', 'catalog.view',
+        'orders.view', 'support.view', 'customers.view',
+        'health.view', 'work.view', 'work.manage',
+    },
 }
 
 # Capabilities implied by Django staff/superuser status for non-role users.
@@ -56,7 +83,10 @@ _STAFF_CAPS = {'dashboard.view'}
 
 
 def capabilities_for(user) -> set:
-    """The effective capability set for a user, from their admin role."""
+    """The effective capability set for a user: role-derived caps adjusted
+    by active ``CapabilityGrant`` rows (GOV-01 — grants add, revocations
+    remove; superuser keeps the wildcard regardless).
+    """
     if not user or not getattr(user, 'is_authenticated', False):
         return set()
     if getattr(user, 'is_superuser', False):
@@ -64,6 +94,15 @@ def capabilities_for(user) -> set:
     caps = set(ROLE_CAPABILITIES.get(getattr(user, 'admin_role', None) or '', ()))
     if getattr(user, 'is_staff', False):
         caps |= _STAFF_CAPS
+    from .models import CapabilityGrant
+    now = timezone.now()
+    for grant in user.capability_grants.filter(revoked_at__isnull=True):
+        if grant.expires_at and grant.expires_at < now:
+            continue
+        if grant.granted:
+            caps.add(grant.capability)
+        else:
+            caps.discard(grant.capability)
     return caps
 
 

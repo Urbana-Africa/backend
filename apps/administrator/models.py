@@ -200,6 +200,8 @@ class WorkItem(models.Model):
         ('catalog_moderation', 'Catalog moderation'),
         ('reconciliation', 'Reconciliation exception'),
         ('payout_approval', 'Payout approval'),
+        ('return_action', 'Return awaiting action'),
+        ('incident', 'Incident'),
     )
     STATUS_CHOICES = (
         ('open', 'Open'),
@@ -237,6 +239,10 @@ class WorkItem(models.Model):
     )
     due_at = models.DateTimeField(null=True, blank=True, db_index=True)
     escalated = models.BooleanField(default=False)
+    escalated_reason = models.CharField(
+        max_length=120, blank=True, default='',
+        help_text="Rule that escalated the item (SUP-04) — e.g. 'sla_breach'.",
+    )
     # Last source-derived state — lets sync detect when the source resolved
     # or changed without rewriting unrelated fields.
     source_status = models.CharField(max_length=50, blank=True, default='')
@@ -331,3 +337,273 @@ class ApprovalRequest(models.Model):
 
     def __str__(self):
         return f"{self.action} {self.entity_type}:{self.entity_id} ({self.status})"
+
+
+class Case(models.Model):
+    """Canonical support case (SUP-01) — one owner, one ID, linking the
+    ticket/return/dispute/payment-claim/delivery-complaint source records
+    plus the order and designer involved. Status follows the SUP-02
+    lifecycle; transitions go through ``cases.TICKET_TRANSITIONS``.
+    """
+
+    STATUS_CHOICES = tuple(
+        (k, k.replace('_', ' ').title()) for k in (
+            'open', 'triaged', 'in_progress', 'investigating',
+            'awaiting_party', 'waiting', 'decision', 'action_pending',
+            'resolved', 'reopened', 'closed',
+        )
+    )
+    CATEGORY_CHOICES = (
+        ('ticket', 'Ticket'),
+        ('return', 'Return'),
+        ('dispute', 'Dispute'),
+        ('payment_claim', 'Payment claim'),
+        ('delivery_complaint', 'Delivery complaint'),
+        ('general', 'General'),
+    )
+    PRIORITY_CHOICES = WorkItem.PRIORITY_CHOICES
+
+    id = models.CharField(
+        primary_key=True, max_length=50, default=generate_custom_id,
+        editable=False,
+    )
+    case_ref = models.CharField(max_length=20, unique=True, editable=False)
+    subject = models.CharField(max_length=255)
+    category = models.CharField(
+        max_length=30, choices=CATEGORY_CHOICES, default='general')
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default='open', db_index=True)
+    priority = models.CharField(
+        max_length=10, choices=PRIORITY_CHOICES, default='medium')
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='owned_cases')
+    order = models.ForeignKey(
+        'customers.Order', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='cases')
+    designer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='designer_cases')
+    ticket = models.ForeignKey(
+        'core.SupportTicket', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='cases')
+    return_request = models.ForeignKey(
+        'customers.ReturnRequest', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='cases')
+    dispute = models.ForeignKey(
+        'customers.Dispute', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='cases')
+    related_links = models.JSONField(
+        default=list, blank=True,
+        help_text="Additional entity links: [{'type': 'Order', 'id': '…'}].")
+    resolution_note = models.TextField(blank=True, default='')
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['status', 'category', 'owner'])]
+
+    def save(self, *args, **kwargs):
+        if not self.case_ref:
+            import random, string
+            self.case_ref = 'CASE-' + ''.join(
+                random.choices(string.digits, k=6))
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.case_ref} {self.subject} ({self.status})"
+
+
+class PolicyVersion(models.Model):
+    """Versioned policy/config registry (GOV-02) — commission, fees,
+    payout holds, return windows, SLAs, market flags. Publish and rollback
+    are audited; high-impact keys go through maker-checker."""
+
+    STATUS_CHOICES = (
+        ('draft', 'Draft'),
+        ('published', 'Published'),
+        ('rolled_back', 'Rolled back'),
+        ('retired', 'Retired'),
+    )
+
+    id = models.CharField(
+        primary_key=True, max_length=50, default=generate_custom_id,
+        editable=False)
+    key = models.CharField(max_length=100, db_index=True)
+    version = models.PositiveIntegerField()
+    value = models.JSONField(default=dict)
+    status = models.CharField(
+        max_length=15, choices=STATUS_CHOICES, default='draft', db_index=True)
+    impact = models.CharField(
+        max_length=10, choices=(('low', 'Low'), ('high', 'High')),
+        default='low')
+    reason = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, related_name='policy_versions_created')
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='policy_versions_approved')
+    effective_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ['key', '-version']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['key', 'version'], name='unique_policy_version'),
+        ]
+
+    def __str__(self):
+        return f"{self.key} v{self.version} ({self.status})"
+
+
+class PrivacyRequest(models.Model):
+    """Privacy center record (GOV-03) — access, correction, deletion and
+    marketing-objection requests with identity verification and deadline
+    tracking. Deletion either propagates or records a lawful retention
+    exception."""
+
+    TYPE_CHOICES = (
+        ('access', 'Access / export'),
+        ('correction', 'Correction'),
+        ('deletion', 'Deletion'),
+        ('objection', 'Marketing objection'),
+    )
+    STATUS_CHOICES = (
+        ('received', 'Received'),
+        ('verifying', 'Verifying identity'),
+        ('in_progress', 'In progress'),
+        ('completed', 'Completed'),
+        ('rejected', 'Rejected'),
+    )
+
+    id = models.CharField(
+        primary_key=True, max_length=50, default=generate_custom_id,
+        editable=False)
+    request_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    subject_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='privacy_requests')
+    subject_email = models.EmailField(blank=True, default='')
+    status = models.CharField(
+        max_length=15, choices=STATUS_CHOICES, default='received',
+        db_index=True)
+    handler = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='handled_privacy_requests')
+    due_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    retention_exception = models.TextField(
+        blank=True, default='',
+        help_text='Lawful retention basis when deletion cannot fully '
+                  'propagate (e.g. financial records).')
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['due_at', '-created_at']
+
+    def __str__(self):
+        return f"{self.request_type} for {self.subject_email or self.subject_user_id} ({self.status})"
+
+
+class Incident(models.Model):
+    """Incident center record (GOV-04) — severity, owner, timeline,
+    customer impact, mitigations, communications and postmortem.
+    Open sev1/sev2 incidents feed the work queue."""
+
+    SEVERITY_CHOICES = (
+        ('sev1', 'SEV-1 — critical'),
+        ('sev2', 'SEV-2 — major'),
+        ('sev3', 'SEV-3 — minor'),
+        ('sev4', 'SEV-4 — cosmetic'),
+    )
+    STATUS_CHOICES = (
+        ('open', 'Open'),
+        ('mitigating', 'Mitigating'),
+        ('resolved', 'Resolved'),
+        ('postmortem', 'Postmortem'),
+        ('closed', 'Closed'),
+    )
+
+    id = models.CharField(
+        primary_key=True, max_length=50, default=generate_custom_id,
+        editable=False)
+    title = models.CharField(max_length=255)
+    severity = models.CharField(
+        max_length=10, choices=SEVERITY_CHOICES, default='sev3',
+        db_index=True)
+    status = models.CharField(
+        max_length=15, choices=STATUS_CHOICES, default='open', db_index=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='owned_incidents')
+    summary = models.TextField(blank=True, default='')
+    customer_impact = models.TextField(blank=True, default='')
+    timeline = models.JSONField(
+        default=list, blank=True,
+        help_text="Chronological entries: [{'at': ts, 'by': email, 'note'}].")
+    mitigations = models.TextField(blank=True, default='')
+    communications = models.TextField(blank=True, default='')
+    postmortem = models.TextField(blank=True, default='')
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"[{self.severity}] {self.title} ({self.status})"
+
+
+class CapabilityGrant(models.Model):
+    """Per-user capability grant/revocation (GOV-01).
+
+    Overrides the role-derived capability set: ``granted=True`` adds the
+    capability, ``granted=False`` removes it (explicit revocation beats a
+    role grant but never beats superuser). ``expires_at`` enables
+    time-bound break-glass access; expired rows are ignored at evaluation
+    time. Effective immediately — capabilities are resolved per request.
+    """
+
+    id = models.CharField(
+        primary_key=True, max_length=50, default=generate_custom_id,
+        editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='capability_grants')
+    capability = models.CharField(max_length=60, db_index=True)
+    granted = models.BooleanField(default=True)
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, related_name='capability_grants_given')
+    expires_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='Break-glass expiry — null means permanent.')
+    reason = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'capability'],
+                condition=models.Q(revoked_at__isnull=True),
+                name='unique_active_grant_per_capability'),
+        ]
+
+    @property
+    def is_active(self):
+        if self.revoked_at:
+            return False
+        return not (self.expires_at and self.expires_at < timezone.now())
+
+    def __str__(self):
+        return f"{'+' if self.granted else '-'}{self.capability} -> {self.user_id}"

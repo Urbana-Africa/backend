@@ -124,8 +124,8 @@ from apps.administrator.checks import (
     reconcile_payments_vs_orders,
 )
 from apps.administrator.models import (
-    ApprovalRequest, AuditEvent, DataQualityCheck, ReconciliationException,
-    ReconciliationRun,
+    ApprovalRequest, AuditEvent, CapabilityGrant, Case, DataQualityCheck,
+    PolicyVersion, ReconciliationException, ReconciliationRun,
 )
 from apps.customers.models import Customer, Order, OrderItem
 from apps.pay.models import Escrow, Invoice, Payment
@@ -1196,3 +1196,356 @@ class AdminCaseLifecycleTests(APITestCase):
         data = res.data.get("data", res.data)
         self.assertIn("triaged", data["allowed_transitions"])
         self.assertNotIn("decision", data["allowed_transitions"])
+
+
+class AdminGovernanceTests(APITestCase):
+    """SUP-03 refund safety, OPS-03 order transitions, SUP-01 cases,
+    SUP-04 escalation, GOV-01..04, DES-03..05, FIN-05/06, CAT-02."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            email="root@example.com", password="password123")
+        self.admin2 = User.objects.create_superuser(
+            email="root2@example.com", password="password123")
+        self.agent = _admin("sa2@example.com", "support_agent")
+        self.fin = _admin("fin3@example.com", "finance")
+        self.risk = _admin("risk@example.com", "risk")
+        self.user = User.objects.create_user(
+            email="cust@example.com", username="cust", password="pw")
+        self.designer_user = User.objects.create_user(
+            email="ds@example.com", username="ds", password="pw")
+        self.designer = Designer.objects.create(
+            user=self.designer_user, brand_name="D",
+            status=Designer.Status.APPROVED, bio="b",
+            instagram="https://x.com/d", ships_internationally="yes")
+
+    def _dispute(self, amount="100.00"):
+        from apps.customers.models import Dispute, ReturnRequest
+        order, _ = _paid_order(self.user, amount=amount)
+        item = order.items.first()
+        item.product = Product.objects.create(
+            user=self.designer_user, name="G", description="d", price=10)
+        item.save()
+        rr = ReturnRequest.objects.create(order_item=item, reason="damaged")
+        return Dispute.objects.create(
+            return_request=rr, opened_by=self.user), item
+
+    def test_refund_capped_at_collected_and_no_double_pay(self):
+        dispute, item = self._dispute("100.00")
+        collected = item.sub_total
+        self.client.force_authenticate(self.admin)
+
+        res = self.client.post(
+            f"/manage/disputes/{dispute.dispute_id}/resolve",
+            {"resolution": "partial_refund",
+             "refund_amount": str(collected + 50)}, format="json")
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertIn("refund_context", res.data)
+
+        res = self.client.post(
+            f"/manage/disputes/{dispute.dispute_id}/resolve",
+            {"resolution": "partial_refund",
+             "refund_amount": str(collected)}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+        dispute.refresh_from_db()
+        self.assertEqual(dispute.refund_amount, collected)
+        # The item's return now awaits settlement evidence.
+        dispute.return_request.refresh_from_db()
+        self.assertEqual(dispute.return_request.status, "refund_pending")
+
+        # Second resolution cannot pay again.
+        res = self.client.post(
+            f"/manage/disputes/{dispute.dispute_id}/resolve",
+            {"resolution": "refund_approved",
+             "refund_amount": "10"}, format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_refund_context_endpoint_and_unpaid_order(self):
+        dispute, item = self._dispute("100.00")
+        self.client.force_authenticate(self.admin)
+        res = self.client.get(
+            f"/manage/disputes/{dispute.dispute_id}/refund-context")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(
+            Decimal(res.data["data"]["remaining_refundable"]),
+            item.sub_total)
+
+        # Unpaid order: nothing collected → refund impossible.
+        # (Payment.save() re-marks paid when status stays 'success'.)
+        order = item.order
+        order.invoice.payment.is_paid = False
+        order.invoice.payment.status = 'pending'
+        order.invoice.payment.save()
+        res = self.client.post(
+            f"/manage/disputes/{dispute.dispute_id}/resolve",
+            {"resolution": "partial_refund", "refund_amount": "1"},
+            format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_order_transitions_enforced_with_reason(self):
+        order, _ = _paid_order(self.user)
+        self.client.force_authenticate(self.agent)
+        url = f"/manage/orders/{order.pk}"
+
+        # pending → delivered is not a legal edge.
+        res = self.client.patch(
+            url, {"status": "delivered", "reason": "jump"}, format="json")
+        self.assertEqual(res.status_code, 400, res.data)
+
+        # Legal edge still needs a reason.
+        res = self.client.patch(url, {"status": "processing"},
+                                format="json")
+        self.assertEqual(res.status_code, 400)
+
+        res = self.client.patch(
+            url, {"status": "processing", "reason": "acknowledged"},
+            format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+        order.refresh_from_db()
+        self.assertEqual(order.status, "processing")
+        self.assertTrue(AuditEvent.objects.filter(
+            action="orders.status_change",
+            entity_id=str(order.pk)).exists())
+
+        # Idempotent: re-asserting the same status is a no-op 200.
+        res = self.client.patch(
+            url, {"status": "processing"}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+
+    def test_case_inbox_owner_and_transitions(self):
+        from apps.administrator.models import Case
+        ticket = SupportTicket.objects.create(
+            subject="order issue", description="d", user=self.user)
+        self.client.force_authenticate(self.agent)
+        res = self.client.post("/manage/cases", {
+            "subject": "Order issue case", "category": "ticket",
+            "ticket": str(ticket.id)}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        case_id = res.data.get("id") or res.data["data"]["id"]
+        case = Case.objects.get(id=case_id)
+        self.assertTrue(case.case_ref.startswith("CASE-"))
+
+        res = self.client.post(
+            f"/manage/cases/{case.id}/status",
+            {"status": "triaged", "reason": "classified"}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+        case.refresh_from_db()
+        self.assertEqual(case.status, "triaged")
+        self.assertEqual(case.ticket_id, ticket.id)
+
+        res = self.client.post(
+            f"/manage/cases/{case.id}/assign",
+            {"owner": str(self.agent.id)}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+        case.refresh_from_db()
+        self.assertEqual(case.owner_id, self.agent.id)
+
+    def test_escalation_rules_flag_overdue_and_disputes(self):
+        from apps.administrator.queues import (
+            apply_escalation_rules, sync_work_queues)
+        from apps.administrator.models import WorkItem
+        overdue = WorkItem.objects.create(
+            queue="order_pending", entity_type="Order",
+            entity_id="O-1", title="late", status="open",
+            priority="medium",
+            due_at=timezone.now() - timedelta(hours=1))
+        apply_escalation_rules()
+        overdue.refresh_from_db()
+        self.assertTrue(overdue.escalated)
+        self.assertEqual(overdue.escalated_reason, "sla_breach")
+        self.assertEqual(overdue.priority, "high")
+
+        # Open disputes land in the support queue, escalated.
+        self._dispute()
+        sync_work_queues()
+        item = WorkItem.objects.get(
+            queue="support_case", entity_type="Dispute")
+        self.assertTrue(item.escalated)
+
+    def test_capability_grant_flow_and_sensitive_approval(self):
+        from apps.administrator.capabilities import has_capability
+        self.client.force_authenticate(self.admin)
+        self.assertFalse(has_capability(self.agent, 'catalog.publish'))
+
+        # Non-sensitive grant applies immediately.
+        res = self.client.post("/manage/capability-grants", {
+            "user": str(self.agent.id),
+            "capability": "catalog.publish", "granted": True,
+            "reason": "covering catalog shift"}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertTrue(has_capability(self.agent, 'catalog.publish'))
+
+        # Sensitive grant → maker-checker; a second approver activates it.
+        res = self.client.post("/manage/capability-grants", {
+            "user": str(self.agent.id),
+            "capability": "finance.refund", "granted": True,
+            "reason": "refund coverage"}, format="json")
+        self.assertEqual(res.status_code, 202, res.data)
+        self.assertFalse(has_capability(self.agent, 'finance.refund'))
+        approval_id = res.data["approval_id"]
+
+        self.client.force_authenticate(self.admin)
+        self.assertEqual(self.client.post(
+            f"/manage/approvals/{approval_id}/approve").status_code, 403)
+        self.client.force_authenticate(self.admin2)
+        res = self.client.post(
+            f"/manage/approvals/{approval_id}/approve")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertTrue(has_capability(self.agent, 'finance.refund'))
+
+        # Revoke takes effect immediately.
+        grant = CapabilityGrant.objects.get(capability='finance.refund')
+        res = self.client.post(
+            f"/manage/capability-grants/{grant.id}/revoke")
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(has_capability(self.agent, 'finance.refund'))
+
+    def test_policy_registry_publish_rollback(self):
+        from apps.administrator.models import PolicyVersion
+        self.client.force_authenticate(self.admin)
+        res = self.client.post("/manage/policies", {
+            "key": "return_window_days", "value": {"days": 14},
+            "impact": "low", "reason": "extend window"}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        pid = res.data.get("id") or res.data["data"]["id"]
+
+        res = self.client.post(f"/manage/policies/{pid}/publish")
+        self.assertEqual(res.status_code, 200, res.data)
+
+        # High-impact: author cannot self-publish.
+        res = self.client.post("/manage/policies", {
+            "key": "commission_rate", "value": {"rate": 0.12},
+            "impact": "high", "reason": "rate change"}, format="json")
+        pid2 = res.data.get("id") or res.data["data"]["id"]
+        res = self.client.post(f"/manage/policies/{pid2}/publish")
+        self.assertEqual(res.status_code, 403)
+        self.client.force_authenticate(self.admin2)
+        res = self.client.post(f"/manage/policies/{pid2}/publish")
+        self.assertEqual(res.status_code, 200, res.data)
+
+        # Rollback creates a new version with the old value.
+        self.client.force_authenticate(self.admin)
+        res = self.client.post(f"/manage/policies/{pid}/rollback",
+                               {"reason": "revert"}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+        rolled = PolicyVersion.objects.get(
+            key="return_window_days", status="published")
+        self.assertEqual(rolled.version, 2)
+
+    def test_privacy_request_deadline_and_deletion_rules(self):
+        self.client.force_authenticate(self.risk)
+        res = self.client.post("/manage/privacy-requests", {
+            "request_type": "deletion",
+            "subject_email": "cust@example.com",
+            "subject_user": str(self.user.id)}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        pid = res.data.get("id") or res.data["data"]["id"]
+
+        res = self.client.post(f"/manage/privacy-requests/{pid}/verify")
+        self.assertEqual(res.status_code, 200)
+
+        # Deletion cannot complete without propagation or an exception.
+        res = self.client.post(f"/manage/privacy-requests/{pid}/complete")
+        self.assertEqual(res.status_code, 400)
+        res = self.client.post(f"/manage/privacy-requests/{pid}/complete",
+                               {"retention_exception":
+                                "financial records retained 7y"},
+                               format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+
+        # Marketer cannot see privacy requests at all.
+        marketer = _admin("mk2@example.com", "marketer")
+        self.client.force_authenticate(marketer)
+        self.assertEqual(
+            self.client.get("/manage/privacy-requests").status_code, 403)
+
+    def test_incident_queue_and_transitions(self):
+        self.client.force_authenticate(self.risk)
+        res = self.client.post("/manage/incidents", {
+            "title": "Payment webhook outage", "severity": "sev1",
+            "summary": "payments not confirming"}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        iid = res.data.get("id") or res.data["data"]["id"]
+
+        from apps.administrator.queues import sync_work_queues
+        from apps.administrator.models import WorkItem
+        sync_work_queues()
+        item = WorkItem.objects.get(queue="incident", entity_id=str(iid))
+        self.assertTrue(item.escalated)
+        self.assertEqual(item.priority, "urgent")
+
+        res = self.client.post(f"/manage/incidents/{iid}/status",
+                               {"status": "mitigating",
+                                "reason": "failover running"},
+                               format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+        res = self.client.post(f"/manage/incidents/{iid}/timeline",
+                               {"note": "provider notified"}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+
+    def test_designer_activation_health_suspend(self):
+        designer = self.designer
+        self.client.force_authenticate(self.admin)
+
+        res = self.client.get(f"/manage/designers/{designer.id}/activation")
+        self.assertEqual(res.status_code, 200, res.data)
+        steps = res.data["data"]["steps"]
+        self.assertTrue(steps["approved"]["done"])
+        self.assertFalse(steps["first_paid_order"]["done"])
+        self.assertEqual(res.data["data"]["stalled_at"],
+                         "first_published_product")
+
+        res = self.client.get(f"/manage/designers/{designer.id}/health")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertIn("components", res.data["data"])
+        self.assertIn("fulfillment_reliability",
+                      res.data["data"]["components"])
+
+        # Suspension requires reason + risk category + review date.
+        res = self.client.post(f"/manage/designers/{designer.id}/suspend",
+                               {"reason": "x"}, format="json")
+        self.assertEqual(res.status_code, 400)
+        res = self.client.post(
+            f"/manage/designers/{designer.id}/suspend",
+            {"reason": "repeat defects", "risk_category": "quality",
+             "review_date": "2026-11-01", "notice": "email sent"},
+            format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+        designer.refresh_from_db()
+        self.assertEqual(designer.status, "blocked")
+        self.assertEqual(designer.suspension["risk_category"], "quality")
+
+        res = self.client.post(
+            f"/manage/designers/{designer.id}/reinstate",
+            {"reason": "review passed"}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+        designer.refresh_from_db()
+        self.assertEqual(designer.status, "approved")
+
+    def test_finance_summary_and_forecast(self):
+        _paid_order(self.user, amount="100.00")
+        self.client.force_authenticate(self.fin)
+        res = self.client.get("/manage/finance/summary")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertIn("gmv", res.data["data"])
+        self.assertIn("definitions", res.data["data"]["meta"])
+
+        res = self.client.get("/manage/finance/liability-forecast")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertIn("liabilities", res.data["data"])
+
+        # Read-only for finance role; marketer locked out.
+        marketer = _admin("mk3@example.com", "marketer")
+        self.client.force_authenticate(marketer)
+        self.assertEqual(
+            self.client.get("/manage/finance/summary").status_code, 403)
+
+    def test_inventory_health_flags(self):
+        Product.objects.create(user=self.designer_user, name="NoStock",
+                               description="d", price=10, stock=0,
+                               is_published=True, is_active=True)
+        self.client.force_authenticate(self.admin)
+        res = self.client.get("/manage/inventory/health")
+        self.assertEqual(res.status_code, 200, res.data)
+        flags = [r["name"] for r in res.data["data"]["out_of_stock"]]
+        self.assertIn("NoStock", flags)

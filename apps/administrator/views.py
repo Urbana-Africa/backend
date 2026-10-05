@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from django.conf import settings
 from django.utils import timezone
+from datetime import timedelta
 import logging
 import threading
 from decimal import Decimal
@@ -22,7 +23,8 @@ from apps.designers.models import *
 from apps.pay.models import Withdrawal
 from .models import (
     AuditEvent, DataQualityCheck, ReconciliationRun, ReconciliationException,
-    WorkItem, ApprovalRequest,
+    WorkItem, ApprovalRequest, Case, PolicyVersion, PrivacyRequest,
+    Incident, CapabilityGrant,
 )
 from apps.utils.pagination import StandardPagination
 from .serializers import *
@@ -369,6 +371,39 @@ class AdminCountryViewSet(AdminBaseViewSet):
 class AdminOrderViewSet(AdminBaseViewSet):
     view_capability = 'orders.view'
     manage_capability = 'orders.edit_fulfillment'
+
+    def partial_update(self, request, *args, **kwargs):
+        """OPS-03 — fulfillment state moves only through legal transitions,
+        each carrying a reason; same-status writes are no-ops."""
+        from .cases import ORDER_TRANSITIONS, validate_transition
+        order = self.get_object()
+        new_status = request.data.get('status')
+        if new_status is not None and new_status != order.status:
+            reason = (request.data.get('reason') or '').strip()
+            err = validate_transition(
+                order, 'status', new_status, ORDER_TRANSITIONS,
+                reason=reason, reason_label='order status change',
+            )
+            if err:
+                record_audit(
+                    request=request, action='orders.status_denied',
+                    entity=order, before={'status': order.status},
+                    after={'attempted': new_status}, reason=err['message'],
+                )
+                return Response(err, status=status.HTTP_400_BAD_REQUEST)
+            prior = order.status
+            response = super().partial_update(request, *args, **kwargs)
+            if response.status_code < 300:
+                record_audit(
+                    request=request, action='orders.status_change',
+                    entity=order, before={'status': prior},
+                    after={'status': new_status,
+                           'idempotency_key': request.data.get(
+                               'idempotency_key', '')},
+                    reason=reason,
+                )
+            return response
+        return super().partial_update(request, *args, **kwargs)
     queryset = Order.objects.select_related("customer", "invoice")
     serializer_class = AdminOrderSerializer
     filterset_fields = ["status"]
@@ -484,6 +519,47 @@ class AdminOrderItemViewSet(AdminBaseViewSet):
     manage_capability = 'orders.edit_fulfillment'
     queryset = OrderItem.objects.select_related("order", "product")
     serializer_class = AdminOrderItemSerializer
+
+    _STATUS_FIELDS = (
+        ('status', 'ORDER_TRANSITIONS'),
+        ('designer_status', 'ORDER_TRANSITIONS'),
+        ('customer_status', 'CUSTOMER_STATUS_TRANSITIONS'),
+        ('collection_origin_status', 'ORDER_TRANSITIONS'),
+        ('collection_destination_status', 'ORDER_TRANSITIONS'),
+    )
+
+    def partial_update(self, request, *args, **kwargs):
+        """OPS-03 — every status leg on an item moves through its own
+        transition map; each change needs a reason and is audited."""
+        from . import cases
+        item = self.get_object()
+        reason = (request.data.get('reason') or '').strip()
+        for field, map_name in self._STATUS_FIELDS:
+            new_value = request.data.get(field)
+            if new_value is None or new_value == getattr(item, field):
+                continue
+            err = cases.validate_transition(
+                item, field, new_value, getattr(cases, map_name),
+                reason=reason, reason_label=f'{field} change',
+            )
+            if err:
+                record_audit(
+                    request=request, action='orders.status_denied',
+                    entity=item, before={field: getattr(item, field)},
+                    after={'attempted': new_value}, reason=err['message'],
+                )
+                return Response(err, status=status.HTTP_400_BAD_REQUEST)
+        response = super().partial_update(request, *args, **kwargs)
+        if response.status_code < 300:
+            changed = {f: request.data[f] for f, _ in self._STATUS_FIELDS
+                       if f in request.data}
+            if changed:
+                record_audit(
+                    request=request, action='orders.item_status_change',
+                    entity=item, after=changed,
+                    reason=reason,
+                )
+        return response
 
     @action(detail=True, methods=["post"])
     def review_packaging_media(self, request, pk=None):
@@ -751,6 +827,14 @@ class AdminDisputeViewSet(AdminBaseViewSet):
     lookup_field = "dispute_id"
     lookup_url_kwarg = "dispute_id"
 
+    @action(detail=True, methods=["get"], url_path="refund-context")
+    def refund_context(self, request, dispute_id=None):
+        """SUP-03 — the pre-confirmation preview: eligibility, collected
+        funds, prior refunds, escrow state and the fee consequences."""
+        from .gates import refund_context
+        return Response({"status": "success",
+                         "data": refund_context(self.get_object())})
+
     @action(detail=True, methods=["post"], url_path="resolve")
     def resolve(self, request, dispute_id=None):
         """
@@ -764,6 +848,13 @@ class AdminDisputeViewSet(AdminBaseViewSet):
         resolution = request.data.get("resolution")
         admin_notes = request.data.get("admin_notes", "")
         refund_amount = request.data.get("refund_amount")
+
+        if instance.status in (Dispute.Status.RESOLVED, Dispute.Status.CLOSED):
+            return Response(
+                {"detail": "Dispute already resolved — a second resolution "
+                           "cannot issue a duplicate refund (SUP-03)."},
+                status=400,
+            )
 
         if resolution not in Dispute.Resolution.values:
             return Response(
@@ -792,6 +883,26 @@ class AdminDisputeViewSet(AdminBaseViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # SUP-03 — a refund can never exceed the collected funds for the
+        # disputed item minus refunds already issued against it.
+        if has_refund:
+            from .gates import refund_context
+            ctx = refund_context(instance)
+            if not ctx['payment_confirmed']:
+                return Response(
+                    {"detail": "The order for this item has no confirmed "
+                               "payment — there are no collected funds to "
+                               "refund.", "refund_context": ctx},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if Decimal(str(refund_amount)) > Decimal(ctx['remaining_refundable']):
+                return Response(
+                    {"detail": "Refund exceeds remaining refundable amount "
+                               "for this item.",
+                     "refund_context": ctx},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         prior_status = instance.status
         instance.resolution = resolution
         instance.admin_notes = admin_notes
@@ -811,9 +922,13 @@ class AdminDisputeViewSet(AdminBaseViewSet):
             reason=admin_notes,
         )
 
-        # Update associated return request
+        # Update associated return request — an issued refund stays
+        # pending until provider/settlement evidence lands.
         return_req = instance.return_request
-        return_req.status = ReturnRequest.Status.DISPUTE_RESOLVED
+        return_req.status = (
+            ReturnRequest.Status.REFUND_PENDING if has_refund
+            else ReturnRequest.Status.DISPUTE_RESOLVED
+        )
         return_req.resolved_at = timezone.now()
         return_req.save()
 
@@ -1039,6 +1154,105 @@ class AdminDesignerViewSet(AdminBaseViewSet):
             "message": f"Designer status updated to {new_status}",
             "data": serializer.data
         })
+
+    @action(detail=True, methods=["get"], url_path="activation")
+    def activation(self, request, pk=None):
+        """DES-03 — approved → first listing → first paid order → first
+        fulfilled order, each derived from source records."""
+        from .designer_health import activation_funnel
+        return Response({"status": "success",
+                         "data": activation_funnel(self.get_object())})
+
+    @action(detail=True, methods=["get"], url_path="health")
+    def health(self, request, pk=None):
+        """DES-04 — component health score with staff override support."""
+        from .designer_health import health_score
+        return Response({"status": "success",
+                         "data": health_score(self.get_object())})
+
+    @action(detail=True, methods=["post"], url_path="health-override")
+    def health_override(self, request, pk=None):
+        """DES-04 — override the computed score; requires reason + expiry."""
+        designer = self.get_object()
+        score = request.data.get("score")
+        reason = (request.data.get("reason") or "").strip()
+        expires_at = request.data.get("expires_at")
+        if score is None or not reason or not expires_at:
+            return Response(
+                {"error": "score, reason and expires_at are required — "
+                          "health overrides are time-bound (DES-04)."},
+                status=status.HTTP_400_BAD_REQUEST)
+        prior = designer.health_override
+        designer.health_override = {
+            "score": score, "reason": reason, "expires_at": expires_at,
+            "set_by": request.user.email,
+        }
+        designer.save(update_fields=["health_override"])
+        record_audit(
+            request=request, action="designer.health_override",
+            entity=designer, before={"override": prior},
+            after=designer.health_override, reason=reason)
+        return Response({"status": "success",
+                         "data": {"health_override":
+                                  designer.health_override}})
+
+    @action(detail=True, methods=["post"], url_path="suspend")
+    def suspend(self, request, pk=None):
+        """DES-05 — suspend with risk category, rationale, notice and
+        review date."""
+        designer = self.get_object()
+        reason = (request.data.get("reason") or "").strip()
+        category = (request.data.get("risk_category") or "").strip()
+        review_date = request.data.get("review_date")
+        notice = (request.data.get("notice") or "").strip()
+        if not reason or not category or not review_date:
+            return Response(
+                {"error": "reason, risk_category and review_date are "
+                          "required for suspension (DES-05)."},
+                status=status.HTTP_400_BAD_REQUEST)
+        prior = {"status": designer.status,
+                 "suspension": designer.suspension}
+        designer.status = Designer.Status.BLOCKED
+        designer.suspension = {
+            "reason": reason, "risk_category": category,
+            "notice": notice, "review_date": review_date,
+            "set_by": request.user.email,
+            "set_at": timezone.now().isoformat(),
+        }
+        designer.save(update_fields=["status", "suspension",
+                                     "status_updated_at"])
+        record_audit(
+            request=request, action="designer.suspend", entity=designer,
+            before=prior, after={"status": designer.status,
+                                 "suspension": designer.suspension},
+            reason=reason)
+        return Response({"status": "success",
+                         "data": AdminDesignerSerializer(designer).data})
+
+    @action(detail=True, methods=["post"], url_path="reinstate")
+    def reinstate(self, request, pk=None):
+        """DES-05 — lift a suspension; keeps the suspension record in
+        history via the audit trail."""
+        designer = self.get_object()
+        if designer.status != Designer.Status.BLOCKED:
+            return Response(
+                {"error": f"Designer is {designer.status}, not suspended."},
+                status=status.HTTP_400_BAD_REQUEST)
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"error": "reason is required."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        prior = {"status": designer.status,
+                 "suspension": designer.suspension}
+        designer.status = Designer.Status.APPROVED
+        designer.suspension = {}
+        designer.save(update_fields=["status", "suspension",
+                                     "status_updated_at"])
+        record_audit(
+            request=request, action="designer.reinstate", entity=designer,
+            before=prior, after={"status": designer.status}, reason=reason)
+        return Response({"status": "success",
+                         "data": AdminDesignerSerializer(designer).data})
 
 class AdminDesignerProductViewSet(AdminBaseViewSet):
     view_capability = 'catalog.view'
@@ -2104,6 +2318,27 @@ class ApprovalRequestViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # The approver must hold the capability for the request's domain —
+        # finance.* needs finance.approve_payout, access.* needs
+        # users.grant_role, settings.* needs settings.publish.
+        _domain_cap = {
+            'finance.': 'finance.approve_payout',
+            'access.': 'users.grant_role',
+            'settings.': 'settings.publish',
+        }
+        domain_cap = next(
+            (cap for prefix, cap in _domain_cap.items()
+             if approval.action.startswith(prefix)), None)
+        if domain_cap and not has_capability(request.user, domain_cap):
+            record_audit(
+                request=request, action='permission.denied',
+                entity=approval,
+                reason=f'approve requires {domain_cap}')
+            return Response(
+                {'error': f'Approving this request requires '
+                          f'{domain_cap}.'},
+                status=status.HTTP_403_FORBIDDEN)
+
         if approval.status == 'pending':
             approval.status = 'approved'
             approval.decided_by = request.user
@@ -2153,3 +2388,679 @@ class ApprovalRequestViewSet(viewsets.ReadOnlyModelViewSet):
             reason=(request.data.get('reason') or ''),
         )
         return Response(ApprovalRequestSerializer(approval).data)
+
+
+# =====================================================
+# SUP-01 — CANONICAL CASE INBOX
+# =====================================================
+
+class AdminCaseViewSet(AdminBaseViewSet):
+    """Single case inbox (SUP-01): one canonical case ID + one owner,
+    linked to the ticket/return/dispute/order/designer source records.
+    Status follows the SUP-02 lifecycle via ``cases.TICKET_TRANSITIONS``.
+    """
+    view_capability = 'support.view'
+    manage_capability = 'support.manage'
+    queryset = Case.objects.select_related(
+        'owner', 'order', 'designer', 'ticket', 'return_request', 'dispute')
+    serializer_class = CaseSerializer
+    filterset_fields = ['status', 'category', 'priority', 'owner']
+    search_fields = ['case_ref', 'subject']
+    ordering = ['-created_at']
+
+    def partial_update(self, request, *args, **kwargs):
+        # Status and ownership move only through the governed actions —
+        # a plain PATCH would bypass the SUP-02 transition record.
+        if 'status' in request.data or 'owner' in request.data:
+            return Response(
+                {'error': 'Use the /status or /assign actions — direct '
+                          'status/owner writes bypass the audit record.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        return super().partial_update(request, *args, **kwargs)
+
+    _SOURCE_FIELDS = {
+        'ticket': 'ticket', 'SupportTicket': 'ticket',
+        'return': 'return_request', 'ReturnRequest': 'return_request',
+        'dispute': 'dispute', 'Dispute': 'dispute',
+        'order': 'order', 'Order': 'order',
+        'designer': 'designer',
+    }
+
+    @action(detail=True, methods=['post'], url_path='status')
+    def update_status(self, request, pk=None):
+        from .cases import apply_ticket_transition
+        case = self.get_object()
+        new_status = request.data.get('status')
+        reason = (request.data.get('reason') or '').strip()
+        evidence = (request.data.get('evidence') or '').strip()
+        prior = case.status
+        err = apply_ticket_transition(
+            case, new_status, reason=reason, evidence=evidence)
+        if err:
+            record_audit(
+                request=request, action='support.case_status.denied',
+                entity=case, before={'status': prior},
+                after={'attempted': new_status}, reason=err['message'])
+            return Response(err, status=status.HTTP_400_BAD_REQUEST)
+        if new_status == 'resolved':
+            case.resolved_at = timezone.now()
+            case.resolution_note = reason
+            case.save(update_fields=['resolved_at', 'resolution_note'])
+        record_audit(
+            request=request, action='support.case_status', entity=case,
+            before={'status': prior},
+            after={'status': new_status, 'evidence': evidence},
+            reason=reason)
+        return Response({'status': 'success',
+                         'data': CaseSerializer(case).data})
+
+    @action(detail=True, methods=['post'], url_path='assign')
+    def assign(self, request, pk=None):
+        case = self.get_object()
+        owner_id = request.data.get('owner')
+        owner = get_user_model().objects.filter(pk=owner_id).first()
+        if owner_id and not owner:
+            return Response({'error': 'Owner not found.'},
+                            status=status.HTTP_404_NOT_FOUND)
+        prior = case.owner_id
+        case.owner = owner
+        case.save(update_fields=['owner', 'updated_at'])
+        record_audit(
+            request=request, action='support.case_assign', entity=case,
+            before={'owner': str(prior or '')},
+            after={'owner': str(owner_id or '')},
+            reason=request.data.get('reason', ''))
+        return Response({'status': 'success',
+                         'data': CaseSerializer(case).data})
+
+    @action(detail=True, methods=['post'], url_path='link')
+    def link(self, request, pk=None):
+        """Attach an additional source record — tickets, returns,
+        disputes, orders, designers — to the canonical case."""
+        case = self.get_object()
+        etype = request.data.get('entity_type')
+        eid = request.data.get('entity_id')
+        field = self._SOURCE_FIELDS.get(etype)
+        if not field or not eid:
+            return Response(
+                {'error': f"entity_type must be one of "
+                          f"{sorted(self._SOURCE_FIELDS)} with entity_id."},
+                status=status.HTTP_400_BAD_REQUEST)
+        prior = list(case.related_links)
+        if field in ('ticket', 'return_request', 'dispute', 'order',
+                     'designer') and not getattr(case, f'{field}_id'):
+            setattr(case, field + '_id', eid)
+            case.save(update_fields=[field, 'updated_at'])
+        else:
+            case.related_links = prior + [{'type': etype, 'id': str(eid)}]
+            case.save(update_fields=['related_links', 'updated_at'])
+        record_audit(
+            request=request, action='support.case_link', entity=case,
+            after={'linked': {'type': etype, 'id': str(eid)}})
+        return Response({'status': 'success',
+                         'data': CaseSerializer(case).data})
+
+
+# =====================================================
+# GOV-02 — POLICY REGISTRY
+# =====================================================
+
+class AdminPolicyVersionViewSet(AdminBaseViewSet):
+    """Policy/config registry (GOV-02). Draft → publish → retire, with
+    version diffs and rollback. Publishing a high-impact policy requires
+    a different approver than the author (maker-checker)."""
+    view_capability = 'audit.view'
+    manage_capability = 'settings.publish'
+    queryset = PolicyVersion.objects.select_related(
+        'created_by', 'approved_by')
+    serializer_class = PolicyVersionSerializer
+    filterset_fields = ['key', 'status']
+    search_fields = ['key']
+    ordering = ['key', '-version']
+
+    def perform_create(self, serializer):
+        key = serializer.validated_data['key']
+        latest = (PolicyVersion.objects.filter(key=key)
+                  .order_by('-version').first())
+        serializer.save(
+            version=(latest.version + 1) if latest else 1,
+            created_by=self.request.user)
+
+    @action(detail=True, methods=['post'], url_path='publish')
+    def publish(self, request, pk=None):
+        policy = self.get_object()
+        if policy.status != 'draft':
+            return Response(
+                {'error': f'Only draft policies can be published '
+                          f'({policy.status}).'},
+                status=status.HTTP_400_BAD_REQUEST)
+        # Maker-checker: high-impact changes need a different approver.
+        if (policy.impact == 'high'
+                and policy.created_by_id == request.user.id):
+            record_audit(
+                request=request, action='permission.denied', entity=policy,
+                reason='author cannot publish own high-impact policy')
+            return Response(
+                {'error': 'High-impact policies must be published by a '
+                          'different approver (maker-checker).'},
+                status=status.HTTP_403_FORBIDDEN)
+        prior = (PolicyVersion.objects
+                 .filter(key=policy.key, status='published')
+                 .exclude(pk=policy.pk).first())
+        policy.status = 'published'
+        policy.approved_by = request.user
+        policy.effective_at = timezone.now()
+        policy.save(update_fields=['status', 'approved_by', 'effective_at'])
+        if prior:
+            prior.status = 'retired'
+            prior.save(update_fields=['status'])
+        record_audit(
+            request=request, action='settings.policy_publish',
+            entity=policy,
+            before={'status': 'draft',
+                    'previous_value': prior.value if prior else None},
+            after={'status': 'published', 'value': policy.value},
+            reason=policy.reason)
+        return Response({'status': 'success',
+                         'data': PolicyVersionSerializer(policy).data})
+
+    @action(detail=True, methods=['post'], url_path='rollback')
+    def rollback(self, request, pk=None):
+        """Roll a key back to this version's value — creates a *new*
+        published version, never rewrites history."""
+        policy = self.get_object()
+        if policy.impact == 'high':
+            record_audit(
+                request=request, action='permission.denied', entity=policy,
+                reason='high-impact rollback requires approval flow')
+            return Response(
+                {'error': 'High-impact rollback requires a draft + '
+                          'publish approval cycle.'},
+                status=status.HTTP_403_FORBIDDEN)
+        latest = (PolicyVersion.objects.filter(key=policy.key)
+                  .order_by('-version').first())
+        new_version = PolicyVersion.objects.create(
+            key=policy.key, version=(latest.version + 1 if latest else 1),
+            value=policy.value, status='published', impact=policy.impact,
+            reason=(request.data.get('reason')
+                    or f'rollback to v{policy.version}'),
+            created_by=request.user, approved_by=request.user,
+            effective_at=timezone.now())
+        current = (PolicyVersion.objects
+                   .filter(key=policy.key, status='published')
+                   .exclude(pk=new_version.pk).first())
+        if current:
+            current.status = 'rolled_back'
+            current.save(update_fields=['status'])
+        record_audit(
+            request=request, action='settings.policy_rollback',
+            entity=new_version,
+            before={'rolled_back_to': policy.version,
+                    'previous': current.value if current else None},
+            after={'value': new_version.value},
+            reason=new_version.reason)
+        return Response({'status': 'success',
+                         'data': PolicyVersionSerializer(new_version).data})
+
+    @action(detail=True, methods=['get'], url_path='diff')
+    def diff(self, request, pk=None):
+        """Version diff + current published value for impact preview."""
+        policy = self.get_object()
+        current = (PolicyVersion.objects
+                   .filter(key=policy.key, status='published')
+                   .exclude(pk=policy.pk).first())
+        return Response({'status': 'success', 'data': {
+            'key': policy.key, 'version': policy.version,
+            'proposed': policy.value,
+            'current_published': {
+                'version': current.version if current else None,
+                'value': current.value if current else None},
+            'changed_keys': sorted(
+                set(policy.value) ^ set(current.value)
+                | {k for k in policy.value
+                   if current and policy.value.get(k) != current.value.get(k)}
+            ) if current else sorted(policy.value),
+        }})
+
+
+# =====================================================
+# GOV-03 — PRIVACY CENTER
+# =====================================================
+
+PRIVACY_REQUEST_DEADLINE_DAYS = 30
+
+
+class AdminPrivacyRequestViewSet(AdminBaseViewSet):
+    """Privacy requests (GOV-03): access, correction, deletion and
+    marketing objection with identity verification + deadline tracking."""
+    view_capability = 'privacy.view'
+    manage_capability = 'privacy.manage'
+    queryset = PrivacyRequest.objects.select_related(
+        'subject_user', 'handler')
+    serializer_class = PrivacyRequestSerializer
+    filterset_fields = ['request_type', 'status', 'handler']
+    search_fields = ['subject_email']
+    ordering = ['due_at', '-created_at']
+
+    def perform_create(self, serializer):
+        days = int(getattr(settings, 'PRIVACY_REQUEST_DEADLINE_DAYS',
+                           PRIVACY_REQUEST_DEADLINE_DAYS))
+        instance = serializer.save(
+            due_at=timezone.now() + timedelta(days=days))
+        record_audit(
+            request=self.request, action='privacy.request_received',
+            entity=instance,
+            after={'type': instance.request_type,
+                   'subject': instance.subject_email,
+                   'due_at': str(instance.due_at)})
+
+    @action(detail=True, methods=['post'], url_path='verify')
+    def verify(self, request, pk=None):
+        pr = self.get_object()
+        if pr.verified_at:
+            return Response({'error': 'Already verified.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        pr.status = 'in_progress'
+        pr.verified_at = timezone.now()
+        pr.handler = request.user
+        pr.save(update_fields=['status', 'verified_at', 'handler',
+                               'updated_at'])
+        record_audit(
+            request=request, action='privacy.verified', entity=pr,
+            reason=(request.data.get('method')
+                    or 'identity verified'))
+        return Response({'status': 'success',
+                         'data': PrivacyRequestSerializer(pr).data})
+
+    @action(detail=True, methods=['post'], url_path='complete')
+    def complete(self, request, pk=None):
+        pr = self.get_object()
+        if pr.status in ('completed', 'rejected'):
+            return Response({'error': f'Request already {pr.status}.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        retention = (request.data.get('retention_exception') or '').strip()
+        if pr.request_type == 'deletion' and not (
+                request.data.get('propagated') or retention):
+            return Response(
+                {'error': 'Deletion completion requires either propagated='
+                          'true or a lawful retention_exception (GOV-03).'},
+                status=status.HTTP_400_BAD_REQUEST)
+        pr.status = 'completed'
+        pr.completed_at = timezone.now()
+        pr.handler = pr.handler or request.user
+        pr.retention_exception = retention
+        pr.save(update_fields=['status', 'completed_at', 'handler',
+                               'retention_exception', 'updated_at'])
+        record_audit(
+            request=request, action='privacy.completed', entity=pr,
+            after={'type': pr.request_type,
+                   'retention_exception': bool(retention)},
+            reason=request.data.get('notes', ''))
+        return Response({'status': 'success',
+                         'data': PrivacyRequestSerializer(pr).data})
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        pr = self.get_object()
+        reason = (request.data.get('reason') or '').strip()
+        if not reason:
+            return Response({'error': 'A rejection reason is required.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        pr.status = 'rejected'
+        pr.notes = f"{pr.notes}\nRejected: {reason}".strip()
+        pr.save(update_fields=['status', 'notes', 'updated_at'])
+        record_audit(
+            request=request, action='privacy.rejected', entity=pr,
+            reason=reason)
+        return Response({'status': 'success',
+                         'data': PrivacyRequestSerializer(pr).data})
+
+
+# =====================================================
+# GOV-04 — INCIDENT CENTER
+# =====================================================
+
+INCIDENT_TRANSITIONS = {
+    'open': {'mitigating', 'resolved', 'closed'},
+    'mitigating': {'resolved', 'closed'},
+    'resolved': {'postmortem', 'closed', 'open'},
+    'postmortem': {'closed'},
+    'closed': {'open'},
+}
+
+
+class AdminIncidentViewSet(AdminBaseViewSet):
+    """Incident center (GOV-04). Sev1/2 open incidents feed the work
+    queue; every status change + timeline entry is audited."""
+    view_capability = 'health.view'
+    manage_capability = 'risk.manage'
+    queryset = Incident.objects.select_related('owner')
+    serializer_class = IncidentSerializer
+    filterset_fields = ['severity', 'status', 'owner']
+    search_fields = ['title', 'summary']
+    ordering = ['-created_at']
+
+    @action(detail=True, methods=['post'], url_path='status')
+    def update_status(self, request, pk=None):
+        incident = self.get_object()
+        new_status = request.data.get('status')
+        reason = (request.data.get('reason') or '').strip()
+        prior = incident.status
+        if new_status == prior:
+            return Response({'status': 'success',
+                             'data': IncidentSerializer(incident).data})
+        if not reason:
+            return Response({'error': 'A reason is required.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        allowed = INCIDENT_TRANSITIONS.get(prior, set())
+        if new_status not in allowed:
+            return Response(
+                {'error': f'Cannot move {prior} → {new_status}.',
+                 'allowed': sorted(allowed)},
+                status=status.HTTP_400_BAD_REQUEST)
+        incident.status = new_status
+        if new_status == 'resolved':
+            incident.resolved_at = timezone.now()
+        incident.save(update_fields=['status', 'resolved_at', 'updated_at'])
+        record_audit(
+            request=request, action='gov.incident_status', entity=incident,
+            before={'status': prior}, after={'status': new_status},
+            reason=reason)
+        return Response({'status': 'success',
+                         'data': IncidentSerializer(incident).data})
+
+    @action(detail=True, methods=['post'], url_path='timeline')
+    def add_timeline_entry(self, request, pk=None):
+        incident = self.get_object()
+        note = (request.data.get('note') or '').strip()
+        if not note:
+            return Response({'error': 'note is required.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        entry = {'at': timezone.now().isoformat(),
+                 'by': request.user.email, 'note': note}
+        incident.timeline = list(incident.timeline or []) + [entry]
+        incident.save(update_fields=['timeline', 'updated_at'])
+        record_audit(
+            request=request, action='gov.incident_timeline',
+            entity=incident, after={'entry': note[:200]})
+        return Response({'status': 'success',
+                         'data': IncidentSerializer(incident).data})
+
+
+# =====================================================
+# GOV-01 — ACCESS CENTER (capability grants)
+# =====================================================
+
+SENSITIVE_CAPABILITIES = {
+    'finance.approve_payout', 'finance.mark_settled', 'finance.refund',
+    'finance.reconcile', 'users.grant_role', 'settings.publish',
+    'privacy.manage', 'privacy.export',
+}
+
+
+class AdminCapabilityGrantViewSet(AdminBaseViewSet):
+    """Access center (GOV-01): grant or revoke a named capability for one
+    user, optionally time-bound (break-glass). Effective immediately —
+    capabilities resolve per request. Granting a sensitive capability
+    creates a maker-checker ApprovalRequest instead of applying directly.
+    """
+    view_capability = 'users.grant_role'
+    manage_capability = 'users.grant_role'
+    queryset = CapabilityGrant.objects.select_related(
+        'user', 'granted_by')
+    serializer_class = CapabilityGrantSerializer
+    filterset_fields = ['user', 'capability', 'granted']
+    ordering = ['-created_at']
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        capability = data['capability']
+        if data['granted'] and capability in SENSITIVE_CAPABILITIES:
+            from .approvals import request_approval
+            ap = request_approval(
+                request=request, action='access.capability_grant',
+                entity=data['user'],
+                payload={
+                    'capability': capability,
+                    'expires_at': str(data.get('expires_at') or ''),
+                },
+                reason=data.get('reason', ''),
+            )
+            return Response(
+                {'status': 'approval_required',
+                 'message': 'Sensitive capability grant requires a second '
+                            'approver via /manage/approvals.',
+                 'approval_id': ap.id},
+                status=status.HTTP_202_ACCEPTED)
+        grant = serializer.save(granted_by=request.user)
+        record_audit(
+            request=request, action='access.capability_grant', entity=grant,
+            after={'user': str(grant.user_id), 'capability': capability,
+                   'granted': grant.granted,
+                   'expires_at': str(grant.expires_at or '')},
+            reason=grant.reason)
+        return Response({'status': 'success',
+                         'data': CapabilityGrantSerializer(grant).data},
+                        status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='revoke')
+    def revoke(self, request, pk=None):
+        """Revoke a grant — takes effect on the next API request."""
+        grant = self.get_object()
+        if grant.revoked_at:
+            return Response({'error': 'Already revoked.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        grant.revoked_at = timezone.now()
+        grant.save(update_fields=['revoked_at'])
+        record_audit(
+            request=request, action='access.capability_revoke',
+            entity=grant,
+            before={'capability': grant.capability,
+                    'user': str(grant.user_id)},
+            reason=request.data.get('reason', ''))
+        return Response({'status': 'success',
+                         'data': CapabilityGrantSerializer(grant).data})
+
+
+# =====================================================
+# FIN-05 / FIN-06 — FINANCE WORKBENCH METRICS
+# =====================================================
+
+class AdminFinanceSummaryView(APIView):
+    """FIN-05 — separated money metrics: GMV ≠ collections ≠ revenue.
+
+    Every figure carries its source and definition; missing data is null,
+    never fabricated zero.
+    """
+    permission_classes = [HasCapability]
+    required_capability = 'finance.view'
+
+    def get(self, request):
+        from django.db.models import Sum
+        from apps.customers.models import OrderItem as OI
+        from apps.pay.models import Payment, Escrow, Withdrawal
+
+        def total(qs, field='amount'):
+            return qs.aggregate(t=Sum(field))['t']
+
+        paid_payment = Q(is_paid=True, is_deleted=False)
+        item_paid = Q(order__invoice__payment__is_paid=True,
+                      order__invoice__payment__is_deleted=False)
+
+        # GMV — paid merchandise value (pre-refund, excl. shipping/tax).
+        gmv = total(OI.objects.filter(item_paid), 'sub_total')
+        # Customer collections — what the provider actually captured.
+        collections = total(Payment.objects.filter(paid_payment))
+        # Recognized platform revenue — commission on *released* escrow.
+        commission = total(
+            Escrow.objects.filter(status='released'),
+            'platform_commission')
+        # Designer payable — released escrow awaiting withdrawal.
+        payable = total(
+            Escrow.objects.filter(status='released'), 'amount')
+        held = total(Escrow.objects.filter(status='held'), 'amount')
+        pending_payouts = total(
+            Withdrawal.objects.filter(status='pending'), 'amount')
+        refund_pending = total(
+            OI.objects.filter(
+                return_requests__status='refund_pending',
+            ).distinct(), 'sub_total')
+
+        currencies = list(
+            Payment.objects.filter(paid_payment)
+            .values_list('currency', flat=True).distinct())
+
+        return Response({'status': 'success', 'data': {
+            'gmv': str(gmv) if gmv is not None else None,
+            'customer_collections': (
+                str(collections) if collections is not None else None),
+            'commission_recognized': (
+                str(commission) if commission is not None else None),
+            'designer_payable_released': (
+                str(payable) if payable is not None else None),
+            'escrow_held': str(held) if held is not None else None,
+            'payouts_pending': (
+                str(pending_payouts) if pending_payouts is not None
+                else None),
+            'refunds_pending': (
+                str(refund_pending) if refund_pending is not None
+                else None),
+            'meta': {
+                'generated_at': timezone.now().isoformat(),
+                'currencies': currencies,
+                'definitions': {
+                    'gmv': 'sub_total of items on paid orders',
+                    'customer_collections':
+                        'sum of paid, non-deleted payments',
+                    'commission_recognized':
+                        'platform_commission on released escrow only',
+                    'designer_payable_released':
+                        'released escrow amount owed to designers',
+                    'escrow_held': 'escrow amount still held',
+                    'payouts_pending': 'withdrawals awaiting settlement',
+                    'refunds_pending':
+                        'sub_total of items with refund_pending returns',
+                },
+                'sources': ['Payment', 'Invoice', 'OrderItem', 'Escrow',
+                            'Withdrawal', 'ReturnRequest'],
+                'warning': 'multi-currency deployments must not sum '
+                           'across currencies — see currencies list.',
+            },
+        }})
+
+
+class AdminLiabilityForecastView(APIView):
+    """FIN-06 — cash/liability view: held escrow, pending refunds,
+    pending payouts, chargeback exposure. Inputs are visible; no hidden
+    assumptions."""
+    permission_classes = [HasCapability]
+    required_capability = 'finance.view'
+
+    def get(self, request):
+        from django.db.models import Count, Sum
+        from apps.customers.models import Dispute, OrderItem as OI
+        from apps.pay.models import Escrow, Withdrawal
+
+        held = Escrow.objects.filter(status='held').aggregate(
+            t=Sum('amount'))['t']
+        payouts = Withdrawal.objects.filter(status='pending').aggregate(
+            t=Sum('amount'))['t']
+        refunds = OI.objects.filter(
+            return_requests__status='refund_pending').distinct().aggregate(
+            t=Sum('sub_total'))['t']
+        open_disputes = Dispute.objects.filter(
+            status__in=['opened', 'under_review', 'escalated'])
+        dispute_exposure = open_disputes.aggregate(
+            t=Sum('refund_amount'))['t']
+
+        return Response({'status': 'success', 'data': {
+            'liabilities': {
+                'escrow_held': str(held or 0),
+                'payouts_pending': str(payouts or 0),
+                'refunds_pending': str(refunds or 0),
+                'dispute_exposure': {
+                    'open_disputes': open_disputes.count(),
+                    'declared_refund_total': str(dispute_exposure or 0),
+                },
+            },
+            'meta': {
+                'generated_at': timezone.now().isoformat(),
+                'assumptions': [
+                    'held escrow is a designer liability until released',
+                    'pending withdrawals are committed cash outflow',
+                    'refund_pending uses item sub_total as the exposure',
+                    'dispute exposure counts declared refund_amounts only',
+                ],
+                'version': 1,
+            },
+        }})
+
+
+# =====================================================
+# CAT-02 — INVENTORY HEALTH CONSOLE
+# =====================================================
+
+class AdminInventoryHealthView(APIView):
+    """CAT-02 — out-of-stock, stale stock, oversell risk and fast sellers.
+    Each row traces to the product + the signal that flagged it."""
+    permission_classes = [HasCapability]
+    required_capability = 'catalog.view'
+
+    def get(self, request):
+        from django.db.models import Count, Sum
+        from apps.customers.models import OrderItem as OI
+
+        base = Product.objects.filter(is_active=True)
+        window = timezone.now() - timedelta(days=30)
+        stale_window = timezone.now() - timedelta(days=90)
+
+        sales = dict(
+            OI.objects.filter(
+                order__invoice__payment__is_paid=True,
+                created_at__gte=window,
+            ).values_list('product_id').annotate(
+                sold=Sum('quantity')))
+
+        def rows(products, flag, extra=None):
+            out = []
+            for p in products[:200]:
+                row = {'id': str(p.id), 'name': p.name,
+                       'stock': p.stock, 'price': str(p.price),
+                       'flag': flag}
+                if extra:
+                    row.update(extra(p))
+                out.append(row)
+            return out
+
+        out_of_stock = rows(
+            base.filter(stock=0, is_published=True), 'out_of_stock')
+        stale = rows(
+            base.filter(stock__gt=0, updated_at__lt=stale_window)
+            .exclude(id__in=sales), 'stale_stock',
+            lambda p: {'last_update': str(p.updated_at)})
+        fast = rows(
+            base.filter(id__in=[k for k, v in sales.items() if v >= 10]),
+            'fast_selling',
+            lambda p: {'sold_30d': sales.get(p.id, 0)})
+        oversell = rows(
+            [p for p in base.filter(id__in=sales)
+             if sales.get(p.id, 0) > 0 and p.stock == 0],
+            'oversell_risk',
+            lambda p: {'sold_30d': sales.get(p.id, 0)})
+
+        return Response({'status': 'success', 'data': {
+            'out_of_stock': out_of_stock,
+            'stale_stock': stale,
+            'fast_selling': fast,
+            'oversell_risk': oversell,
+            'meta': {
+                'generated_at': timezone.now().isoformat(),
+                'sales_window_days': 30, 'stale_after_days': 90,
+                'definitions': {
+                    'oversell_risk': 'paid sales in last 30d while '
+                                     'stock is 0',
+                },
+            },
+        }})

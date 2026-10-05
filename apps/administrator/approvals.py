@@ -74,8 +74,31 @@ def _execute_payout_settled(approval, request):
     return {'withdrawal': str(withdrawal.pk), 'status': 'completed'}
 
 
+def _execute_capability_grant(approval, request):
+    """GOV-01 — an approved sensitive-capability grant becomes active."""
+    from .models import CapabilityGrant
+    expires_raw = approval.payload.get('expires_at') or ''
+    grant = CapabilityGrant.objects.create(
+        user_id=approval.entity_id,
+        capability=approval.payload['capability'],
+        granted=True,
+        granted_by=request.user,
+        expires_at=expires_raw or None,
+        reason=approval.reason,
+    )
+    record_audit(
+        request=request, action='access.capability_grant', entity=grant,
+        after={'user': str(grant.user_id),
+               'capability': grant.capability},
+        reason=approval.reason, approval=str(approval.pk),
+    )
+    return {'grant_id': grant.id, 'capability': grant.capability,
+            'user': approval.entity_id}
+
+
 _EXECUTORS = {
     'finance.payout_settled': _execute_payout_settled,
+    'access.capability_grant': _execute_capability_grant,
 }
 
 

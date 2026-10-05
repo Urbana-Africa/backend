@@ -32,7 +32,21 @@ DEFAULT_SLA_HOURS = {
     'catalog_moderation': 48,
     'reconciliation': 48,
     'payout_approval': 24,
+    'return_action': 24,
+    'incident': 4,
 }
+
+# SUP-04 — auto-escalation thresholds (overridable in settings).
+ESCALATION_DEFAULTS = {
+    'order_value': 500,     # paid orders/items above this auto-escalate
+    'repeat_defects': 3,    # open disputes per designer → defect pattern
+}
+
+# SUP-02 active case states — resolved/closed drop out of the queue.
+TICKET_ACTIVE_STATUSES = [
+    'open', 'triaged', 'in_progress', 'investigating',
+    'awaiting_party', 'waiting', 'reopened',
+]
 
 # Business rules: how stale a condition must be to enter a queue.
 DISPATCH_SLA_DAYS = 3      # paid item still not dispatched by the designer
@@ -56,7 +70,7 @@ def _due(queue, base):
 def _from_support_tickets():
     from apps.core.models import SupportTicket
     for t in SupportTicket.objects.filter(
-        status__in=['open', 'in_progress', 'waiting']
+        status__in=TICKET_ACTIVE_STATUSES
     ).iterator():
         yield {
             'queue': 'support_case',
@@ -206,6 +220,74 @@ def _from_withdrawals():
         }
 
 
+def _from_return_requests():
+    """OPS-02 — returns awaiting an action (approval, transit, refund)."""
+    from apps.customers.models import ReturnRequest
+    for rr in ReturnRequest.objects.filter(
+        status__in=['pending', 'reviewing', 'return_in_transit',
+                    'return_received', 'refund_pending',
+                    'dispute_opened', 'dispute_under_review'],
+    ).select_related('order_item__order', 'order_item__designer').iterator():
+        yield {
+            'queue': 'return_action',
+            'entity_type': 'ReturnRequest',
+            'entity_id': str(rr.return_id),
+            'title': f"Return {rr.return_id} — {rr.status}",
+            'detail': {
+                'order': rr.order_item.order.order_id,
+                'item': rr.order_item.item_id,
+                'reason': rr.reason,
+                'designer': getattr(rr.order_item.designer, 'email', ''),
+                'amount': str(rr.order_item.sub_total),
+            },
+            'priority': 'high' if 'dispute' in rr.status else 'medium',
+            'source_status': rr.status,
+            'due_at': _due('return_action', rr.created_at),
+        }
+
+
+def _from_disputes():
+    """SUP-04 — open disputes/chargebacks are escalated support work."""
+    from apps.customers.models import Dispute
+    for d in Dispute.objects.filter(
+        status__in=['opened', 'under_review', 'escalated'],
+    ).select_related('return_request__order_item__order').iterator():
+        yield {
+            'queue': 'support_case',
+            'entity_type': 'Dispute',
+            'entity_id': str(d.dispute_id),
+            'title': f"Dispute {d.dispute_id} — {d.status}",
+            'detail': {
+                'order': d.return_request.order_item.order.order_id,
+                'item': d.return_request.order_item.item_id,
+                'opened_by': getattr(d.opened_by, 'email', ''),
+            },
+            'priority': 'urgent' if d.status == 'escalated' else 'high',
+            'source_status': d.status,
+            'due_at': _due('support_case', d.created_at),
+        }
+
+
+def _from_incidents():
+    """GOV-04 — open sev1–sev3 incidents are command-center work."""
+    from .models import Incident
+    for inc in Incident.objects.filter(
+        status__in=['open', 'mitigating'],
+        severity__in=['sev1', 'sev2', 'sev3'],
+    ).iterator():
+        yield {
+            'queue': 'incident',
+            'entity_type': 'Incident',
+            'entity_id': str(inc.id),
+            'title': f"{inc.severity.upper()}: {inc.title[:160]}",
+            'detail': {'severity': inc.severity,
+                       'owner': getattr(inc.owner, 'email', '')},
+            'priority': 'urgent' if inc.severity == 'sev1' else 'high',
+            'source_status': inc.status,
+            'due_at': _due('incident', inc.created_at),
+        }
+
+
 SOURCES = (
     _from_support_tickets,
     _from_designer_onboarding,
@@ -213,7 +295,80 @@ SOURCES = (
     _from_orders,
     _from_reconciliation,
     _from_withdrawals,
+    _from_return_requests,
+    _from_disputes,
+    _from_incidents,
 )
+
+
+def _escalation_conf():
+    conf = getattr(settings, 'ESCALATION_RULES', {}) or {}
+    return {**ESCALATION_DEFAULTS, **conf}
+
+
+def apply_escalation_rules() -> int:
+    """SUP-04 — mark open work items escalated with the triggering rule.
+
+    Rules: SLA breach, high-value order, urgent ticket, dispute/chargeback,
+    repeated designer defects (≥N open disputes), sev1 incident. Idempotent:
+    re-running never re-flags an already-escalated item and never clears a
+    human's escalation."""
+    from apps.customers.models import Dispute
+    conf = _escalation_conf()
+    now = timezone.now()
+
+    # Designers with a pattern of open disputes.
+    defect_designers = set(
+        Dispute.objects
+        .filter(status__in=['opened', 'under_review', 'escalated'])
+        .values_list('return_request__order_item__designer_id', flat=True)
+    )
+    # Count per designer to apply the threshold.
+    from collections import Counter
+    counts = Counter(defect_designers)
+    defect_designers = {
+        d for d, n in counts.items() if n >= conf['repeat_defects']
+    }
+
+    escalated = 0
+    for item in WorkItem.objects.filter(
+        status__in=['open', 'in_progress'], escalated=False,
+    ).select_related('assigned_to').iterator():
+        reason = None
+        if item.due_at and item.due_at < now:
+            reason = 'sla_breach'
+        if item.queue == 'support_case' and item.priority == 'urgent':
+            reason = 'urgent_ticket'
+        if item.entity_type == 'Dispute':
+            reason = 'dispute_escalation'
+        if item.queue == 'incident':
+            reason = 'incident'
+        if item.queue in ('order_pending', 'dispatch_late',
+                          'delivery_exception', 'return_action'):
+            try:
+                if float((item.detail or {}).get('total')
+                         or (item.detail or {}).get('amount') or 0
+                         ) >= conf['order_value']:
+                    reason = 'high_value'
+            except (TypeError, ValueError):
+                pass
+        if item.entity_type == 'ReturnRequest':
+            # repeated designer defects — the return's designer is flagged
+            from apps.customers.models import ReturnRequest
+            rr = ReturnRequest.objects.filter(
+                return_id=item.entity_id).select_related(
+                    'order_item').first()
+            if rr and rr.order_item.designer_id in defect_designers:
+                reason = 'repeat_defects'
+        if reason:
+            item.escalated = True
+            item.escalated_reason = reason
+            if item.priority in ('low', 'medium'):
+                item.priority = 'high'
+            item.save(update_fields=[
+                'escalated', 'escalated_reason', 'priority', 'updated_at'])
+            escalated += 1
+    return escalated
 
 
 def sync_work_queues() -> dict:
@@ -282,4 +437,5 @@ def sync_work_queues() -> dict:
                                  'updated_at'])
         stats['auto_closed'] += 1
 
+    stats['escalated'] = apply_escalation_rules()
     return stats

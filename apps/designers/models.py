@@ -96,6 +96,16 @@ class Designer(BaseModel):
 
     status_updated_at = models.DateTimeField(auto_now=True)
 
+    # DES-05 — suspension context (risk category, notice, review date)
+    suspension = models.JSONField(
+        default=dict, blank=True,
+        help_text="Active suspension record: reason, risk_category, "
+                  "set_by, set_at, review_date, notice.")
+    # DES-04 — staff health-score override with reason + expiry
+    health_override = models.JSONField(
+        default=dict, blank=True,
+        help_text="Override record: score, reason, expires_at, set_by.")
+
     # Email tracking — prevents duplicate scheduled reminder emails
     welcome_email_sent_at = models.DateTimeField(null=True, blank=True)
     upload_reminder_sent_at = models.DateTimeField(null=True, blank=True)

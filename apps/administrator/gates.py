@@ -45,3 +45,49 @@ def evaluate_product_moderation(product) -> dict:
         'categorized': bool(product.category_id) or product.categories.exists(),
     }
     return {'passed': all(checks.values()), 'checks': checks}
+
+
+def refund_context(dispute) -> dict:
+    """SUP-03 — the financial consequence preview for a dispute refund.
+
+    ``remaining`` is the collected merchandise value of the disputed order
+    item minus refunds already recorded against the same item — a refund
+    can never exceed what was actually collected nor be issued twice.
+    """
+    from decimal import Decimal
+    item = dispute.return_request.order_item
+    order = item.order
+    payment = getattr(getattr(order, 'invoice', None), 'payment', None)
+    paid = bool(payment and getattr(payment, 'is_paid', False)
+                and not getattr(payment, 'is_deleted', False))
+    collected = item.sub_total if paid else Decimal('0')
+
+    from apps.customers.models import Dispute
+    prior = (
+        Dispute.objects
+        .filter(return_request__order_item=item,
+                status=Dispute.Status.RESOLVED,
+                refund_amount__isnull=False)
+        .exclude(pk=dispute.pk)
+        .aggregate(total=models_sum('refund_amount'))['total']
+    ) or Decimal('0')
+    escrow = getattr(item, 'escrow', None)
+    return {
+        'order_item': str(item.pk),
+        'order': str(order.pk),
+        'payment_confirmed': paid,
+        'collected_amount': str(collected),
+        'previously_refunded': str(prior),
+        'remaining_refundable': str(collected - prior),
+        'escrow_status': escrow.status if escrow else 'none',
+        'escrow_amount': str(escrow.amount) if escrow else '0',
+        'platform_commission': str(escrow.platform_commission) if escrow else '0',
+        'return_window_open': dispute.return_request.is_return_eligible,
+        'currency': order.invoice.payment.currency if paid and getattr(
+            payment, 'currency', None) else 'USD',
+    }
+
+
+def models_sum(field):
+    from django.db.models import Sum
+    return Sum(field)

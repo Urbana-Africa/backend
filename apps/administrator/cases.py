@@ -41,19 +41,66 @@ def apply_ticket_transition(ticket, new_status, *, reason, evidence=''):
     """
     if new_status == ticket.status:
         return None  # no-op
-    if not reason or not reason.strip():
-        return {
-            'status': 'error',
-            'message': 'A reason is required for every case status change '
-                       '(SUP-02).',
-        }
-    allowed = TICKET_TRANSITIONS.get(ticket.status, set())
-    if new_status not in allowed:
-        return {
-            'status': 'error',
-            'message': f"Cannot move {ticket.status} → {new_status}.",
-            'allowed': sorted(allowed),
-        }
+    err = validate_transition(
+        ticket, 'status', new_status, TICKET_TRANSITIONS,
+        reason=reason, reason_label='case status change (SUP-02)',
+    )
+    if err:
+        return err
     ticket.status = new_status
     ticket.save(update_fields=['status', 'updated_at'])
     return None
+
+
+# ---------------------------------------------------------------------------
+# OPS-03 — order / order-item fulfillment transitions.
+# Delivered may only be reached via shipped; terminal states reopen through
+# the returns flow (a new ReturnRequest), never by flipping status back.
+# ---------------------------------------------------------------------------
+
+ORDER_TRANSITIONS = {
+    'pending':    {'processing', 'cancelled'},
+    'processing': {'shipped', 'cancelled'},
+    'shipped':    {'delivered', 'cancelled'},
+    'delivered':  {'returned'},
+    'returned':   set(),
+    'cancelled':  set(),
+}
+
+ORDER_ITEM_TRANSITIONS = dict(ORDER_TRANSITIONS)
+
+CUSTOMER_STATUS_TRANSITIONS = {
+    'pending':  {'received', 'returned'},
+    'received': {'returned'},
+    'returned': set(),
+}
+
+
+def validate_transition(obj, field, new_value, transitions, *,
+                        reason, reason_label='status change'):
+    """Shared OPS-03/SUP-02 gate: returns an error dict or ``None``.
+
+    Same-status writes are idempotent no-ops (duplicate carrier/webhook
+    events can never manufacture a state). A real move requires a reason.
+    """
+    if new_value not in _all_states(transitions):
+        return {'status': 'error',
+                'message': f"Invalid status '{new_value}'. "
+                           f"Choose from {sorted(_all_states(transitions))}."}
+    if new_value == getattr(obj, field):
+        return None  # idempotent no-op
+    if not reason or not reason.strip():
+        return {'status': 'error',
+                'message': f'A reason is required for every {reason_label}.'}
+    allowed = transitions.get(getattr(obj, field), set())
+    if new_value not in allowed:
+        return {'status': 'error',
+                'message': f"Cannot move {getattr(obj, field)} → {new_value}.",
+                'allowed': sorted(allowed)}
+    return None
+
+
+def _all_states(transitions):
+    states = set(transitions) | {s for targets in transitions.values()
+                                 for s in targets}
+    return states

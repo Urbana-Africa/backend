@@ -73,6 +73,11 @@ router.register(r"reconciliation-runs", ReconciliationRunViewSet, basename="admi
 router.register(r"reconciliation-exceptions", ReconciliationExceptionViewSet, basename="admin-reconciliation-exceptions")
 router.register(r"work-items", WorkItemViewSet, basename="admin-work-items")
 router.register(r"approvals", ApprovalRequestViewSet, basename="admin-approvals")
+router.register(r"cases", AdminCaseViewSet, basename="admin-cases")
+router.register(r"policies", AdminPolicyVersionViewSet, basename="admin-policies")
+router.register(r"privacy-requests", AdminPrivacyRequestViewSet, basename="admin-privacy-requests")
+router.register(r"incidents", AdminIncidentViewSet, basename="admin-incidents")
+router.register(r"capability-grants", AdminCapabilityGrantViewSet, basename="admin-capability-grants")
 
 urlpatterns = router.urls + [
     # Launch / Waitlist Admin Endpoints
@@ -85,6 +90,9 @@ urlpatterns = router.urls + [
     path("algorithm-config", AlgorithmConfigView.as_view(), name="admin-algo-config"),
     path("category-balance", CategoryBalanceView.as_view(), name="admin-category-balance"),
     path("anomalies", AnomalyLogView.as_view(), name="admin-anomalies"),
+    path("finance/summary", AdminFinanceSummaryView.as_view(), name="admin-finance-summary"),
+    path("finance/liability-forecast", AdminLiabilityForecastView.as_view(), name="admin-liability-forecast"),
+    path("inventory/health", AdminInventoryHealthView.as_view(), name="admin-inventory-health"),
     path("search", AdminGlobalSearchView.as_view(), name="admin-global-search"),
     path("c-level-dashboard", CLevelDashboardAnalyticsView.as_view(), name="admin-clevel-dashboard"),
 ]
